@@ -59,7 +59,7 @@ Upstream files are changed as little as possible, in one of three ways:
    | File | What's different |
    |---|---|
    | `meson.build` | A 6 line hook right after `project()`, handing over to `macos/meson.build`. New upstream sources/targets must be added there. |
-   | `main.c` | `wayl_prepare_environment()`, `wayl_enable_new_windows()`, and `wayl_run()` instead of the `fdm_poll()` loop. |
+   | `main.c` | `wayl_prepare_environment()`, `wayl_enable_new_windows()`, and `wayl_run()` instead of the `fdm_poll()` loop; SIGUSR1/SIGUSR2 switch all windows' color theme (`wayl_theme_switch_all()`). |
    | `input.c`, `input.h` | Wayland keyboard/pointer listeners became `input_key()`, `input_modifiers()`, `input_pointer_*()` etc, called by `macos/view.m`. Touch support removed. Key repeat comes from macOS. Upstream changes to the `keyboard_*`/`wl_pointer_*` listeners must be ported to the corresponding `input_*` function. |
    | `render.c`, `render.h` | `wl_surface_*()` → `wayl_surface_*()`; frame callbacks → `render_frame_callback()`; xcursor themes → `wayl_set_cursor()`; presentation timing removed; the single pixel overlay is a layer color. |
    | `terminal.c`, `terminal.h` | Timer FDs are read with `timerfd_read()` (kqueue timers, see `macos/timerfd.c`); the deferred shutdown uses a pipe (no eventfd); render workers use dispatch semaphores; font sizes use 72 DPI (points); the PTY slave is opened early (macOS quirk); scale = the window's backing scale factor; the font smoothing options are passed to fcft. |

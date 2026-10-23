@@ -57,6 +57,9 @@ frameworks.
   same process), `Cmd+,` opens the configuration in `$EDITOR`, `Cmd+=`
   / `Cmd+-` / `Cmd+0` change the font size, `Ctrl+Cmd+F` toggles
   fullscreen. foot's own key bindings (e.g. `Ctrl+Shift+C`) still work.
+* Like other Mac apps, foot keeps running when its last window is
+  closed, until `Cmd+Q`; the Dock icon opens a new window. Started from
+  a shell, foot exits with its last window, as on Linux.
 * The Option key produces characters (like on any Mac). To use it as
   Alt/Meta, set `macos-option-as-alt=left|right|both` in `[main]`.
 * The configuration is read from `~/.config/foot/foot.ini`. New windows

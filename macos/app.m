@@ -45,6 +45,7 @@ static struct {
 
     volatile sig_atomic_t *aborted;
     bool keep_running;
+    bool launched_as_app;  /* By launchd (Finder, Dock, open(1)), not a shell */
     bool fdm_failed;
     bool running;
     bool terminating;
@@ -156,7 +157,10 @@ bool
 wayl_run(struct wayland *wayl, volatile sig_atomic_t *aborted, bool keep_running)
 {
     app.aborted = aborted;
-    app.keep_running = keep_running;
+
+    /* Like other Mac apps, keep running without windows; but from a
+     * shell, exit with the last window, as upstream */
+    app.keep_running = keep_running || app.launched_as_app;
 
     if (should_exit())
         return !app.fdm_failed;
@@ -201,6 +205,9 @@ new_window(const char *cwd)
 void
 wayl_prepare_environment(void)
 {
+    /* Before a parent shell may be gone */
+    app.launched_as_app = getppid() == 1;
+
     @autoreleasepool {
         /* Started from Finder/Dock: no locale in the environment */
         if (getenv("LANG") == NULL && getenv("LC_ALL") == NULL &&
@@ -481,14 +488,21 @@ appearance_is_dark(void)
     return [name isEqualToString:NSAppearanceNameDarkAqua];
 }
 
+/*
+ * Not before the initial configure (the grid has no size yet; it
+ * applies the color theme), nor while shutting down
+ */
+static bool
+term_ready(const struct terminal *term)
+{
+    return !term->shutdown.in_progress &&
+        term->window != NULL && term->window->is_configured;
+}
+
 void
 app_apply_color_theme(struct terminal *term, bool reload)
 {
-    if (term->shutdown.in_progress)
-        return;
-
-    /* The grid has no size yet; the initial configure applies it */
-    if (term->window == NULL || !term->window->is_configured)
+    if (!term_ready(term))
         return;
 
     /* The configurations aren't const objects (see main.c, server.c
@@ -515,6 +529,21 @@ app_apply_color_theme(struct terminal *term, bool reload)
         term_theme_switch_to_dark(term);
     else
         term_theme_switch_to_light(term);
+}
+
+void
+wayl_theme_switch_all(bool dark)
+{
+    tll_foreach(app.wayl->terms, it) {
+        struct terminal *term = it->item;
+        if (!term_ready(term))
+            continue;
+
+        if (dark)
+            term_theme_switch_to_dark(term);
+        else
+            term_theme_switch_to_light(term);
+    }
 }
 
 /*

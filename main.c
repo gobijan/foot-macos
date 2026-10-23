@@ -64,10 +64,15 @@ fdm_sigusr(struct fdm *fdm, int signo, void *data)
         else
             server_global_theme_switch_to_light(ctx->server);
     } else {
+#if defined(__APPLE__)
+        /* All windows (Cmd+N); the first one may be gone */
+        wayl_theme_switch_all(signo == SIGUSR1);
+#else
         if (signo == SIGUSR1)
             term_theme_switch_to_dark(ctx->term);
         else
             term_theme_switch_to_light(ctx->term);
+#endif
     }
 
     return true;

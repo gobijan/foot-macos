@@ -391,11 +391,15 @@ struct wayland *wayl_init(
 void wayl_destroy(struct wayland *wayl);
 
 /*
- * Runs the application's run loop until the last window closes (or,
- * with 'keep_running', until '*aborted' is set).
+ * Runs the application's run loop until the last window closes. Or,
+ * with 'keep_running', and when started as an application (Finder,
+ * Dock, open(1)), until it quits (Cmd+Q), or '*aborted' is set.
  */
 bool wayl_run(struct wayland *wayl, volatile sig_atomic_t *aborted,
               bool keep_running);
+
+/* SIGUSR1/SIGUSR2: all windows switch to the dark/light color theme */
+void wayl_theme_switch_all(bool dark);
 
 /*
  * Called first thing in main(): e.g. sets $LANG, which isn't set for
