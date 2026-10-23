@@ -1167,6 +1167,9 @@ parse_section_main(struct context *ctx)
         return true;
     }
 
+    else if (streq(key, "macos-follow-appearance"))
+        return value_to_bool(ctx, &conf->macos.follow_appearance);
+
     else if (streq(key, "selection-target")) {
         _Static_assert(sizeof(conf->selection_target) == sizeof(int),
                        "enum is not 32-bit");

@@ -16,7 +16,11 @@ MACOS_DEFAULTS = [
      "# shell=$SHELL (if set, otherwise user's default shell from /etc/passwd)\n"
      "# macos-option-as-alt=none  (none, left, right or both)\n"
      "# macos-font-smoothing=yes  (thickens glyphs, like macOS' own text rendering)\n"
-     "# macos-font-smoothing-strength=1.0  (0.0 - 1.0)\n"),
+     "# macos-font-smoothing-strength=1.0  (0.0 - 1.0)\n"
+     "# macos-follow-appearance=no  (switches between [colors-dark] and [colors-light] with the system's appearance)\n"),
+    ('# initial-color-theme=dark\n',
+     '# include=/Applications/foot.app/Contents/Resources/themes/<theme>  (e.g. catppuccin-mocha)\n'
+     '# initial-color-theme=dark\n'),
     ('# launch=xdg-open ${url}\n', '# launch=open ${url}\n'),
 ]
 

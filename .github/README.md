@@ -68,6 +68,17 @@ frameworks.
   which matters most on non-Retina displays. Tune it with
   `macos-font-smoothing-strength=0.0-1.0`, or turn it off with
   `macos-font-smoothing=no`, in `[main]`.
+* foot's color themes (Catppuccin, Dracula, Gruvbox, Nord, Solarized,
+  Tokyo Night and 80 more) are bundled in
+  `foot.app/Contents/Resources/themes/`. Include one at the top of
+  `foot.ini`, e.g.
+  `include=/Applications/foot.app/Contents/Resources/themes/catppuccin-mocha`.
+  Hundreds more, in foot's format, are in the `foot/` directory of
+  [iTerm2-Color-Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes).
+* To follow the system's light/dark mode, include a dark and a light
+  theme (e.g. `catppuccin-mocha` and `catppuccin-latte`), and set
+  `macos-follow-appearance=yes` in `[main]`. Programs that ask for theme
+  changes (mode 2031, e.g. Neovim) are notified.
 * The shell is started as a login shell, so that it sets up `$PATH`.
 * `TERM=foot`; the terminfo entry is bundled, and found through
   `$TERMINFO_DIRS`.

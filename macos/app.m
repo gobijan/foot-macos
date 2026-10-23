@@ -467,6 +467,47 @@ seat_destroy(struct seat *seat)
 }
 
 /*
+ * Appearance: with macos-follow-appearance, the system's light/dark
+ * mode picks the color theme ([colors-light] or [colors-dark])
+ */
+
+static int appearance_context;
+
+static bool
+appearance_is_dark(void)
+{
+    NSAppearanceName name = [NSApp.effectiveAppearance
+        bestMatchFromAppearancesWithNames:@[NSAppearanceNameAqua, NSAppearanceNameDarkAqua]];
+    return [name isEqualToString:NSAppearanceNameDarkAqua];
+}
+
+void
+app_apply_appearance(struct terminal *term)
+{
+    if (!term->conf->macos.follow_appearance || term->shutdown.in_progress)
+        return;
+
+    /* The grid has no size yet; the initial configure applies it */
+    if (term->window == NULL || !term->window->is_configured)
+        return;
+
+    const bool dark = appearance_is_dark();
+
+    /*
+     * The appearance takes the place of initial-color-theme, which
+     * hard resets (term_reset()) return to. The configurations aren't
+     * const objects (see main.c, server.c and windows.c).
+     */
+    ((struct config *)term->conf)->initial_color_theme =
+        dark ? COLOR_THEME_DARK : COLOR_THEME_LIGHT;
+
+    if (dark)
+        term_theme_switch_to_dark(term);
+    else
+        term_theme_switch_to_light(term);
+}
+
+/*
  * Menu
  */
 
@@ -634,6 +675,22 @@ create_menu(void)
     app_run_hooks();
 }
 
+- (void)observeValueForKeyPath:(NSString *)keyPath
+                      ofObject:(id)object
+                        change:(NSDictionary<NSKeyValueChangeKey, id> *)change
+                       context:(void *)context
+{
+    if (context != &appearance_context) {
+        [super observeValueForKeyPath:keyPath ofObject:object change:change context:context];
+        return;
+    }
+
+    /* The system's appearance changed */
+    tll_foreach(app.wayl->terms, it)
+        app_apply_appearance(it->item);
+    app_run_hooks();
+}
+
 @end
 
 struct wayland *
@@ -664,6 +721,11 @@ wayl_init(struct fdm *fdm, struct key_binding_manager *key_binding_manager,
                selector:@selector(screensChanged:)
                    name:NSApplicationDidChangeScreenParametersNotification
                  object:nil];
+
+        [NSApp addObserver:app.delegate
+                forKeyPath:@"effectiveAppearance"
+                   options:0
+                   context:&appearance_context];
 
         [NSApp finishLaunching];
     }
@@ -733,6 +795,9 @@ wayl_destroy(struct wayland *wayl)
     }
 
     [[NSNotificationCenter defaultCenter] removeObserver:app.delegate];
+    [NSApp removeObserver:app.delegate
+               forKeyPath:@"effectiveAppearance"
+                  context:&appearance_context];
 
     app.wayl = NULL;
     free(wayl);

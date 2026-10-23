@@ -366,7 +366,7 @@ custom_target(
   'foot.app',
   output: 'foot.app',
   input: [foot, footclient, info_plist, files('icon/foot.icns'), terminfo],
-  command: [files('make-bundle.sh'), '@OUTPUT@', '@INPUT@'],
+  command: [files('make-bundle.sh'), '@OUTPUT@', '@INPUT@', root / 'themes'],
   build_by_default: true,
   build_always_stale: true,
 )

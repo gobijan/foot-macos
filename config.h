@@ -238,6 +238,9 @@ struct config {
         /* Font smoothing (thickening), like the system's own text */
         bool font_smoothing;
         float font_smoothing_strength;  /* 0.0 - 1.0 */
+
+        /* Switch between colors-dark and colors-light with the system's appearance */
+        bool follow_appearance;
     } macos;
 
     char *term;
