@@ -1,4 +1,5 @@
 #include "config.h"
+#include "default-colors.h"
 #include "font-pattern.h"
 
 #include <stdlib.h>
@@ -3543,6 +3544,7 @@ config_load(struct config *conf, const char *conf_path,
         .macos = {
             .font_smoothing = true,
             .font_smoothing_strength = 1.,
+            .follow_appearance = true,
         },
 
         /* macOS: the shell must set up the environment (e.g. $PATH) */
@@ -3717,6 +3719,9 @@ config_load(struct config *conf, const char *conf_path,
     memcpy(&conf->colors_light, &conf->colors_dark, sizeof(conf->colors_dark));
     conf->colors_light.dim_blend_towards = DIM_BLEND_TOWARDS_WHITE;
 
+    /* macOS: Grok Night and Grok Day (macos/default-colors.c) */
+    default_colors(&conf->colors_dark, &conf->colors_light);
+
     parse_modifiers(XKB_MOD_NAME_SHIFT, 5, &conf->mouse.selection_override_modifiers);
 
     /* macOS: Notification Center via osascript; URLs open with the default app */
@@ -3780,6 +3785,9 @@ config_load(struct config *conf, const char *conf_path,
 
     if (!config_override_apply(conf, overrides, errors_are_fatal))
         ret = !errors_are_fatal;
+
+    /* macOS: Grok's cursor and selection colors go with its background */
+    default_colors_loaded(&conf->colors_dark, &conf->colors_light);
 
     if (ret && conf->fonts[0].count == 0) {
         struct config_font font;

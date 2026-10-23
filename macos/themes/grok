@@ -1,0 +1,62 @@
+# -*- conf -*-
+# Grok Night / Grok Day
+#
+# The Grok palette, dark and light, as in Ghostty's GrokNight and
+# GrokDay, and Helix' grok-night and grok-day. Colors from
+# xai-org/grok-build (Apache-2.0). These are also foot for macOS'
+# default colors (macos/default-colors.c).
+#
+# In the light theme, white (regular7, bright7) is dark gray, so that
+# text programs paint "white" (e.g. bat --theme=base16) stays readable.
+
+[colors-dark]
+cursor=0a0a0a bb9af7
+foreground=e1e1e1
+background=0a0a0a
+
+regular0=111111
+regular1=f7768e
+regular2=9ece6a
+regular3=e0af68
+regular4=7aa2f7
+regular5=bb9af7
+regular6=1abc9c
+regular7=c8c8c8
+
+bright0=6c6c6c
+bright1=f7768e
+bright2=8bc34a
+bright3=ff9e64
+bright4=7aa2f7
+bright5=9d7cd8
+bright6=3a95ab
+bright7=e1e1e1
+
+selection-foreground=e1e1e1
+selection-background=323237
+
+[colors-light]
+cursor=f5f5f5 7d4bc6
+foreground=262626
+background=f5f5f5
+
+regular0=262626
+regular1=cd3048
+regular2=378e23
+regular3=a27612
+regular4=2f64d2
+regular5=7d4bc6
+regular6=0a8e70
+regular7=444444
+
+bright0=767676
+bright1=cd3048
+bright2=4caf50
+bright3=c3691e
+bright4=2f64d2
+bright5=6c3eb2
+bright6=0f87a2
+bright7=262626
+
+selection-foreground=262626
+selection-background=d4d4d8

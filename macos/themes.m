@@ -185,6 +185,7 @@ load_settings(BOOL create)
     s.theme_paths = [NSMutableDictionary dictionary];
     s.selected = [NSMutableSet set];
     s.last_include = s.initial_theme_line = s.follow_line = -1;
+    s.follow = YES;  /* The default */
     free(conf_path);
 
     NSError *error = nil;

@@ -71,18 +71,23 @@ frameworks.
   which matters most on non-Retina displays. Tune it with
   `macos-font-smoothing-strength=0.0-1.0`, or turn it off with
   `macos-font-smoothing=no`, in `[main]`.
+* The default colors are Grok Night (dark) and Grok Day (light), the
+  palette of xAI's Grok
+  ([grok-build](https://github.com/xai-org/grok-build), Apache-2.0).
 * Color themes: pick one in View > Theme. foot's themes (Catppuccin,
-  Dracula, Gruvbox, Nord, Solarized, Tokyo Night and 80 more) are
-  bundled in `foot.app/Contents/Resources/themes/`; the menu writes the
-  `include=` line to `foot.ini` (and leaves the rest of the file as it
-  is), and all windows switch right away. Colors set in `foot.ini`
-  itself take precedence. Hundreds more themes, in foot's format, are in
-  the `foot/` directory of
+  Dracula, Gruvbox, Nord, Solarized, Tokyo Night and 80 more, and Grok)
+  are bundled in `foot.app/Contents/Resources/themes/`; the menu writes
+  the `include=` line to `foot.ini` (and leaves the rest of the file as
+  it is), and all windows switch right away. Default Colors removes it
+  again. Colors set in `foot.ini` itself take precedence. Hundreds more
+  themes, in foot's format, are in the `foot/` directory of
   [iTerm2-Color-Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes).
-* To follow the system's light/dark mode, turn on View > Theme > Follow
-  System Appearance (`macos-follow-appearance=yes` in `[main]`), and
-  pick a dark and a light theme. Programs that ask for theme changes
-  (mode 2031, e.g. Neovim) are notified.
+* foot follows the system's light/dark mode, with a dark and a light
+  theme (View > Theme > Follow System Appearance,
+  `macos-follow-appearance=yes` in `[main]`, on by default): a theme
+  with dark colors only replaces Grok Night, one with light colors only
+  Grok Day. For one theme in both modes, turn it off. Programs that ask
+  for theme changes (mode 2031, e.g. Neovim) are notified.
 * The shell is started as a login shell, so that it sets up `$PATH`.
 * `TERM=foot`; the terminfo entry is bundled, and found through
   `$TERMINFO_DIRS`.

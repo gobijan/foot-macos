@@ -1,0 +1,32 @@
+# -*- conf -*-
+# Grok Night
+#
+# The Grok palette (dark), as in Ghostty's GrokNight and Helix'
+# grok-night. Colors from xai-org/grok-build (Apache-2.0). These are
+# also foot for macOS' default colors (macos/default-colors.c).
+
+[colors-dark]
+cursor=0a0a0a bb9af7
+foreground=e1e1e1
+background=0a0a0a
+
+regular0=111111
+regular1=f7768e
+regular2=9ece6a
+regular3=e0af68
+regular4=7aa2f7
+regular5=bb9af7
+regular6=1abc9c
+regular7=c8c8c8
+
+bright0=6c6c6c
+bright1=f7768e
+bright2=8bc34a
+bright3=ff9e64
+bright4=7aa2f7
+bright5=9d7cd8
+bright6=3a95ab
+bright7=e1e1e1
+
+selection-foreground=e1e1e1
+selection-background=323237

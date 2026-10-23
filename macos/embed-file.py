@@ -7,6 +7,7 @@
 # With --macos-defaults, foot.ini's documented defaults are adjusted to
 # those of the macOS port (foot.ini itself is left as upstream has it).
 
+import re
 import sys
 
 MACOS_DEFAULTS = [
@@ -17,12 +18,50 @@ MACOS_DEFAULTS = [
      "# macos-option-as-alt=none  (none, left, right or both)\n"
      "# macos-font-smoothing=yes  (thickens glyphs, like macOS' own text rendering)\n"
      "# macos-font-smoothing-strength=1.0  (0.0 - 1.0)\n"
-     "# macos-follow-appearance=no  (switches between [colors-dark] and [colors-light] with the system's appearance)\n"),
+     "# macos-follow-appearance=yes  (switches between [colors-dark] and [colors-light] with the system's appearance)\n"),
     ('# initial-color-theme=dark\n',
      '# include=/Applications/foot.app/Contents/Resources/themes/<theme>  (e.g. catppuccin-mocha)\n'
      '# initial-color-theme=dark\n'),
     ('# launch=xdg-open ${url}\n', '# launch=open ${url}\n'),
 ]
+
+# The default colors, Grok Night and Grok Day (macos/default-colors.c)
+GROK_NIGHT = [
+    ('background', '0a0a0a'), ('foreground', 'e1e1e1'), ('cursor', '0a0a0a bb9af7'),
+    ('regular0', '111111'), ('regular1', 'f7768e'), ('regular2', '9ece6a'), ('regular3', 'e0af68'),
+    ('regular4', '7aa2f7'), ('regular5', 'bb9af7'), ('regular6', '1abc9c'), ('regular7', 'c8c8c8'),
+    ('bright0', '6c6c6c'), ('bright1', 'f7768e'), ('bright2', '8bc34a'), ('bright3', 'ff9e64'),
+    ('bright4', '7aa2f7'), ('bright5', '9d7cd8'), ('bright6', '3a95ab'), ('bright7', 'e1e1e1'),
+    ('selection-foreground', 'e1e1e1'), ('selection-background', '323237'),
+]
+GROK_DAY = [
+    ('background', 'f5f5f5'), ('foreground', '262626'), ('cursor', 'f5f5f5 7d4bc6'),
+    ('regular0', '262626'), ('regular1', 'cd3048'), ('regular2', '378e23'), ('regular3', 'a27612'),
+    ('regular4', '2f64d2'), ('regular5', '7d4bc6'), ('regular6', '0a8e70'), ('regular7', '444444'),
+    ('bright0', '767676'), ('bright1', 'cd3048'), ('bright2', '4caf50'), ('bright3', 'c3691e'),
+    ('bright4', '2f64d2'), ('bright5', '6c3eb2'), ('bright6', '0f87a2'), ('bright7', '262626'),
+    ('selection-foreground', '262626'), ('selection-background', 'd4d4d8'),
+]
+
+def default_colors(path, text):
+    start = text.index('[colors-dark]\n')
+    end = text.index('[colors-light]\n')
+    dark = text[start:end]
+    for key, value in GROK_NIGHT:
+        # The value, e.g. 'f62b5a' or '<inverse foreground/background>'
+        dark, n = re.subn(rf'^# {key}=(<[^>]*>|\S+)', f'# {key}={value}', dark,
+                          count=1, flags=re.MULTILINE)
+        if n != 1:
+            sys.exit(f'{path}: expected default not found: {key}')
+
+    old = '# Same builtin defaults as [color], except for:\n# dim-blend-towards=white\n'
+    if text.find(old, end) < 0:
+        sys.exit(f'{path}: expected default not found: {old.strip()}')
+    light = ('# Same builtin defaults as [colors-dark], except for:\n'
+             '# dim-blend-towards=white\n'
+             + ''.join(f'# {key}={value}\n' for key, value in GROK_DAY))
+
+    return text[:start] + dark + text[end:].replace(old, light, 1)
 
 def main():
     path, output, symbol = sys.argv[1:4]
@@ -35,6 +74,8 @@ def main():
             if old not in text:
                 sys.exit(f'{path}: expected default not found: {old.strip()}')
             text = text.replace(old, new, 1)
+
+        text = default_colors(path, text)
 
         # The notification command
         text = '\n'.join(

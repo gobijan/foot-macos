@@ -64,7 +64,7 @@ Upstream files are changed as little as possible, in one of three ways:
    | `render.c`, `render.h` | `wl_surface_*()` → `wayl_surface_*()`; frame callbacks → `render_frame_callback()`; xcursor themes → `wayl_set_cursor()`; presentation timing removed; the single pixel overlay is a layer color. |
    | `terminal.c`, `terminal.h` | Timer FDs are read with `timerfd_read()` (kqueue timers, see `macos/timerfd.c`); the deferred shutdown uses a pipe (no eventfd); render workers use dispatch semaphores; font sizes use 72 DPI (points); the PTY slave is opened early (macOS quirk); scale = the window's backing scale factor; the font smoothing options are passed to fcft. |
    | `ime.c`, `ime.h` | text-input-v3 listeners → `ime_enter()`, `ime_preedit()`, `ime_commit()`, `ime_done()` (fed by `NSTextInputClient`). |
-   | `config.c`, `config.h` | Font patterns parsed without fontconfig (`macos/font-pattern.c`); `macos-option-as-alt`, `macos-font-smoothing`, `macos-font-smoothing-strength`, `macos-follow-appearance`; macOS default commands (`open`, `osascript`) and `login-shell=yes`. |
+   | `config.c`, `config.h` | Font patterns parsed without fontconfig (`macos/font-pattern.c`); `macos-option-as-alt`, `macos-font-smoothing`, `macos-font-smoothing-strength`, `macos-follow-appearance` (on by default); the default colors (`macos/default-colors.c`); macOS default commands (`open`, `osascript`) and `login-shell=yes`. |
    | `cursor-shape.c`, `cursor-shape.h` | Wayland cursor-shape protocol mapping removed. |
    | `server.c` | No `SOCK_CLOEXEC`/`accept4()` on macOS. |
    | `search.c`, `url-mode.c` | `quirks.h` include removed. |

@@ -295,6 +295,7 @@ foot = executable(
   'selection-clipboard.c',
   'windows.c', 'windows.h',
   'themes.m',
+  'default-colors.c', 'default-colors.h',
   default_config, srgb_funcs, version,
   dependencies: [math, threads, pixman, xkb, utf8proc, tllist, fcft, appkit],
   link_with: pgolib,
@@ -318,6 +319,7 @@ install_data(
 
 if get_option('themes')
   install_subdir('../themes', install_dir: join_paths(get_option('datadir'), 'foot'))
+  install_subdir('themes', install_dir: join_paths(get_option('datadir'), 'foot'))
 endif
 
 terminfo_base_name = get_option('terminfo-base-name')
@@ -367,7 +369,8 @@ custom_target(
   'foot.app',
   output: 'foot.app',
   input: [foot, footclient, info_plist, files('icon/foot.icns'), terminfo],
-  command: [files('make-bundle.sh'), '@OUTPUT@', '@INPUT@', root / 'themes'],
+  command: [files('make-bundle.sh'), '@OUTPUT@', '@INPUT@', root / 'themes',
+            root / 'macos' / 'themes'],
   build_by_default: true,
   build_always_stale: true,
 )
@@ -386,6 +389,7 @@ if get_option('tests')
   config_test = executable(
     'test-config',
     '../tests/test-config.c',
+    'default-colors.c', 'default-colors.h',
     c_args: ['-DFcInit()=1', '-DFcFini()='],
     link_with: [common, tokenize],
     dependencies: [pixman, xkb, fcft, tllist, utf8proc])

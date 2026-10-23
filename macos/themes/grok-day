@@ -1,0 +1,38 @@
+# -*- conf -*-
+# Grok Day
+#
+# The Grok palette (light), as in Ghostty's GrokDay and Helix'
+# grok-day. Colors from xai-org/grok-build (Apache-2.0). These are
+# also foot for macOS' default colors (macos/default-colors.c).
+#
+# White (regular7, bright7) is dark gray, so that text programs paint
+# "white" (e.g. bat --theme=base16) stays readable.
+
+[main]
+initial-color-theme=light
+
+[colors-light]
+cursor=f5f5f5 7d4bc6
+foreground=262626
+background=f5f5f5
+
+regular0=262626
+regular1=cd3048
+regular2=378e23
+regular3=a27612
+regular4=2f64d2
+regular5=7d4bc6
+regular6=0a8e70
+regular7=444444
+
+bright0=767676
+bright1=cd3048
+bright2=4caf50
+bright3=c3691e
+bright4=2f64d2
+bright5=6c3eb2
+bright6=0f87a2
+bright7=262626
+
+selection-foreground=262626
+selection-background=d4d4d8
