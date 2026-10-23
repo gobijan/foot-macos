@@ -102,7 +102,7 @@ The fast, lightweight and minimalistic Wayland terminal emulator.
 1. [Supported OSCs](#supported-oscs)
 1. [Programmatically checking if running in foot](#programmatically-checking-if-running-in-foot)
 1. [XTGETTCAP](#xtgettcap)
-1. [No AI / LLM policy](#no-ai-llm-policy)
+1. [AI-assisted contributions welcome](#ai-assisted-contributions-welcome)
 1. [Contributing](#contributing)
 1. [Code of Conduct](#code-of-conduct)
 1. [Bugs](#bugs)
@@ -716,13 +716,14 @@ will be answered with a response of the form `uname=$(uname -s)`,
 where `$(uname -s)` is the name of the OS foot was compiled for.
 
 
-# No AI / LLM policy
+# AI-assisted contributions welcome
 
-Use of generative AI/LLMs is strictly forbidden for **all**
-contributions to foot.
+Unlike upstream foot, this fork explicitly welcomes the use of
+generative AI/LLMs for **all** contributions: patches, documentation,
+bug reports, and comments on the issue and pull request trackers.
 
-This includes bug reports and comments on the issue and pull request
-trackers.
+As with any contribution, you are responsible for what you submit;
+review and test it before opening a pull request.
 
 
 # Contributing
@@ -737,7 +738,7 @@ See [Code of Conduct](CODE_OF_CONDUCT.md)
 
 # Bugs
 
-Please report bugs to https://codeberg.org/dnkl/foot/issues
+Please report bugs to https://github.com/gobijan/foot-macos/issues
 
 Before you open a new issue, please search existing bug reports, both
 open **and** closed ones. Chances are someone else has already
