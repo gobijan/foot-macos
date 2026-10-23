@@ -1079,6 +1079,10 @@ reload_fonts(struct terminal *term, bool resize_grid)
     struct fcft_font_options *options = fcft_font_options_create();
 
     options->scaling_filter = conf->tweak.fcft_filter;
+#if defined(__APPLE__)
+    options->smoothing.enabled = conf->macos.font_smoothing;
+    options->smoothing.strength = conf->macos.font_smoothing_strength;
+#endif
     options->color_glyphs.format = PIXMAN_a8r8g8b8;
     options->color_glyphs.srgb_decode =
         wayl_do_linear_blending(term->wl, term->conf);

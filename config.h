@@ -234,6 +234,10 @@ struct config {
     struct {
         /* Option key acts as Alt: none, left, right, both (enum option_as_alt) */
         int option_as_alt;
+
+        /* Font smoothing (thickening), like the system's own text */
+        bool font_smoothing;
+        float font_smoothing_strength;  /* 0.0 - 1.0 */
     } macos;
 
     char *term;

@@ -238,6 +238,12 @@ struct fcft_font_options {
     } color_glyphs;
 
     enum fcft_scaling_filter scaling_filter;
+
+    /* macOS: font smoothing (thickening), like the system's own text */
+    struct {
+        bool enabled;
+        double strength;  /* 0.0 (lightest) - 1.0 (strongest) */
+    } smoothing;
 };
 
 struct fcft_font_options *fcft_font_options_create(void);

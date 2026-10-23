@@ -64,6 +64,10 @@ frameworks.
 * Font sizes are in points, like in other macOS applications. The
   default font is SF Mono (`monospace`), 13pt. Icons from installed Nerd
   Fonts are used automatically.
+* Glyphs are thickened (font smoothing) like macOS' own text rendering,
+  which matters most on non-Retina displays. Tune it with
+  `macos-font-smoothing-strength=0.0-1.0`, or turn it off with
+  `macos-font-smoothing=no`, in `[main]`.
 * The shell is started as a login shell, so that it sets up `$PATH`.
 * `TERM=foot`; the terminfo entry is bundled, and found through
   `$TERMINFO_DIRS`.

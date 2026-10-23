@@ -74,7 +74,8 @@ struct font_priv {
     bool want_bold;
     bool want_italic;
     bool antialias;
-    bool thicken;             /* Font smoothing ("stem darkening") */
+    bool smoothing;           /* Font smoothing (thickening) */
+    double smoothing_strength;
 
     enum fcft_emoji_presentation emoji_presentation;
     pixman_format_code_t color_format;
@@ -130,6 +131,8 @@ fcft_font_options_create(void)
     options->emoji_presentation = FCFT_EMOJI_PRESENTATION_DEFAULT;
     options->color_glyphs.format = PIXMAN_a8r8g8b8;
     options->scaling_filter = FCFT_SCALING_FILTER_CUBIC;
+    options->smoothing.enabled = true;
+    options->smoothing.strength = 1.;
     return options;
 }
 
@@ -670,6 +673,8 @@ fcft_from_name2(size_t count, const char *names[static count],
     font->emoji_presentation = options != NULL
         ? options->emoji_presentation : FCFT_EMOJI_PRESENTATION_DEFAULT;
     font->color_format = PIXMAN_a8r8g8b8;
+    font->smoothing = options != NULL ? options->smoothing.enabled : true;
+    font->smoothing_strength = options != NULL ? options->smoothing.strength : 1.;
     pthread_rwlock_init(&font->lock, NULL);
 
     for (size_t i = 0; i < count; i++) {
@@ -728,7 +733,6 @@ fcft_from_name2(size_t count, const char *names[static count],
                 font->want_bold = weight >= FC_WEIGHT_BOLD;
                 font->want_italic = slant >= FC_SLANT_ITALIC;
                 font->antialias = pattern_int(&pat, &attrs, "antialias", 1) != 0;
-                font->thicken = pattern_int(&pat, &attrs, "embolden", 0) != 0;
 
                 CFStringRef name = CTFontCopyFullName(face->font);
                 font->public.name = utf8_from_cfstring(name);
@@ -893,15 +897,22 @@ create_glyph_context(const struct font_priv *font, CGRect bounds, bool color,
 
     CGContextSetAllowsAntialiasing(ctx, font->antialias);
     CGContextSetShouldAntialias(ctx, font->antialias);
-    CGContextSetAllowsFontSmoothing(ctx, font->thicken);
-    CGContextSetShouldSmoothFonts(ctx, font->thicken);
+    /*
+     * Font smoothing dilates the glyphs, like macOS' own text rendering
+     * (and kitty's, and Ghostty's 'font-thicken'). Without it, light
+     * text on dark backgrounds looks thin and faint on non-Retina
+     * displays. In an alpha-only context, the fill color doesn't color
+     * anything, but its brightness sets how much glyphs are dilated.
+     */
+    CGContextSetAllowsFontSmoothing(ctx, font->smoothing);
+    CGContextSetShouldSmoothFonts(ctx, font->smoothing);
     CGContextSetAllowsFontSubpixelPositioning(ctx, false);
     CGContextSetShouldSubpixelPositionFonts(ctx, false);
     CGContextSetAllowsFontSubpixelQuantization(ctx, false);
     CGContextSetShouldSubpixelQuantizeFonts(ctx, false);
 
     if (!color)
-        CGContextSetGrayFillColor(ctx, 1., 1.);
+        CGContextSetGrayFillColor(ctx, font->smoothing ? font->smoothing_strength : 1., 1.);
 
     CGContextTranslateCTM(ctx, -x0, -y0);
 
@@ -962,7 +973,7 @@ rasterize_glyph(const struct font_priv *font, const struct face *face,
     if (synth_bold) {
         CGContextSetTextDrawingMode(ctx, kCGTextFillStroke);
         CGContextSetLineWidth(ctx, stroke);
-        CGContextSetGrayStrokeColor(ctx, 1., 1.);
+        CGContextSetGrayStrokeColor(ctx, font->smoothing ? font->smoothing_strength : 1., 1.);
     }
 
     CTFontDrawGlyphs(ct, &glyph_id, &CGPointZero, 1, ctx);

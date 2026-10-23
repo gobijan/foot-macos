@@ -1150,6 +1150,23 @@ parse_section_main(struct context *ctx)
             &conf->macos.option_as_alt);
     }
 
+    else if (streq(key, "macos-font-smoothing"))
+        return value_to_bool(ctx, &conf->macos.font_smoothing);
+
+    else if (streq(key, "macos-font-smoothing-strength")) {
+        float strength;
+        if (!value_to_float(ctx, &strength))
+            return false;
+
+        if (strength < 0. || strength > 1.) {
+            LOG_CONTEXTUAL_ERR("not in range 0.0-1.0");
+            return false;
+        }
+
+        conf->macos.font_smoothing_strength = strength;
+        return true;
+    }
+
     else if (streq(key, "selection-target")) {
         _Static_assert(sizeof(conf->selection_target) == sizeof(int),
                        "enum is not 32-bit");
@@ -3519,6 +3536,11 @@ config_load(struct config *conf, const char *conf_path,
         .shell = get_shell(),
         .title = xstrdup("foot"),
         .app_id = (as_server ? xstrdup("footclient") : xstrdup("foot")),
+
+        .macos = {
+            .font_smoothing = true,
+            .font_smoothing_strength = 1.,
+        },
 
         /* macOS: the shell must set up the environment (e.g. $PATH) */
         .login_shell = true,
