@@ -94,6 +94,7 @@ notes, items = [], []
 for line in open(notes_file, encoding='utf-8').read().splitlines():
     text = html.escape(line.strip())
     text = re.sub(r'`([^`]+)`', r'<code>\1</code>', text)
+    text = re.sub(r'\[([^]]+)\]\(([^)]+)\)', r'<a href="\2">\1</a>', text)
     if line.lstrip().startswith(('* ', '- ')):
         items.append(f'<li>{text[2:]}</li>')
         continue
