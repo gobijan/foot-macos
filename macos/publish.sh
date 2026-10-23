@@ -50,14 +50,13 @@ sparkle=build-release/sparkle-$(sed -n 's/^SPARKLE_VERSION=//p' macos/dist.sh)
 public_key=$(sed -n 's/^SPARKLE_PUBLIC_KEY=\${SPARKLE_PUBLIC_KEY:-\(.*\)}$/\1/p' macos/dist.sh)
 [[ -n $public_key ]] || fail "macos/dist.sh: no SPARKLE_PUBLIC_KEY"
 
-check_key() {
-    [[ $("$sparkle/bin/generate_keys" --account "$SPARKLE_ACCOUNT" -p) == "$public_key" ]] ||
-        fail "the keychain's Sparkle key (--account $SPARKLE_ACCOUNT) isn't SPARKLE_PUBLIC_KEY"
-}
-
-# Before building, if Sparkle's tools are there already (macos/dist.sh
-# fetches them)
-[[ ! -x $sparkle/bin/generate_keys ]] || check_key
+# Before building: the first time, macOS asks whether Sparkle's tools
+# may use the key in the keychain
+./macos/dist.sh --fetch-sparkle
+[[ $("$sparkle/bin/generate_keys" --account "$SPARKLE_ACCOUNT" -p) == "$public_key" ]] ||
+    fail "the keychain's Sparkle key (--account $SPARKLE_ACCOUNT) isn't SPARKLE_PUBLIC_KEY"
+"$sparkle/bin/sign_update" --account "$SPARKLE_ACCOUNT" -p macos/dist.sh >/dev/null ||
+    fail "sign_update can't sign with the keychain's Sparkle key"
 
 if [[ -z $notes_file ]]; then
     previous=$(git describe --tags --abbrev=0 --match '*-macos.*' 2>/dev/null) ||
@@ -77,8 +76,8 @@ trap '[[ $pushed == yes ]] || git tag -d "$version" >/dev/null' EXIT
 dist=build-release/dist
 zip=$dist/foot-$version.zip
 
-check_key
-signature=$("$sparkle/bin/sign_update" --account "$SPARKLE_ACCOUNT" "$zip")
+signature=$("$sparkle/bin/sign_update" --account "$SPARKLE_ACCOUNT" "$zip") ||
+    fail "sign_update failed"
 
 echo "==> Appcast"
 plist=$dist/foot.app/Contents/Info.plist
