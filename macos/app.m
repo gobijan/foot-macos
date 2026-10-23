@@ -482,24 +482,34 @@ appearance_is_dark(void)
 }
 
 void
-app_apply_appearance(struct terminal *term)
+app_apply_color_theme(struct terminal *term, bool reload)
 {
-    if (!term->conf->macos.follow_appearance || term->shutdown.in_progress)
+    if (term->shutdown.in_progress)
         return;
 
     /* The grid has no size yet; the initial configure applies it */
     if (term->window == NULL || !term->window->is_configured)
         return;
 
-    const bool dark = appearance_is_dark();
+    /* The configurations aren't const objects (see main.c, server.c
+     * and windows.c) */
+    struct config *conf = (struct config *)term->conf;
 
     /*
      * The appearance takes the place of initial-color-theme, which
-     * hard resets (term_reset()) return to. The configurations aren't
-     * const objects (see main.c, server.c and windows.c).
+     * hard resets (term_reset()) return to
      */
-    ((struct config *)term->conf)->initial_color_theme =
-        dark ? COLOR_THEME_DARK : COLOR_THEME_LIGHT;
+    if (conf->macos.follow_appearance) {
+        conf->initial_color_theme =
+            appearance_is_dark() ? COLOR_THEME_DARK : COLOR_THEME_LIGHT;
+    } else if (!reload)
+        return;
+
+    const bool dark = conf->initial_color_theme == COLOR_THEME_DARK;
+
+    /* term_theme_switch_to_*() only switch to another theme */
+    if (reload)
+        term->colors.active_theme = dark ? COLOR_THEME_LIGHT : COLOR_THEME_DARK;
 
     if (dark)
         term_theme_switch_to_dark(term);
@@ -592,6 +602,8 @@ create_menu(void)
         menu.itemArray.lastObject.alternate = YES;
         [menu addItem:menu_item(@"Smaller", @selector(decreaseFontSize:), @"-", cmd)];
         [menu addItem:menu_item(@"Default Font Size", @selector(resetFontSize:), @"0", cmd)];
+        [menu addItem:[NSMenuItem separatorItem]];
+        [menu addItem:themes_menu_item()];
         [menu addItem:[NSMenuItem separatorItem]];
         [menu addItem:menu_item(@"Show URLs", @selector(showURLs:), @"u",
                                 cmd | NSEventModifierFlagShift)];
@@ -687,7 +699,7 @@ create_menu(void)
 
     /* The system's appearance changed */
     tll_foreach(app.wayl->terms, it)
-        app_apply_appearance(it->item);
+        app_apply_color_theme(it->item, false);
     app_run_hooks();
 }
 

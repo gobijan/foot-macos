@@ -378,7 +378,7 @@ window_configure(struct wl_window *win)
     render_resize(term, 0, 0, RESIZE_BY_CELLS);
 
     /* The color theme, before the first frame */
-    app_apply_appearance(term);
+    app_apply_color_theme(term, false);
 
     const NSSize size = NSMakeSize(term->width / term->scale, term->height / term->scale);
     [nswindow setContentSize:size];

@@ -18,8 +18,15 @@ enum option_as_alt app_option_as_alt(void);
 /* Runs foot's FDM hooks (e.g. rendering), after handling AppKit events */
 void app_run_hooks(void);
 
-/* With macos-follow-appearance: the color theme matching the system's appearance */
-void app_apply_appearance(struct terminal *term);
+/*
+ * Applies the color theme: with macos-follow-appearance, the one
+ * matching the system's appearance. 'reload': the configuration's
+ * themes changed; re-apply, and use initial-color-theme otherwise.
+ */
+void app_apply_color_theme(struct terminal *term, bool reload);
+
+/* themes.m: View > Theme */
+NSMenuItem *themes_menu_item(void);
 
 /* The monitor corresponding to 'screen' (may be NULL) */
 const struct monitor *app_monitor_for_screen(NSScreen *screen);

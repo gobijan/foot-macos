@@ -20,6 +20,7 @@
 #include "terminal.h"
 #include "tokenize.h"
 #include "wayland.h"
+#include "windows.h"
 #include "xmalloc.h"
 
 #include "default-config.h"
@@ -34,6 +35,19 @@ struct new_window_context {
 };
 
 static struct new_window_context context;
+
+/* The configuration, as new windows load it */
+bool
+windows_load_config(struct config *conf)
+{
+    user_notifications_t notifications = tll_init();
+    config_override_t overrides = tll_init();
+
+    bool ret = config_load(conf, context.conf_path, &notifications, &overrides,
+                           false, false);
+    user_notifications_free(&notifications);
+    return ret;
+}
 
 static void
 window_config_free(void *data, int exit_code)
@@ -59,13 +73,8 @@ new_terminal(struct new_window_context *ctx, const char *cwd,
         cwd = "/";
 
     struct config *conf = xmalloc(sizeof(*conf));
-    user_notifications_t notifications = tll_init();
 
-    config_override_t overrides = tll_init();
-
-    if (!config_load(conf, ctx->conf_path, &notifications, &overrides,
-                     false, false))
-    {
+    if (!windows_load_config(conf)) {
         config_free(conf);
         free(conf);
         conf = config_clone(ctx->conf);
@@ -102,6 +111,12 @@ settings_path(const struct new_window_context *ctx)
     return home != NULL ? xstrjoin(home, "/.config/foot/foot.ini") : NULL;
 }
 
+char *
+windows_settings_path(void)
+{
+    return settings_path(&context);
+}
+
 /* Creates the parent directories of 'path' */
 static bool
 create_parent_dirs(const char *path)
@@ -119,6 +134,27 @@ create_parent_dirs(const char *path)
     }
 
     free(copy);
+    return true;
+}
+
+/* Creates the configuration, from the documented defaults, if it doesn't exist */
+bool
+windows_create_settings(const char *path)
+{
+    if (access(path, F_OK) == 0)
+        return true;
+
+    if (!create_parent_dirs(path))
+        return false;
+
+    FILE *f = fopen(path, "wx");
+    if (f == NULL) {
+        LOG_ERRNO("%s: failed to create", path);
+        return false;
+    }
+
+    fputs(default_config, f);
+    fclose(f);
     return true;
 }
 
@@ -174,14 +210,7 @@ open_settings(void *data)
         return false;
     }
 
-    if (access(path, F_OK) < 0 && create_parent_dirs(path)) {
-        /* Start from the documented defaults */
-        FILE *f = fopen(path, "wx");
-        if (f != NULL) {
-            fputs(default_config, f);
-            fclose(f);
-        }
-    }
+    windows_create_settings(path);
 
     /* The editor runs in the user's login shell (e.g. for $PATH) */
     char **shell_argv = NULL;
