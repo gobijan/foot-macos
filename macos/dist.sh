@@ -25,7 +25,7 @@ SPARKLE_SHA256=c2bf58aa8387266ac179357b1415d6f2635f044da8be41042af32425dae6da0c
 # keychain of whoever publishes releases (Sparkle's generate_keys
 # --account foot-macos)
 SPARKLE_FEED=https://github.com/gobijan/foot-macos/releases/latest/download/appcast.xml
-SPARKLE_PUBLIC_KEY=${SPARKLE_PUBLIC_KEY:-}
+SPARKLE_PUBLIC_KEY=${SPARKLE_PUBLIC_KEY:-hSItVWtGBebUpG7NtVCJT+7njBWaIRC9yhaibwX9Cgg=}
 
 fail() {
     echo "dist.sh: $*" >&2
