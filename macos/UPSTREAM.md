@@ -68,6 +68,7 @@ Upstream files are changed as little as possible, in one of three ways:
    | `cursor-shape.c`, `cursor-shape.h` | Wayland cursor-shape protocol mapping removed. |
    | `server.c` | No `SOCK_CLOEXEC`/`accept4()` on macOS. |
    | `search.c`, `url-mode.c` | `quirks.h` include removed. |
+   | `box-drawing.c` | Rounded corners (`╭╮╯╰`) catch an out of range `sqrt()` with `isnan()` too: macOS' libm doesn't set `errno`. |
    | `fdm.h`, `shm.h` | Additions for run loop integration, and IOSurface buffers (`macos/fdm.c`, `macos/shm.c`). |
 
 Not modified at all: everything else, including `foot.ini`,

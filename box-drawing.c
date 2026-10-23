@@ -1465,8 +1465,8 @@ draw_box_drawings_light_arc(struct buf *buf, char32_t wc)
         double y = i / 16.;
         double x = circle_hemisphere * sqrt(c_r2 - (y - c_y) * (y - c_y)) + c_x;
 
-        /* See math_error(7) */
-        if (errno != 0)
+        /* See math_error(7); not every libm sets errno (e.g. macOS) */
+        if (errno != 0 || isnan(x))
         {
             continue;
         }
