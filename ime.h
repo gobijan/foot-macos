@@ -1,15 +1,17 @@
 #pragma once
 
-#if defined(FOOT_IME_ENABLED) && FOOT_IME_ENABLED
-
-#include "text-input-unstable-v3.h"
-
-extern const struct zwp_text_input_v3_listener text_input_listener;
-
-#endif /* FOOT_IME_ENABLED */
+#include <stdint.h>
 
 struct seat;
 struct terminal;
+
+/* Input method events, from the platform layer (NSTextInputClient) */
+void ime_enter(struct seat *seat, struct terminal *term);
+void ime_leave(struct seat *seat);
+void ime_preedit(struct seat *seat, const char *text,
+                 int32_t cursor_begin, int32_t cursor_end);
+void ime_commit(struct seat *seat, const char *text);
+void ime_done(struct seat *seat);
 
 void ime_enable(struct seat *seat);
 void ime_disable(struct seat *seat);

@@ -1,7 +1,5 @@
 #pragma once
 
-#include <cursor-shape-v1.h>
-
 enum cursor_shape {
     CURSOR_SHAPE_NONE,
     CURSOR_SHAPE_CUSTOM,
@@ -22,8 +20,3 @@ enum cursor_shape {
 };
 
 const char *const *cursor_shape_to_string(enum cursor_shape shape);
-
-enum wp_cursor_shape_device_v1_shape cursor_shape_to_server_shape(
-    enum cursor_shape shape);
-enum wp_cursor_shape_device_v1_shape cursor_string_to_server_shape(
-    const char *xcursor, int bound_version);

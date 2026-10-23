@@ -32,3 +32,12 @@ bool fdm_signal_add(struct fdm *fdm, int signo, fdm_signal_handler_t handler, vo
 bool fdm_signal_del(struct fdm *fdm, int signo);
 
 bool fdm_poll(struct fdm *fdm);
+
+/*
+ * Native run loop integration: fdm_fd() becomes readable when events
+ * are pending; fdm_dispatch() handles them without blocking. The run
+ * loop must call fdm_run_hooks() before going to sleep.
+ */
+int fdm_fd(const struct fdm *fdm);
+bool fdm_dispatch(struct fdm *fdm);
+void fdm_run_hooks(struct fdm *fdm);

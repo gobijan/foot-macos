@@ -4,8 +4,6 @@
 
 #include <string.h>
 
-#include "text-input-unstable-v3.h"
-
 #define LOG_MODULE "ime"
 #define LOG_ENABLE_DBG 0
 #include "log.h"
@@ -51,26 +49,19 @@ ime_reset_preedit(struct seat *seat)
     seat->ime.preedit.count = 0;
 }
 
-static void
-enter(void *data, struct zwp_text_input_v3 *zwp_text_input_v3,
-      struct wl_surface *surface)
+/*
+ * The platform layer feeds us NSTextInputClient events:
+ *
+ *   - setMarkedText:   -> ime_preedit()
+ *   - insertText:      -> ime_commit()
+ *
+ * followed by ime_done(), which applies them.
+ */
+
+void
+ime_enter(struct seat *seat, struct terminal *term)
 {
-    if (unlikely(surface == NULL)) {
-        /* Seen on Hyprland */
-        LOG_WARN("compositor sent ime_enter event with a NULL surface");
-        return;
-    }
-
-    struct seat *seat = data;
-    struct wl_window *win = wl_surface_get_user_data(surface);
-    struct terminal *term = win->term;
-
     LOG_DBG("enter: seat=%s, term=%p", seat->name, (const void *)term);
-
-    if (seat->kbd_focus != term) {
-        LOG_WARN("compositor sent ime::enter() event before the "
-                 "corresponding keyboard_enter() event");
-    }
 
     /* The main grid is the *only* input-receiving surface we have */
     seat->ime_focus = term;
@@ -87,24 +78,20 @@ enter(void *data, struct zwp_text_input_v3 *zwp_text_input_v3,
     ime_enable(seat);
 }
 
-static void
-leave(void *data, struct zwp_text_input_v3 *zwp_text_input_v3,
-      struct wl_surface *surface)
+void
+ime_leave(struct seat *seat)
 {
-    struct seat *seat = data;
     LOG_DBG("leave: seat=%s", seat->name);
 
     ime_disable(seat);
     seat->ime_focus = NULL;
 }
 
-static void
-preedit_string(void *data, struct zwp_text_input_v3 *zwp_text_input_v3,
-               const char *text, int32_t cursor_begin, int32_t cursor_end)
+void
+ime_preedit(struct seat *seat, const char *text,
+            int32_t cursor_begin, int32_t cursor_end)
 {
     LOG_DBG("preedit-string: text=%s, begin=%d, end=%d", text, cursor_begin, cursor_end);
-
-    struct seat *seat = data;
 
     ime_reset_pending_preedit(seat);
 
@@ -115,13 +102,10 @@ preedit_string(void *data, struct zwp_text_input_v3 *zwp_text_input_v3,
     }
 }
 
-static void
-commit_string(void *data, struct zwp_text_input_v3 *zwp_text_input_v3,
-              const char *text)
+void
+ime_commit(struct seat *seat, const char *text)
 {
     LOG_DBG("commit: text=%s", text);
-
-    struct seat *seat = data;
 
     ime_reset_pending_commit(seat);
 
@@ -129,26 +113,12 @@ commit_string(void *data, struct zwp_text_input_v3 *zwp_text_input_v3,
         seat->ime.commit.pending.text = xstrdup(text);
 }
 
-static void
-delete_surrounding_text(void *data, struct zwp_text_input_v3 *zwp_text_input_v3,
-                        uint32_t before_length, uint32_t after_length)
-{
-    LOG_DBG("delete-surrounding: before=%d, after=%d", before_length, after_length);
-
-    struct seat *seat = data;
-    seat->ime.surrounding.pending.before_length = before_length;
-    seat->ime.surrounding.pending.after_length = after_length;
-}
-
-static void
-done(void *data, struct zwp_text_input_v3 *zwp_text_input_v3,
-     uint32_t serial)
+void
+ime_done(struct seat *seat)
 {
     /*
-     * From text-input-unstable-v3.h:
-     *
-     * The application must proceed by evaluating the changes in the
-     * following order:
+     * Changes are evaluated in the same order as with the Wayland
+     * text-input protocol:
      *
      * 1. Replace existing preedit string with the cursor.
      * 2. Delete requested surrounding text.
@@ -158,25 +128,8 @@ done(void *data, struct zwp_text_input_v3 *zwp_text_input_v3,
      * 6. Place cursor inside preedit text.
      */
 
-    LOG_DBG("done: serial=%u", serial);
-    struct seat *seat = data;
+    LOG_DBG("done");
     struct terminal *term = seat->ime_focus;
-
-    if (seat->ime.serial != serial) {
-        LOG_DBG("IME serial mismatch: expected=0x%08x, got 0x%08x",
-                seat->ime.serial, serial);
-        return;
-    }
-
-    if (term == NULL) {
-        static bool have_warned = false;
-        if (!have_warned) {
-            LOG_WARN(
-                "%s: text-input::done() received on seat that isn't "
-                "focusing a terminal window", seat->name);
-            have_warned = true;
-        }
-    }
 
     /* 1. Delete existing pre-edit text */
     if (seat->ime.preedit.cells != NULL) {
@@ -384,9 +337,6 @@ done(void *data, struct zwp_text_input_v3 *zwp_text_input_v3,
 static void
 ime_send_cursor_rect(struct seat *seat)
 {
-    if (unlikely(seat->wayl->text_input_manager == NULL))
-        return;
-
     if (seat->ime_focus == NULL)
         return;
 
@@ -403,72 +353,38 @@ ime_send_cursor_rect(struct seat *seat)
         return;
     }
 
-    zwp_text_input_v3_set_cursor_rectangle(
-        seat->wl_text_input,
-        seat->ime.cursor_rect.pending.x / term->scale,
-        seat->ime.cursor_rect.pending.y / term->scale,
-        seat->ime.cursor_rect.pending.width / term->scale,
-        seat->ime.cursor_rect.pending.height / term->scale);
-
-    zwp_text_input_v3_commit(seat->wl_text_input);
-    seat->ime.serial++;
-
+    /* The input method queries it (firstRectForCharacterRange:) */
     seat->ime.cursor_rect.sent = seat->ime.cursor_rect.pending;
+    wayl_win_ime_cursor_rect_changed(term->window);
 }
 
 void
 ime_enable(struct seat *seat)
 {
-    if (unlikely(seat->wayl->text_input_manager == NULL))
-        return;
-
     if (seat->ime_focus == NULL)
         return;
 
     struct terminal *term = seat->ime_focus;
-    if (term == NULL)
-        return;
-
     if (!term->ime_enabled)
         return;
 
     ime_reset_pending(seat);
     ime_reset_preedit(seat);
 
-    zwp_text_input_v3_enable(seat->wl_text_input);
-    zwp_text_input_v3_set_content_type(
-        seat->wl_text_input,
-        ZWP_TEXT_INPUT_V3_CONTENT_HINT_NONE,
-        ZWP_TEXT_INPUT_V3_CONTENT_PURPOSE_TERMINAL);
-
-    zwp_text_input_v3_set_cursor_rectangle(
-        seat->wl_text_input,
-        seat->ime.cursor_rect.pending.x / term->scale,
-        seat->ime.cursor_rect.pending.y / term->scale,
-        seat->ime.cursor_rect.pending.width / term->scale,
-        seat->ime.cursor_rect.pending.height / term->scale);
-
     seat->ime.cursor_rect.sent = seat->ime.cursor_rect.pending;
-
-    zwp_text_input_v3_commit(seat->wl_text_input);
-    seat->ime.serial++;
+    wayl_win_ime_reset(term->window);
 }
 
 void
 ime_disable(struct seat *seat)
 {
-    if (unlikely(seat->wayl->text_input_manager == NULL))
-        return;
-
     if (seat->ime_focus == NULL)
         return;
 
     ime_reset_pending(seat);
     ime_reset_preedit(seat);
 
-    zwp_text_input_v3_disable(seat->wl_text_input);
-    zwp_text_input_v3_commit(seat->wl_text_input);
-    seat->ime.serial++;
+    wayl_win_ime_reset(seat->ime_focus->window);
 }
 
 void
@@ -509,16 +425,14 @@ update:
     ime_send_cursor_rect(seat);
 }
 
-const struct zwp_text_input_v3_listener text_input_listener = {
-    .enter = &enter,
-    .leave = &leave,
-    .preedit_string = &preedit_string,
-    .commit_string = &commit_string,
-    .delete_surrounding_text = &delete_surrounding_text,
-    .done = &done,
-};
-
 #else /* !FOOT_IME_ENABLED */
+
+void ime_enter(struct seat *seat, struct terminal *term) {}
+void ime_leave(struct seat *seat) {}
+void ime_preedit(struct seat *seat, const char *text,
+                 int32_t cursor_begin, int32_t cursor_end) {}
+void ime_commit(struct seat *seat, const char *text) {}
+void ime_done(struct seat *seat) {}
 
 void ime_enable(struct seat *seat) {}
 void ime_disable(struct seat *seat) {}

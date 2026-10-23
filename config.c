@@ -1,4 +1,5 @@
 #include "config.h"
+#include "font-pattern.h"
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -15,7 +16,6 @@
 
 #include <linux/input-event-codes.h>
 #include <xkbcommon/xkbcommon.h>
-#include <fontconfig/fontconfig.h>
 
 #define LOG_MODULE "config"
 #define LOG_ENABLE_DBG 0
@@ -1142,6 +1142,13 @@ parse_section_main(struct context *ctx)
 
     else if (streq(key, "word-delimiters"))
         return value_to_wchars(ctx, &conf->word_delimiters);
+
+    else if (streq(key, "macos-option-as-alt")) {
+        return value_to_enum(
+            ctx,
+            (const char *[]){"none", "left", "right", "both", NULL},
+            &conf->macos.option_as_alt);
+    }
 
     else if (streq(key, "selection-target")) {
         _Static_assert(sizeof(conf->selection_target) == sizeof(int),
@@ -3512,6 +3519,9 @@ config_load(struct config *conf, const char *conf_path,
         .shell = get_shell(),
         .title = xstrdup("foot"),
         .app_id = (as_server ? xstrdup("footclient") : xstrdup("foot")),
+
+        /* macOS: the shell must set up the environment (e.g. $PATH) */
+        .login_shell = true,
         .toplevel_tag = xstrdup(""),
         .word_delimiters = xc32dup(U",│`|:\"'()[]{}<>"),
         .size = {
@@ -3684,11 +3694,12 @@ config_load(struct config *conf, const char *conf_path,
 
     parse_modifiers(XKB_MOD_NAME_SHIFT, 5, &conf->mouse.selection_override_modifiers);
 
+    /* macOS: Notification Center via osascript; URLs open with the default app */
     tokenize_cmdline(
-        "notify-send --wait --app-name ${app-id} --icon ${app-id} --category ${category} --urgency ${urgency} --expire-time ${expire-time} --hint STRING:image-path:${icon} --hint BOOLEAN:suppress-sound:${muted} --hint STRING:sound-name:${sound-name} --replace-id ${replace-id} ${action-argument} --print-id -- ${title} ${body}",
+        "osascript -e \"on run argv\" -e \"display notification (item 2 of argv) with title (item 1 of argv)\" -e \"end run\" ${title} ${body}",
         &conf->desktop_notifications.command.argv.args);
     tokenize_cmdline("--action ${action-name}=${action-label}", &conf->desktop_notifications.command_action_arg.argv.args);
-    tokenize_cmdline("xdg-open ${url}", &conf->url.launch.argv.args);
+    tokenize_cmdline("open ${url}", &conf->url.launch.argv.args);
 
     {
 
@@ -4074,79 +4085,64 @@ config_free(struct config *conf)
     user_notifications_free(&conf->notifications);
 }
 
+/* Default font size, in points, if the font pattern doesn't specify one */
+#define DEFAULT_FONT_PT_SIZE 13.0
+
 bool
 config_font_parse(const char *pattern, struct config_font *font)
 {
-    FcPattern *pat = FcNameParse((const FcChar8 *)pattern);
-    if (pat == NULL)
+    struct font_pattern pat;
+    if (!font_pattern_parse(pattern, &pat))
         return false;
 
     /*
-     * First look for user specified {pixel}size option
+     * Look for user specified {pixel}size option
      * e.g. "font-name:size=12"
      */
 
     double pt_size = -1.0;
-    FcResult have_pt_size = FcPatternGetDouble(pat, FC_SIZE, 0, &pt_size);
-
     int px_size = -1;
-    FcResult have_px_size = FcPatternGetInteger(pat, FC_PIXEL_SIZE, 0, &px_size);
 
-    if (have_pt_size != FcResultMatch && have_px_size != FcResultMatch) {
-        /*
-         * Apply fontconfig config. Can't do that until we've first
-         * checked for a user provided size, since we may end up with
-         * both "size" and "pixelsize" being set, and we don't know
-         * which one takes priority.
-         */
-        FcConfig *fc_conf = FcConfigCreate();
-        FcPattern *pat_copy = FcPatternDuplicate(pat);
-        if (pat_copy == NULL ||
-            !FcConfigSubstitute(fc_conf, pat_copy, FcMatchPattern))
+    const char *size = font_pattern_get(&pat, "size");
+    const char *pixelsize = font_pattern_get(&pat, "pixelsize");
+
+    if (size != NULL)
+        pt_size = strtod(size, NULL);
+    if (pixelsize != NULL)
+        px_size = (int)strtol(pixelsize, NULL, 10);
+
+    if (pt_size <= 0. && px_size <= 0)
+        pt_size = DEFAULT_FONT_PT_SIZE;
+
+    /* Family, and everything but size and pixelsize */
+    size_t len = pat.family_raw != NULL ? strlen(pat.family_raw) : 0;
+    for (size_t i = 0; i < pat.count; i++)
+        len += 1 + strlen(pat.elems[i].raw);
+
+    char *stripped_pattern = xmalloc(len + 1);
+    char *p = stripped_pattern;
+    *p = '\0';
+
+    if (pat.family_raw != NULL)
+        p = stpcpy(p, pat.family_raw);
+
+    for (size_t i = 0; i < pat.count; i++) {
+        const struct font_pattern_element *e = &pat.elems[i];
+
+        if (e->value != NULL &&
+            (strcasecmp(e->key, "size") == 0 ||
+             strcasecmp(e->key, "pixelsize") == 0))
         {
-            LOG_WARN("%s: failed to do config substitution", pattern);
-        } else {
-            have_pt_size = FcPatternGetDouble(pat_copy, FC_SIZE, 0, &pt_size);
-            have_px_size = FcPatternGetInteger(pat_copy, FC_PIXEL_SIZE, 0, &px_size);
+            continue;
         }
 
-        FcPatternDestroy(pat_copy);
-        FcConfigDestroy(fc_conf);
-
-        if (have_pt_size != FcResultMatch && have_px_size != FcResultMatch)
-            pt_size = 8.0;
+        *p++ = ':';
+        p = stpcpy(p, e->raw);
     }
 
-    FcPatternRemove(pat, FC_SIZE, 0);
-    FcPatternRemove(pat, FC_PIXEL_SIZE, 0);
-
-    /* Only the family part, with '\', '-', ':' and ',' \-escaped */
-    FcChar8 *escaped_family = FcPatternFormat(
-        pat, (const FcChar8 *)"%{+family{%{family|escape(\\\\-:,)}}}");
-
-    /* Everything but the family, size and pixelsize */
-    FcChar8 *rest = FcPatternFormat(
-        pat, (const FcChar8 *)"%{-family,size,pixelsize{%{=unparse}}}");
-
-    char *stripped_pattern = NULL;
-    if (escaped_family == NULL || rest == NULL) {
-        free(escaped_family);
-        free(rest);
-        stripped_pattern = (char *)FcNameUnparse(pat);
-    } else {
-        stripped_pattern = xasprintf("%s%s", escaped_family, rest);
-        free(escaped_family);
-        free(rest);
-    }
-
-    FcPatternDestroy(pat);
+    font_pattern_free(&pat);
 
     LOG_DBG("%s: pt-size=%.2f, px-size=%d", stripped_pattern, pt_size, px_size);
-
-    if (stripped_pattern == NULL) {
-        LOG_ERR("failed to convert font pattern to string");
-        return false;
-    }
 
     *font = (struct config_font){
         .pattern = stripped_pattern,

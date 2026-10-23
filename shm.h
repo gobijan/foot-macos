@@ -5,7 +5,7 @@
 #include <sys/types.h>
 
 #include <pixman.h>
-#include <wayland-client.h>
+#include <IOSurface/IOSurfaceRef.h>
 
 #include <tllist.h>
 
@@ -21,7 +21,7 @@ struct buffer {
 
     void *data;
 
-    struct wl_buffer *wl_buf;
+    IOSurfaceRef iosurface;  /* Shared with the window server */
     pixman_image_t **pix;
     size_t pix_instances;
 
@@ -36,7 +36,7 @@ struct buffer {
      * The remaining items are used to track surface damage. Each
      * worker thread adds its own cell damage to "its" region. When
      * the frame is done, all damage is converted to a single region,
-     * which is then used in calls to wl_surface_damage_buffer().
+     * which is then used in calls to wayl_surface_damage().
      */
     pixman_region32_t *dirty;
 };
@@ -96,3 +96,18 @@ void shm_addref(struct buffer *buf);
 void shm_unref(struct buffer *buf);
 
 void shm_purge(struct buffer_chain *chain);
+
+/*
+ * macOS: there is no compositor release event. A buffer is busy while
+ * it is attached to a layer, and for as long as the window server is
+ * still using it after being detached (IOSurfaceIsInUse()).
+ *
+ * shm_buffer_attached()/shm_buffer_detached() are called by the
+ * platform layer when the buffer is set as, or replaced as, a layer's
+ * contents. shm_chain_poll_releases() releases buffers the window
+ * server is done with (running the chain's release callback); it is
+ * called before each frame, and by shm_get_buffer().
+ */
+void shm_buffer_attached(struct buffer *buf);
+void shm_buffer_detached(struct buffer *buf);
+void shm_chain_poll_releases(struct buffer_chain *chain);

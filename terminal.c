@@ -13,11 +13,16 @@
 #include <sys/wait.h>
 #include <sys/ioctl.h>
 #include <sys/epoll.h>
-#include <sys/eventfd.h>
 #include <sys/timerfd.h>
 #include <fcntl.h>
 #include <linux/input-event-codes.h>
-#include <xdg-shell.h>
+
+/*
+ * DPI used when fonts are not sized by the monitor's DPI. On macOS, a
+ * point is one logical pixel (72 DPI); this makes font sizes match
+ * those of other macOS applications.
+ */
+#define DEFAULT_FONT_DPI 72.
 
 #define LOG_MODULE "terminal"
 #define LOG_ENABLE_DBG 0
@@ -33,7 +38,6 @@
 #include "ime.h"
 #include "input.h"
 #include "notify.h"
-#include "quirks.h"
 #include "reaper.h"
 #include "render.h"
 #include "selection.h"
@@ -412,8 +416,7 @@ fdm_flash(struct fdm *fdm, int fd, int events, void *data)
 
     struct terminal *term = data;
     uint64_t expiration_count;
-    ssize_t ret = read(
-        term->flash.fd, &expiration_count, sizeof(expiration_count));
+    ssize_t ret = timerfd_read(term->flash.fd, &expiration_count);
 
     if (ret < 0) {
         if (errno == EAGAIN)
@@ -429,10 +432,7 @@ fdm_flash(struct fdm *fdm, int fd, int events, void *data)
     term->flash.active = false;
     render_overlay(term);
 
-    // since the overlay surface is synced with the main window surface, we have
-    // to commit the main surface for the compositor to acknowledge the new
-    // overlay state.
-    wl_surface_commit(term->window->surface.surf);
+    wayl_surface_commit(&term->window->surface);
     return true;
 }
 
@@ -444,8 +444,7 @@ fdm_blink(struct fdm *fdm, int fd, int events, void *data)
 
     struct terminal *term = data;
     uint64_t expiration_count;
-    ssize_t ret = read(
-        term->blink.fd, &expiration_count, sizeof(expiration_count));
+    ssize_t ret = timerfd_read(term->blink.fd, &expiration_count);
 
     if (ret < 0) {
         if (errno == EAGAIN)
@@ -539,8 +538,7 @@ fdm_cursor_blink(struct fdm *fdm, int fd, int events, void *data)
 
     struct terminal *term = data;
     uint64_t expiration_count;
-    ssize_t ret = read(
-        term->cursor_blink.fd, &expiration_count, sizeof(expiration_count));
+    ssize_t ret = timerfd_read(term->cursor_blink.fd, &expiration_count);
 
     if (ret < 0) {
         if (errno == EAGAIN)
@@ -574,9 +572,9 @@ fdm_delayed_render(struct fdm *fdm, int fd, int events, void *data)
     ssize_t ret2 = 0;
 
     if (fd == term->delayed_render_timer.lower_fd)
-        ret1 = read(term->delayed_render_timer.lower_fd, &unused, sizeof(unused));
+        ret1 = timerfd_read(term->delayed_render_timer.lower_fd, &unused);
     if (fd == term->delayed_render_timer.upper_fd)
-        ret2 = read(term->delayed_render_timer.upper_fd, &unused, sizeof(unused));
+        ret2 = timerfd_read(term->delayed_render_timer.upper_fd, &unused);
 
     if ((ret1 < 0 || ret2 < 0)) {
         if (errno == EAGAIN)
@@ -617,8 +615,7 @@ fdm_app_sync_updates_timeout(
 
     struct terminal *term = data;
     uint64_t unused;
-    ssize_t ret = read(term->render.app_sync_updates.timer_fd,
-                       &unused, sizeof(unused));
+    ssize_t ret = timerfd_read(term->render.app_sync_updates.timer_fd, &unused);
 
     if (ret < 0) {
         if (errno == EAGAIN)
@@ -639,7 +636,7 @@ fdm_title_update_timeout(struct fdm *fdm, int fd, int events, void *data)
 
     struct terminal *term = data;
     uint64_t unused;
-    ssize_t ret = read(term->render.title.timer_fd, &unused, sizeof(unused));
+    ssize_t ret = timerfd_read(term->render.title.timer_fd, &unused);
 
     if (ret < 0) {
         if (errno == EAGAIN)
@@ -663,7 +660,7 @@ fdm_icon_update_timeout(struct fdm *fdm, int fd, int events, void *data)
 
     struct terminal *term = data;
     uint64_t unused;
-    ssize_t ret = read(term->render.icon.timer_fd, &unused, sizeof(unused));
+    ssize_t ret = timerfd_read(term->render.icon.timer_fd, &unused);
 
     if (ret < 0) {
         if (errno == EAGAIN)
@@ -687,7 +684,7 @@ fdm_app_id_update_timeout(struct fdm *fdm, int fd, int events, void *data)
 
     struct terminal *term = data;
     uint64_t unused;
-    ssize_t ret = read(term->render.app_id.timer_fd, &unused, sizeof(unused));
+    ssize_t ret = timerfd_read(term->render.app_id.timer_fd, &unused);
 
     if (ret < 0) {
         if (errno == EAGAIN)
@@ -708,8 +705,8 @@ initialize_render_workers(struct terminal *term)
 {
     LOG_INFO("using %hu rendering threads", term->render.workers.count);
 
-    if (sem_init(&term->render.workers.start, 0, 0) < 0 ||
-        sem_init(&term->render.workers.done, 0, 0) < 0)
+    if ((term->render.workers.start = dispatch_semaphore_create(0)) == NULL ||
+        (term->render.workers.done = dispatch_semaphore_create(0)) == NULL)
     {
         LOG_ERRNO("failed to instantiate render worker semaphores");
         return false;
@@ -749,8 +746,12 @@ initialize_render_workers(struct terminal *term)
     return true;
 
 err_sem_destroy:
-    sem_destroy(&term->render.workers.start);
-    sem_destroy(&term->render.workers.done);
+    if (term->render.workers.start != NULL)
+        dispatch_release(term->render.workers.start);
+    if (term->render.workers.done != NULL)
+        dispatch_release(term->render.workers.done);
+    term->render.workers.start = NULL;
+    term->render.workers.done = NULL;
     return false;
 }
 
@@ -790,7 +791,7 @@ term_line_height_update(struct terminal *term)
         return;
     }
 
-    const float dpi = term->font_is_sized_by_dpi ? term->font_dpi : 96.;
+    const float dpi = term->font_is_sized_by_dpi ? term->font_dpi : DEFAULT_FONT_DPI;
 
     const float font_original_pt_size =
         conf->fonts[0].arr[0].px_size > 0
@@ -930,9 +931,9 @@ get_font_dpi(const struct terminal *term)
         ? term_fractional_scaling(term)
             ? mon->dpi.physical
             : mon->dpi.scaled
-        : 96.;
+        : DEFAULT_FONT_DPI;
 
-    return monitor_dpi > 0. ? monitor_dpi : 96.;
+    return monitor_dpi > 0. ? monitor_dpi : DEFAULT_FONT_DPI;
 }
 
 static enum fcft_subpixel
@@ -943,7 +944,7 @@ get_font_subpixel(const struct terminal *term)
         return FCFT_SUBPIXEL_NONE;
     }
 
-    enum wl_output_subpixel wl_subpixel;
+    enum monitor_subpixel wl_subpixel;
 
     /*
      * Wayland doesn't tell us *which* part of the surface that goes
@@ -966,15 +967,15 @@ get_font_subpixel(const struct terminal *term)
     else if (tll_length(term->wl->monitors) > 0)
         wl_subpixel = tll_front(term->wl->monitors).subpixel;
     else
-        wl_subpixel = WL_OUTPUT_SUBPIXEL_UNKNOWN;
+        wl_subpixel = MONITOR_SUBPIXEL_UNKNOWN;
 
     switch (wl_subpixel) {
-    case WL_OUTPUT_SUBPIXEL_UNKNOWN:        return FCFT_SUBPIXEL_DEFAULT;
-    case WL_OUTPUT_SUBPIXEL_NONE:           return FCFT_SUBPIXEL_NONE;
-    case WL_OUTPUT_SUBPIXEL_HORIZONTAL_RGB: return FCFT_SUBPIXEL_HORIZONTAL_RGB;
-    case WL_OUTPUT_SUBPIXEL_HORIZONTAL_BGR: return FCFT_SUBPIXEL_HORIZONTAL_BGR;
-    case WL_OUTPUT_SUBPIXEL_VERTICAL_RGB:   return FCFT_SUBPIXEL_VERTICAL_RGB;
-    case WL_OUTPUT_SUBPIXEL_VERTICAL_BGR:   return FCFT_SUBPIXEL_VERTICAL_BGR;
+    case MONITOR_SUBPIXEL_UNKNOWN:        return FCFT_SUBPIXEL_DEFAULT;
+    case MONITOR_SUBPIXEL_NONE:           return FCFT_SUBPIXEL_NONE;
+    case MONITOR_SUBPIXEL_HORIZONTAL_RGB: return FCFT_SUBPIXEL_HORIZONTAL_RGB;
+    case MONITOR_SUBPIXEL_HORIZONTAL_BGR: return FCFT_SUBPIXEL_HORIZONTAL_BGR;
+    case MONITOR_SUBPIXEL_VERTICAL_RGB:   return FCFT_SUBPIXEL_VERTICAL_RGB;
+    case MONITOR_SUBPIXEL_VERTICAL_BGR:   return FCFT_SUBPIXEL_VERTICAL_BGR;
     }
 
     return FCFT_SUBPIXEL_DEFAULT;
@@ -985,7 +986,7 @@ term_pt_or_px_as_pixels(const struct terminal *term,
                         const struct pt_or_px *pt_or_px)
 {
     float scale = !term->font_is_sized_by_dpi ? term->scale : 1.;
-    float dpi = term->font_is_sized_by_dpi  ? term->font_dpi : 96.;
+    float dpi = term->font_is_sized_by_dpi  ? term->font_dpi : DEFAULT_FONT_DPI;
 
     return pt_or_px->px == 0
         ? (int)roundf(pt_or_px->pt * scale * dpi / 72)
@@ -1066,7 +1067,7 @@ reload_fonts(struct terminal *term, bool resize_grid)
     const char **names_bold_italic = (const char **)(custom_bold_italic ? names[3] : names[0]);
 
     const bool use_dpi = term->font_is_sized_by_dpi;
-    char *dpi = xasprintf("dpi=%.2f", use_dpi ? term->font_dpi : 96.);
+    char *dpi = xasprintf("dpi=%.2f", use_dpi ? term->font_dpi : DEFAULT_FONT_DPI);
 
     char *attrs[4] = {
         [0] = dpi, /* Takes ownership */
@@ -1176,6 +1177,7 @@ term_init(const struct config *conf, struct fdm *fdm, struct reaper *reaper,
           void (*shutdown_cb)(void *data, int exit_code), void *shutdown_data)
 {
     int ptmx = -1;
+    int pts = -1;
     int flash_fd = -1;
     int delay_lower_fd = -1;
     int delay_upper_fd = -1;
@@ -1193,6 +1195,19 @@ term_init(const struct config *conf, struct fdm *fdm, struct reaper *reaper,
     ptmx = pty_path ? open(pty_path, PTY_OPEN_FLAGS) : posix_openpt(PTY_OPEN_FLAGS);
     if (ptmx < 0) {
         LOG_ERRNO("failed to open PTY");
+        goto close_fds;
+    }
+
+    /*
+     * macOS: the master isn't usable (e.g. TIOCSWINSZ) until the
+     * slave has been opened. Keep it open until the client has opened
+     * its own (or the master would see a hangup).
+     */
+    if (pty_path == NULL &&
+        (grantpt(ptmx) < 0 || unlockpt(ptmx) < 0 ||
+         (pts = open(ptsname(ptmx), O_RDWR | O_NOCTTY | O_CLOEXEC)) < 0))
+    {
+        LOG_ERRNO("failed to open PTY slave");
         goto close_fds;
     }
     if ((flash_fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK)) < 0) {
@@ -1436,13 +1451,17 @@ term_init(const struct config *conf, struct fdm *fdm, struct reaper *reaper,
 
     if (!pty_path) {
         /* Start the slave/client */
-        if ((term->slave = slave_spawn(
-                 term->ptmx, argc, term->cwd, argv, envp, &conf->env_vars,
-                 conf->term, conf->shell, conf->login_shell,
-                 &conf->notifications)) == -1)
-        {
+        term->slave = slave_spawn(
+            term->ptmx, argc, term->cwd, argv, envp, &conf->env_vars,
+            conf->term, conf->shell, conf->login_shell,
+            &conf->notifications);
+
+        /* The client has opened the slave (or failed) */
+        close(pts);
+        pts = -1;
+
+        if (term->slave == -1)
             goto err;
-        }
 
         reaper_add(term->reaper, term->slave, &fdm_client_terminated, term);
     }
@@ -1472,11 +1491,11 @@ term_init(const struct config *conf, struct fdm *fdm, struct reaper *reaper,
         break;
 
     case STARTUP_MAXIMIZED:
-        xdg_toplevel_set_maximized(term->window->xdg_toplevel);
+        wayl_win_set_maximized(term->window, true);
         break;
 
     case STARTUP_FULLSCREEN:
-        xdg_toplevel_set_fullscreen(term->window->xdg_toplevel, NULL);
+        wayl_win_set_fullscreen(term->window, true);
         break;
     }
 
@@ -1486,11 +1505,15 @@ term_init(const struct config *conf, struct fdm *fdm, struct reaper *reaper,
     return term;
 
 err:
+    if (pts >= 0)
+        close(pts);
     term->shutdown.in_progress = true;
     term_destroy(term);
     return NULL;
 
 close_fds:
+    if (pts >= 0)
+        close(pts);
     close(ptmx);
     fdm_del(fdm, flash_fd);
     fdm_del(fdm, delay_lower_fd);
@@ -1660,7 +1683,7 @@ static bool
 fdm_terminate_timeout(struct fdm *fdm, int fd, int events, void *data)
 {
     uint64_t unused;
-    ssize_t bytes = read(fd, &unused, sizeof(unused));
+    ssize_t bytes = timerfd_read(fd, &unused);
     if (bytes < 0) {
         LOG_ERRNO("failed to read from slave terminate timeout FD");
         return false;
@@ -1781,20 +1804,23 @@ term_shutdown(struct terminal *term)
     term->flash.fd = -1;
     term->ptmx = -1;
 
-    int event_fd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
-    if (event_fd == -1) {
-        LOG_ERRNO("failed to create terminal shutdown event FD");
+    /* Defer the actual shutdown to the next FDM iteration */
+    int event_fds[2];
+    if (pipe2(event_fds, O_CLOEXEC | O_NONBLOCK) < 0) {
+        LOG_ERRNO("failed to create terminal shutdown event pipe");
         return false;
     }
 
-    if (!fdm_add(term->fdm, event_fd, EPOLLIN, &fdm_shutdown, term)) {
-        close(event_fd);
-        return false;
-    }
-
-    if (write(event_fd, &(uint64_t){1}, sizeof(uint64_t)) != sizeof(uint64_t)) {
+    if (write(event_fds[1], "", 1) != 1) {
         LOG_ERRNO("failed to send terminal shutdown event");
-        fdm_del(term->fdm, event_fd);
+        close(event_fds[0]);
+        close(event_fds[1]);
+        return false;
+    }
+    close(event_fds[1]);
+
+    if (!fdm_add(term->fdm, event_fds[0], EPOLLIN, &fdm_shutdown, term)) {
+        close(event_fds[0]);
         return false;
     }
 
@@ -1857,7 +1883,7 @@ term_destroy(struct terminal *term)
         }
 
         for (size_t i = 0; i < worker_count; i++) {
-            sem_post(&term->render.workers.start);
+            dispatch_semaphore_signal(term->render.workers.start);
             tll_push_back(term->render.workers.queue, -2);
         }
     }
@@ -1904,8 +1930,12 @@ term_destroy(struct terminal *term)
     mtx_destroy(&term->render.workers.preapplied_damage.lock);
     cnd_destroy(&term->render.workers.preapplied_damage.cond);
     mtx_destroy(&term->render.workers.lock);
-    sem_destroy(&term->render.workers.start);
-    sem_destroy(&term->render.workers.done);
+    if (term->render.workers.start != NULL)
+        dispatch_release(term->render.workers.start);
+    if (term->render.workers.done != NULL)
+        dispatch_release(term->render.workers.done);
+    term->render.workers.start = NULL;
+    term->render.workers.done = NULL;
     xassert(tll_length(term->render.workers.queue) == 0);
     tll_free(term->render.workers.queue);
 
@@ -2250,7 +2280,7 @@ static bool
 term_font_size_adjust_by_points(struct terminal *term, float amount)
 {
     const struct config *conf = term->conf;
-    const float dpi = term->font_is_sized_by_dpi ? term->font_dpi : 96.;
+    const float dpi = term->font_is_sized_by_dpi ? term->font_dpi : DEFAULT_FONT_DPI;
 
     for (size_t i = 0; i < 4; i++) {
         const struct config_font_list *font_list = &conf->fonts[i];
@@ -2274,7 +2304,7 @@ static bool
 term_font_size_adjust_by_pixels(struct terminal *term, int amount)
 {
     const struct config *conf = term->conf;
-    const float dpi = term->font_is_sized_by_dpi ? term->font_dpi : 96.;
+    const float dpi = term->font_is_sized_by_dpi ? term->font_dpi : DEFAULT_FONT_DPI;
 
     for (size_t i = 0; i < 4; i++) {
         const struct config_font_list *font_list = &conf->fonts[i];
@@ -2354,15 +2384,15 @@ term_font_size_reset(struct terminal *term)
 bool
 term_fractional_scaling(const struct terminal *term)
 {
-    return term->wl->fractional_scale_manager != NULL &&
-           term->wl->viewporter != NULL &&
-           term->window->scale > 0.;
+    /* macOS backing scale factors are integral */
+    return false;
 }
 
 bool
 term_preferred_buffer_scale(const struct terminal *term)
 {
-    return term->window->preferred_buffer_scale > 0;
+    /* The window's backing scale factor */
+    return term->window->scale > 0.;
 }
 
 bool
@@ -2388,7 +2418,7 @@ term_update_scale(struct terminal *term)
     const float new_scale = (term_fractional_scaling(term)
         ? win->scale
         : term_preferred_buffer_scale(term)
-            ? win->preferred_buffer_scale
+            ? win->scale
             : tll_length(win->on_outputs) > 0
                 ? tll_back(win->on_outputs)->scale
                 : term->scale_before_unmap > 0.
@@ -3624,17 +3654,11 @@ term_xcursor_update_for_seat(struct terminal *term, struct seat *seat)
         if (seat->pointer.hidden)
             shape = CURSOR_SHAPE_HIDDEN;
 
-        else if (cursor_string_to_server_shape(
-            term->mouse_user_cursor,
-            term->wl->shape_manager_version) != 0 ||
-                 render_xcursor_is_valid(seat, term->mouse_user_cursor))
-        {
+        else if (render_xcursor_is_valid(seat, term->mouse_user_cursor))
             shape = CURSOR_SHAPE_CUSTOM;
-        }
 
-        else if (term_mouse_grabbed(term, seat)) {
+        else if (term_mouse_grabbed(term, seat))
             shape = CURSOR_SHAPE_TEXT;
-        }
 
         else
             shape = CURSOR_SHAPE_LEFT_PTR;
@@ -3644,14 +3668,11 @@ term_xcursor_update_for_seat(struct terminal *term, struct seat *seat)
     case TERM_SURF_BUTTON_MINIMIZE:
     case TERM_SURF_BUTTON_MAXIMIZE:
     case TERM_SURF_BUTTON_CLOSE:
-        shape = CURSOR_SHAPE_LEFT_PTR;
-        break;
-
     case TERM_SURF_BORDER_LEFT:
     case TERM_SURF_BORDER_RIGHT:
     case TERM_SURF_BORDER_TOP:
     case TERM_SURF_BORDER_BOTTOM:
-        shape = xcursor_for_csd_border(term, seat->mouse.x, seat->mouse.y);
+        shape = CURSOR_SHAPE_LEFT_PTR;
         break;
 
     case TERM_SURF_NONE:
@@ -4446,31 +4467,6 @@ term_process_and_print_non_ascii(struct terminal *term, char32_t wc)
 out:
     if (width > 0)
         term_print(term, wc, width, insert_mode_disable);
-}
-
-enum term_surface
-term_surface_kind(const struct terminal *term, const struct wl_surface *surface)
-{
-    if (likely(surface == term->window->surface.surf))
-        return TERM_SURF_GRID;
-    else if (surface == term->window->csd.surface[CSD_SURF_TITLE].surface.surf)
-        return TERM_SURF_TITLE;
-    else if (surface == term->window->csd.surface[CSD_SURF_LEFT].surface.surf)
-        return TERM_SURF_BORDER_LEFT;
-    else if (surface == term->window->csd.surface[CSD_SURF_RIGHT].surface.surf)
-        return TERM_SURF_BORDER_RIGHT;
-    else if (surface == term->window->csd.surface[CSD_SURF_TOP].surface.surf)
-        return TERM_SURF_BORDER_TOP;
-    else if (surface == term->window->csd.surface[CSD_SURF_BOTTOM].surface.surf)
-        return TERM_SURF_BORDER_BOTTOM;
-    else if (surface == term->window->csd.surface[CSD_SURF_MINIMIZE].surface.surf)
-        return TERM_SURF_BUTTON_MINIMIZE;
-    else if (surface == term->window->csd.surface[CSD_SURF_MAXIMIZE].surface.surf)
-        return TERM_SURF_BUTTON_MAXIMIZE;
-    else if (surface == term->window->csd.surface[CSD_SURF_CLOSE].surface.surf)
-        return TERM_SURF_BUTTON_CLOSE;
-    else
-        return TERM_SURF_NONE;
 }
 
 static bool

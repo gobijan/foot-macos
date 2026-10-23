@@ -30,7 +30,7 @@
 #include "vt.h"
 #include "xmalloc.h"
 
-static const char *const mime_type_map[] = {
+static const char *const UNUSED mime_type_map[] = {
     [DATA_OFFER_MIME_UNSET] = NULL,
     [DATA_OFFER_MIME_TEXT_PLAIN] = "text/plain",
     [DATA_OFFER_MIME_TEXT_UTF8] = "text/plain;charset=utf-8",
@@ -1652,13 +1652,13 @@ selection_cancel(struct terminal *term)
 bool
 selection_clipboard_has_data(const struct seat *seat)
 {
-    return seat->clipboard.data_offer != NULL;
+    return wayl_clipboard_has_data(seat->wayl);
 }
 
 bool
 selection_primary_has_data(const struct seat *seat)
 {
-    return seat->primary.data_offer != NULL;
+    return seat->primary.text != NULL;
 }
 
 void
@@ -1666,17 +1666,13 @@ selection_clipboard_unset(struct seat *seat)
 {
     struct wl_clipboard *clipboard = &seat->clipboard;
 
-    if (clipboard->data_source == NULL)
+    if (clipboard->text == NULL)
         return;
 
-    /* Kill previous data source */
-    xassert(clipboard->serial != 0);
-    wl_data_device_set_selection(seat->data_device, NULL, clipboard->serial);
-    wl_data_source_destroy(clipboard->data_source);
+    /* Only clears the pasteboard if it still holds our text */
+    wayl_clipboard_clear(seat->wayl, clipboard->change_count);
 
-    clipboard->data_source = NULL;
     clipboard->serial = 0;
-
     free(clipboard->text);
     clipboard->text = NULL;
 }
@@ -1686,17 +1682,7 @@ selection_primary_unset(struct seat *seat)
 {
     struct wl_primary *primary = &seat->primary;
 
-    if (primary->data_source == NULL)
-        return;
-
-    xassert(primary->serial != 0);
-    zwp_primary_selection_device_v1_set_selection(
-        seat->primary_selection_device, NULL, primary->serial);
-    zwp_primary_selection_source_v1_destroy(primary->data_source);
-
-    primary->data_source = NULL;
     primary->serial = 0;
-
     free(primary->text);
     primary->text = NULL;
 }
@@ -1710,9 +1696,7 @@ fdm_scroll_timer(struct fdm *fdm, int fd, int events, void *data)
     struct terminal *term = data;
 
     uint64_t expiration_count;
-    ssize_t ret = read(
-        term->selection.auto_scroll.fd,
-        &expiration_count, sizeof(expiration_count));
+    ssize_t ret = timerfd_read(term->selection.auto_scroll.fd, &expiration_count);
 
     if (ret < 0) {
         if (errno == EAGAIN)
@@ -1804,220 +1788,23 @@ selection_stop_scroll_timer(struct terminal *term)
     term->selection.auto_scroll.direction = SELECTION_SCROLL_NOT;
 }
 
-static void
-target(void *data, struct wl_data_source *wl_data_source, const char *mime_type)
-{
-    LOG_DBG("TARGET: mime-type=%s", mime_type);
-}
-
-struct clipboard_send {
-    char *data;
-    size_t len;
-    size_t idx;
-};
-
-static bool
-fdm_send(struct fdm *fdm, int fd, int events, void *data)
-{
-    struct clipboard_send *ctx = data;
-
-    if (events & EPOLLHUP)
-        goto done;
-
-    switch (async_write(fd, ctx->data, ctx->len, &ctx->idx)) {
-    case ASYNC_WRITE_REMAIN:
-        return true;
-
-    case ASYNC_WRITE_DONE:
-        break;
-
-    case ASYNC_WRITE_ERR:
-        LOG_ERRNO(
-            "failed to asynchronously write %zu of selection data to FD=%d",
-            ctx->len - ctx->idx, fd);
-        break;
-    }
-
-done:
-    fdm_del(fdm, fd);
-    free(ctx->data);
-    free(ctx);
-    return true;
-}
-
-static void
-send_clipboard_or_primary(struct seat *seat, int fd, const char *selection,
-                          const char *source_name)
-{
-    /* Make it NONBLOCK:ing right away - we don't want to block if the
-     * initial attempt to send the data synchronously fails */
-    int flags;
-    if ((flags = fcntl(fd, F_GETFL)) < 0 ||
-        fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0)
-    {
-        LOG_ERRNO("failed to set O_NONBLOCK");
-        return;
-    }
-
-    size_t len = selection != NULL ? strlen(selection) : 0;
-    size_t async_idx = 0;
-
-    switch (async_write(fd, selection, len, &async_idx)) {
-    case ASYNC_WRITE_REMAIN: {
-        struct clipboard_send *ctx = xmalloc(sizeof(*ctx));
-        *ctx = (struct clipboard_send) {
-            .data = xstrdup(&selection[async_idx]),
-            .len = len - async_idx,
-            .idx = 0,
-        };
-
-        if (fdm_add(seat->wayl->fdm, fd, EPOLLOUT, &fdm_send, ctx))
-            return;
-
-        free(ctx->data);
-        free(ctx);
-        break;
-    }
-
-    case ASYNC_WRITE_DONE:
-        break;
-
-    case ASYNC_WRITE_ERR:
-        LOG_ERRNO("failed write %zu bytes of %s selection data to FD=%d",
-                  len, source_name, fd);
-        break;
-    }
-
-    close(fd);
-}
-
-static void
-send(void *data, struct wl_data_source *wl_data_source, const char *mime_type,
-     int32_t fd)
-{
-    struct seat *seat = data;
-    const struct wl_clipboard *clipboard = &seat->clipboard;
-
-    send_clipboard_or_primary(seat, fd, clipboard->text, "clipboard");
-}
-
-static void
-cancelled(void *data, struct wl_data_source *wl_data_source)
-{
-    struct seat *seat = data;
-    struct wl_clipboard *clipboard = &seat->clipboard;
-    xassert(clipboard->data_source == wl_data_source);
-
-    wl_data_source_destroy(clipboard->data_source);
-    clipboard->data_source = NULL;
-    clipboard->serial = 0;
-
-    free(clipboard->text);
-    clipboard->text = NULL;
-}
-
-/* We don't support dragging *from* */
-static void
-dnd_drop_performed(void *data, struct wl_data_source *wl_data_source)
-{
-    //LOG_DBG("DnD drop performed");
-}
-
-static void
-dnd_finished(void *data, struct wl_data_source *wl_data_source)
-{
-    //LOG_DBG("DnD finished");
-}
-
-static void
-action(void *data, struct wl_data_source *wl_data_source, uint32_t dnd_action)
-{
-    //LOG_DBG("DnD action: %u", dnd_action);
-}
-
-static const struct wl_data_source_listener data_source_listener = {
-    .target = &target,
-    .send = &send,
-    .cancelled = &cancelled,
-    .dnd_drop_performed = &dnd_drop_performed,
-    .dnd_finished = &dnd_finished,
-    .action = &action,
-};
-
-static void
-primary_send(void *data,
-             struct zwp_primary_selection_source_v1 *zwp_primary_selection_source_v1,
-             const char *mime_type, int32_t fd)
-{
-    struct seat *seat = data;
-    const struct wl_primary *primary = &seat->primary;
-
-    send_clipboard_or_primary(seat, fd, primary->text, "primary");
-}
-
-static void
-primary_cancelled(void *data,
-                  struct zwp_primary_selection_source_v1 *zwp_primary_selection_source_v1)
-{
-    struct seat *seat = data;
-    struct wl_primary *primary = &seat->primary;
-
-    zwp_primary_selection_source_v1_destroy(primary->data_source);
-    primary->data_source = NULL;
-    primary->serial = 0;
-
-    free(primary->text);
-    primary->text = NULL;
-}
-
-static const struct zwp_primary_selection_source_v1_listener primary_selection_source_listener = {
-    .send = &primary_send,
-    .cancelled = &primary_cancelled,
-};
-
 bool
 text_to_clipboard(struct seat *seat, struct terminal *term, char *text, uint32_t serial)
 {
     if (text == NULL || text[0] == '\0')
         return false;
 
-    xassert(serial != 0);
-
     struct wl_clipboard *clipboard = &seat->clipboard;
 
-    if (clipboard->data_source != NULL) {
-        /* Kill previous data source */
-        xassert(clipboard->serial != 0);
-        wl_data_device_set_selection(seat->data_device, NULL, clipboard->serial);
-        wl_data_source_destroy(clipboard->data_source);
-        free(clipboard->text);
-
-        clipboard->data_source = NULL;
-        clipboard->serial = 0;
-        clipboard->text = NULL;
-    }
-
-    clipboard->data_source
-        = wl_data_device_manager_create_data_source(term->wl->data_device_manager);
-
-    if (clipboard->data_source == NULL) {
-        LOG_ERR("failed to create clipboard data source");
+    long change_count = wayl_clipboard_set(seat->wayl, text);
+    if (change_count < 0) {
+        LOG_ERR("failed to put text on the pasteboard");
         return false;
     }
 
+    free(clipboard->text);
     clipboard->text = text;
-
-    /* Configure source */
-    wl_data_source_offer(clipboard->data_source, mime_type_map[DATA_OFFER_MIME_TEXT_UTF8]);
-    wl_data_source_offer(clipboard->data_source, mime_type_map[DATA_OFFER_MIME_TEXT_PLAIN]);
-    wl_data_source_offer(clipboard->data_source, mime_type_map[DATA_OFFER_MIME_TEXT_TEXT]);;
-    wl_data_source_offer(clipboard->data_source, mime_type_map[DATA_OFFER_MIME_TEXT_STRING]);
-    wl_data_source_offer(clipboard->data_source, mime_type_map[DATA_OFFER_MIME_TEXT_UTF8_STRING]);
-
-    wl_data_source_add_listener(clipboard->data_source, &data_source_listener, seat);
-    wl_data_device_set_selection(seat->data_device, clipboard->data_source, serial);
-
-    /* Needed when sending the selection to other client */
+    clipboard->change_count = change_count;
     clipboard->serial = serial;
     return true;
 }
@@ -2035,9 +1822,6 @@ selection_to_clipboard(struct seat *seat, struct terminal *term, uint32_t serial
 }
 
 struct clipboard_receive {
-    int read_fd;
-    int timeout_fd;
-    struct itimerspec timeout;
     bool bracketed;
     bool no_strip;
     bool quote_paths;
@@ -2060,49 +1844,13 @@ struct clipboard_receive {
 };
 
 static void
-clipboard_receive_done(struct fdm *fdm, struct clipboard_receive *ctx)
-{
-    fdm_del(fdm, ctx->timeout_fd);
-    fdm_del(fdm, ctx->read_fd);
-    ctx->done(ctx->user);
-    free(ctx->buf.data);
-    free(ctx);
-}
-
-static bool
-fdm_receive_timeout(struct fdm *fdm, int fd, int events, void *data)
-{
-    struct clipboard_receive *ctx = data;
-    if (events & EPOLLHUP)
-        return false;
-
-    xassert(events & EPOLLIN);
-
-    uint64_t expire_count;
-    ssize_t ret = read(fd, &expire_count, sizeof(expire_count));
-    if (ret < 0) {
-        if (errno == EAGAIN)
-            return true;
-
-        LOG_ERRNO("failed to read clipboard timeout timer");
-        return false;
-    }
-
-    LOG_WARN("no data received from clipboard in %llu seconds, aborting",
-             (unsigned long long)ctx->timeout.it_value.tv_sec);
-
-    clipboard_receive_done(fdm, ctx);
-    return true;
-}
-
-static void
-fdm_receive_decoder_plain(struct clipboard_receive *ctx, char *data, size_t size)
+receive_decoder_plain(struct clipboard_receive *ctx, char *data, size_t size)
 {
     ctx->cb(data, size, ctx->user);
 }
 
 static void
-fdm_receive_finish_plain(struct clipboard_receive *ctx)
+receive_finish_plain(struct clipboard_receive *ctx)
 {
 }
 
@@ -2151,7 +1899,7 @@ decode_one_uri(struct clipboard_receive *ctx, char *uri, size_t len)
 }
 
 static void
-fdm_receive_decoder_uri(struct clipboard_receive *ctx, char *data, size_t size)
+receive_decoder_uri(struct clipboard_receive *ctx, char *data, size_t size)
 {
     while (ctx->buf.idx + size > ctx->buf.sz) {
         size_t new_sz = ctx->buf.sz == 0 ? size : 2 * ctx->buf.sz;
@@ -2186,191 +1934,128 @@ fdm_receive_decoder_uri(struct clipboard_receive *ctx, char *data, size_t size)
 }
 
 static void
-fdm_receive_finish_uri(struct clipboard_receive *ctx)
+receive_finish_uri(struct clipboard_receive *ctx)
 {
     LOG_DBG("finish: %.*s", (int)ctx->buf.idx, ctx->buf.data);
     decode_one_uri(ctx, ctx->buf.data, ctx->buf.idx);
 }
 
-static bool
-fdm_receive(struct fdm *fdm, int fd, int events, void *data)
+/*
+ * Calls the decoder (and thus the user callback) with 'text', while
+ * at the same time replacing:
+ *   - \r\n -> \r  (non-bracketed paste)
+ *   - \n -> \r    (non-bracketed paste)
+ *   - C0 -> <nothing>  (strip non-formatting C0 characters)
+ *   - \e -> <nothing>  (i.e. strip ESC)
+ *
+ * Note: modifies 'text'
+ */
+static void
+receive_data(struct clipboard_receive *ctx, char *text, size_t count)
 {
-    struct clipboard_receive *ctx = data;
     const bool no_strip = ctx->no_strip;
     const bool bracketed = ctx->bracketed;
 
-    if ((events & EPOLLHUP) && !(events & EPOLLIN))
-        goto done;
+    char *p = text;
+    size_t left = count;
 
-    /* Reset timeout timer */
-    if (timerfd_settime(ctx->timeout_fd, 0, &ctx->timeout, NULL) < 0) {
-        LOG_ERRNO("failed to re-arm clipboard timeout timer");
-        return false;
-    }
+#define skip_one()                              \
+    do {                                        \
+        ctx->decoder(ctx, p, i);                \
+        xassert(i + 1 <= left);                 \
+        p += i + 1;                             \
+        left -= i + 1;                          \
+    } while (0)
 
-    /* Read until EOF */
-    while (true) {
-        char text[256];
-        ssize_t count = read(fd, text, sizeof(text));
-
-        if (count == -1) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK)
-                return true;
-
-            LOG_ERRNO("failed to read clipboard data");
+again:
+    for (size_t i = 0; i < left; i++) {
+        switch (p[i]) {
+        default:
             break;
-        }
 
-        if (count == 0)
+        case '\n':
+            if (!no_strip && !bracketed) {
+                p[i] = '\r';
+            }
+            break;
+
+        case '\r':
+            /* Convert \r\n -> \r */
+            if (!no_strip && !bracketed && i + 1 < left && p[i + 1] == '\n') {
+                i++;
+                skip_one();
+                goto again;
+            }
+            break;
+
+        /* C0 non-formatting control characters (\b \t \n \r excluded) */
+        case '\x01': case '\x02': case '\x03': case '\x04': case '\x05':
+        case '\x06': case '\x07': case '\x0e': case '\x0f': case '\x10':
+        case '\x11': case '\x12': case '\x13': case '\x14': case '\x15':
+        case '\x16': case '\x17': case '\x18': case '\x19': case '\x1a':
+        case '\x1b': case '\x1c': case '\x1d': case '\x1e': case '\x1f':
+            if (!no_strip) {
+                skip_one();
+                goto again;
+            }
             break;
 
         /*
-         * Call cb while at same time replace:
-         *   - \r\n -> \r  (non-bracketed paste)
-         *   - \n -> \r    (non-bracketed paste)
-         *   - C0 -> <nothing>  (strip non-formatting C0 characters)
-         *   - \e -> <nothing>  (i.e. strip ESC)
+         * In addition to stripping non-formatting C0 controls,
+         * XTerm has an option, "disallowedPasteControls", that
+         * defines C0 controls that will be replaced with spaces
+         * when pasted.
+         *
+         * It's default value is BS,DEL,ENQ,EOT,NUL
+         *
+         * Instead of replacing them with spaces, we allow them in
+         * bracketed paste mode, and strip them completely in
+         * non-bracketed mode.
+         *
+         * Note some of the (default) XTerm controls are already
+         * handled above.
          */
-        char *p = text;
-        size_t left = count;
-
-#define skip_one()                              \
-        do {                                    \
-            ctx->decoder(ctx, p, i);            \
-            xassert(i + 1 <= left);             \
-            p += i + 1;                         \
-            left -= i + 1;                      \
-        } while (0)
-
-    again:
-        for (size_t i = 0; i < left; i++) {
-            switch (p[i]) {
-            default:
-                break;
-
-            case '\n':
-                if (!no_strip && !bracketed) {
-                    p[i] = '\r';
-                }
-                break;
-
-            case '\r':
-                /* Convert \r\n -> \r */
-                if (!no_strip && !bracketed && i + 1 < left && p[i + 1] == '\n') {
-                    i++;
-                    skip_one();
-                    goto again;
-                }
-                break;
-
-            /* C0 non-formatting control characters (\b \t \n \r excluded) */
-            case '\x01': case '\x02': case '\x03': case '\x04': case '\x05':
-            case '\x06': case '\x07': case '\x0e': case '\x0f': case '\x10':
-            case '\x11': case '\x12': case '\x13': case '\x14': case '\x15':
-            case '\x16': case '\x17': case '\x18': case '\x19': case '\x1a':
-            case '\x1b': case '\x1c': case '\x1d': case '\x1e': case '\x1f':
-                if (!no_strip) {
-                    skip_one();
-                    goto again;
-                }
-                break;
-
-            /*
-             * In addition to stripping non-formatting C0 controls,
-             * XTerm has an option, "disallowedPasteControls", that
-             * defines C0 controls that will be replaced with spaces
-             * when pasted.
-             *
-             * It's default value is BS,DEL,ENQ,EOT,NUL
-             *
-             * Instead of replacing them with spaces, we allow them in
-             * bracketed paste mode, and strip them completely in
-             * non-bracketed mode.
-             *
-             * Note some of the (default) XTerm controls are already
-             * handled above.
-             */
-            case '\b': case '\x7f': case '\x00':
-                if (!no_strip && !bracketed) {
-                    skip_one();
-                    goto again;
-                }
-                break;
+        case '\b': case '\x7f': case '\x00':
+            if (!no_strip && !bracketed) {
+                skip_one();
+                goto again;
             }
+            break;
         }
-
-        ctx->decoder(ctx, p, left);
-        left = 0;
     }
+
+    ctx->decoder(ctx, p, left);
 
 #undef skip_one
-
-done:
-    ctx->finish(ctx);
-    clipboard_receive_done(fdm, ctx);
-    return true;
 }
 
+/* Takes ownership of 'text' */
 static void
-begin_receive_clipboard(struct terminal *term, bool no_strip,
-                        int read_fd, enum data_offer_mime_type mime_type,
-                        void (*cb)(char *data, size_t size, void *user),
-                        void (*done)(void *user), void *user)
+receive_text(struct terminal *term, bool no_strip,
+             char *text, size_t len, enum data_offer_mime_type mime_type,
+             void (*cb)(char *data, size_t size, void *user),
+             void (*done)(void *user), void *user)
 {
-    int timeout_fd = -1;
-    struct clipboard_receive *ctx = NULL;
-
-    int flags;
-    if ((flags = fcntl(read_fd, F_GETFL)) < 0 ||
-        fcntl(read_fd, F_SETFL, flags | O_NONBLOCK) < 0)
-    {
-        LOG_ERRNO("failed to set O_NONBLOCK");
-        goto err;
-    }
-
-    timeout_fd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
-    if (timeout_fd < 0) {
-        LOG_ERRNO("failed to create clipboard timeout timer FD");
-        goto err;
-    }
-
-    const struct itimerspec timeout = {.it_value = {.tv_sec = 2}};
-    if (timerfd_settime(timeout_fd, 0, &timeout, NULL) < 0) {
-        LOG_ERRNO("failed to arm clipboard timeout timer");
-        goto err;
-    }
-
-    ctx = xmalloc(sizeof(*ctx));
-    *ctx = (struct clipboard_receive) {
-        .read_fd = read_fd,
-        .timeout_fd = timeout_fd,
-        .timeout = timeout,
+    struct clipboard_receive ctx = {
         .bracketed = term->bracketed_paste,
         .no_strip = no_strip,
         .quote_paths = term->grid == &term->normal,
         .decoder = (mime_type == DATA_OFFER_MIME_URI_LIST
-                    ? &fdm_receive_decoder_uri
-                    : &fdm_receive_decoder_plain),
+                    ? &receive_decoder_uri
+                    : &receive_decoder_plain),
         .finish = (mime_type == DATA_OFFER_MIME_URI_LIST
-                   ? &fdm_receive_finish_uri
-                   : &fdm_receive_finish_plain),
+                   ? &receive_finish_uri
+                   : &receive_finish_plain),
         .cb = cb,
         .done = done,
         .user = user,
     };
 
-    if (!fdm_add(term->fdm, read_fd, EPOLLIN, &fdm_receive, ctx) ||
-        !fdm_add(term->fdm, timeout_fd, EPOLLIN, &fdm_receive_timeout, ctx))
-    {
-        goto err;
-    }
+    receive_data(&ctx, text, len);
+    ctx.finish(&ctx);
 
-    return;
-
-err:
-    free(ctx);
-    fdm_del(term->fdm, timeout_fd);
-    fdm_del(term->fdm, read_fd);
+    free(ctx.buf.data);
+    free(text);
     done(user);
 }
 
@@ -2380,37 +2065,17 @@ text_from_clipboard(struct seat *seat, struct terminal *term,
                     void (*cb)(char *data, size_t size, void *user),
                     void (*done)(void *user), void *user)
 {
-    struct wl_clipboard *clipboard = &seat->clipboard;
-    if (clipboard->data_offer == NULL ||
-        clipboard->mime_type == DATA_OFFER_MIME_UNSET)
-    {
+    enum data_offer_mime_type mime_type;
+    size_t len;
+    char *text = wayl_clipboard_get(seat->wayl, &mime_type, &len);
+
+    if (text == NULL) {
         done(user);
         return;
     }
 
-    /* Prepare a pipe the other client can write its selection to us */
-    int fds[2];
-    if (pipe2(fds, O_CLOEXEC) == -1) {
-        LOG_ERRNO("failed to create pipe");
-        done(user);
-        return;
-    }
-
-    LOG_DBG("receive from clipboard: mime-type=%s",
-            mime_type_map[clipboard->mime_type]);
-
-    int read_fd = fds[0];
-    int write_fd = fds[1];
-
-    /* Give write-end of pipe to other client */
-    wl_data_offer_receive(
-        clipboard->data_offer, mime_type_map[clipboard->mime_type], write_fd);
-
-    /* Don't keep our copy of the write-end open (or we'll never get EOF) */
-    close(write_fd);
-
-    begin_receive_clipboard(
-        term, no_strip, read_fd, clipboard->mime_type, cb, done, user);
+    LOG_DBG("receive from clipboard: mime-type=%s", mime_type_map[mime_type]);
+    receive_text(term, no_strip, text, len, mime_type, cb, done, user);
 }
 
 static void
@@ -2444,8 +2109,7 @@ selection_from_clipboard(struct seat *seat, struct terminal *term, uint32_t seri
         return;
     }
 
-    struct wl_clipboard *clipboard = &seat->clipboard;
-    if (clipboard->data_offer == NULL)
+    if (!wayl_clipboard_has_data(seat->wayl))
         return;
 
     term->is_sending_paste_data = true;
@@ -2463,51 +2127,10 @@ text_to_primary(struct seat *seat, struct terminal *term, char *text, uint32_t s
     if (text == NULL || text[0] == '\0')
         return false;
 
-    if (term->wl->primary_selection_device_manager == NULL)
-        return false;
-
-    xassert(serial != 0);
-
     struct wl_primary *primary = &seat->primary;
 
-    /* TODO: somehow share code with the clipboard equivalent */
-    if (seat->primary.data_source != NULL) {
-        /* Kill previous data source */
-
-        xassert(primary->serial != 0);
-        zwp_primary_selection_device_v1_set_selection(
-            seat->primary_selection_device, NULL, primary->serial);
-        zwp_primary_selection_source_v1_destroy(primary->data_source);
-        free(primary->text);
-
-        primary->data_source = NULL;
-        primary->serial = 0;
-        primary->text = NULL;
-    }
-
-    primary->data_source
-        = zwp_primary_selection_device_manager_v1_create_source(
-            term->wl->primary_selection_device_manager);
-
-    if (primary->data_source == NULL) {
-        LOG_ERR("failed to create clipboard data source");
-        return false;
-    }
-
-    /* Get selection as a string */
+    free(primary->text);
     primary->text = text;
-
-    /* Configure source */
-    zwp_primary_selection_source_v1_offer(primary->data_source, mime_type_map[DATA_OFFER_MIME_TEXT_UTF8]);
-    zwp_primary_selection_source_v1_offer(primary->data_source, mime_type_map[DATA_OFFER_MIME_TEXT_PLAIN]);
-    zwp_primary_selection_source_v1_offer(primary->data_source, mime_type_map[DATA_OFFER_MIME_TEXT_TEXT]);
-    zwp_primary_selection_source_v1_offer(primary->data_source, mime_type_map[DATA_OFFER_MIME_TEXT_STRING]);
-    zwp_primary_selection_source_v1_offer(primary->data_source, mime_type_map[DATA_OFFER_MIME_TEXT_UTF8_STRING]);
-
-    zwp_primary_selection_source_v1_add_listener(primary->data_source, &primary_selection_source_listener, seat);
-    zwp_primary_selection_device_v1_set_selection(seat->primary_selection_device, primary->data_source, serial);
-
-    /* Needed when sending the selection to other client */
     primary->serial = serial;
     return true;
 }
@@ -2515,9 +2138,6 @@ text_to_primary(struct seat *seat, struct terminal *term, char *text, uint32_t s
 void
 selection_to_primary(struct seat *seat, struct terminal *term, uint32_t serial)
 {
-    if (term->wl->primary_selection_device_manager == NULL)
-        return;
-
     /* Get selection as a string */
     char *text = selection_to_text(term);
     if (!text_to_primary(seat, term, text, serial))
@@ -2530,57 +2150,26 @@ text_from_primary(
     void (*cb)(char *data, size_t size, void *user),
     void (*done)(void *user), void *user)
 {
-    if (term->wl->primary_selection_device_manager == NULL) {
+    const struct wl_primary *primary = &seat->primary;
+    if (primary->text == NULL) {
         done(user);
         return;
     }
 
-    struct wl_primary *primary = &seat->primary;
-    if (primary->data_offer == NULL ||
-        primary->mime_type == DATA_OFFER_MIME_UNSET)
-    {
-        done(user);
-        return;
-    }
-
-    /* Prepare a pipe the other client can write its selection to us */
-    int fds[2];
-    if (pipe2(fds, O_CLOEXEC) == -1) {
-        LOG_ERRNO("failed to create pipe");
-        done(user);
-        return;
-    }
-
-    LOG_DBG("receive from primary: mime-type=%s",
-            mime_type_map[primary->mime_type]);
-
-    int read_fd = fds[0];
-    int write_fd = fds[1];
-
-    /* Give write-end of pipe to other client */
-    zwp_primary_selection_offer_v1_receive(
-        primary->data_offer, mime_type_map[primary->mime_type], write_fd);
-
-    /* Don't keep our copy of the write-end open (or we'll never get EOF) */
-    close(write_fd);
-
-    begin_receive_clipboard(
-        term, no_strip, read_fd, primary->mime_type, cb, done, user);
+    receive_text(
+        term, no_strip, xstrdup(primary->text), strlen(primary->text),
+        DATA_OFFER_MIME_TEXT_UTF8, cb, done, user);
 }
 
 void
 selection_from_primary(struct seat *seat, struct terminal *term)
 {
-    if (term->wl->primary_selection_device_manager == NULL)
-        return;
-
     if (term->is_sending_paste_data) {
         /* We're already pasting... */
         return;
     }
 
-    struct wl_primary *primary = &seat->primary;
-    if (primary->data_offer == NULL)
+    if (seat->primary.text == NULL)
         return;
 
     term->is_sending_paste_data = true;
@@ -2591,374 +2180,24 @@ selection_from_primary(struct seat *seat, struct terminal *term)
         seat, term, false, &receive_offer, &receive_offer_done, term);
 }
 
-static void
-select_mime_type_for_offer(const char *_mime_type,
-                           enum data_offer_mime_type *type)
+void
+selection_drop(struct seat *seat, struct terminal *term,
+               char *data, size_t len, enum data_offer_mime_type mime_type)
 {
-    enum data_offer_mime_type mime_type = DATA_OFFER_MIME_UNSET;
-
-    /* Translate offered mime type to our mime type enum */
-    for (size_t i = 0; i < ALEN(mime_type_map); i++) {
-        if (mime_type_map[i] == NULL)
-            continue;
-
-        if (streq(_mime_type, mime_type_map[i])) {
-            mime_type = i;
-            break;
-        }
-    }
-
-    LOG_DBG("mime-type: %s -> %s (offered type was %s)",
-            mime_type_map[*type], mime_type_map[mime_type], _mime_type);
-
-    /* Mime-type transition; if the new mime-type is "better" than
-     * previously offered types, use the new type */
-
-    switch (mime_type) {
-    case DATA_OFFER_MIME_TEXT_PLAIN:
-    case DATA_OFFER_MIME_TEXT_TEXT:
-    case DATA_OFFER_MIME_TEXT_STRING:
-        /* text/plain is our least preferred type. Only use if current
-         * type is unset */
-        switch (*type) {
-        case DATA_OFFER_MIME_UNSET:
-            *type = mime_type;
-            break;
-
-        default:
-            break;
-        }
-        break;
-
-    case DATA_OFFER_MIME_TEXT_UTF8:
-    case DATA_OFFER_MIME_TEXT_UTF8_STRING:
-        /* text/plain;charset=utf-8 is preferred over text/plain */
-        switch (*type) {
-        case DATA_OFFER_MIME_UNSET:
-        case DATA_OFFER_MIME_TEXT_PLAIN:
-        case DATA_OFFER_MIME_TEXT_TEXT:
-        case DATA_OFFER_MIME_TEXT_STRING:
-            *type = mime_type;
-            break;
-
-        default:
-            break;
-        }
-        break;
-
-    case DATA_OFFER_MIME_URI_LIST:
-        /* text/uri-list is always used when offered */
-        *type = mime_type;
-        break;
-
-    case DATA_OFFER_MIME_UNSET:
-        break;
-    }
-}
-
-static void
-data_offer_reset(struct wl_clipboard *clipboard)
-{
-    if (clipboard->data_offer != NULL) {
-        wl_data_offer_destroy(clipboard->data_offer);
-        clipboard->data_offer = NULL;
-    }
-
-    clipboard->window = NULL;
-    clipboard->mime_type = DATA_OFFER_MIME_UNSET;
-}
-
-static void
-offer(void *data, struct wl_data_offer *wl_data_offer, const char *mime_type)
-{
-    struct seat *seat = data;
-    select_mime_type_for_offer(mime_type, &seat->clipboard.mime_type);
-}
-
-static void
-source_actions(void *data, struct wl_data_offer *wl_data_offer,
-                uint32_t source_actions)
-{
-#if defined(_DEBUG) && LOG_ENABLE_DBG
-    char actions_as_string[1024];
-    size_t idx = 0;
-
-    actions_as_string[0] = '\0';
-    actions_as_string[sizeof(actions_as_string) - 1] = '\0';
-
-    for (size_t i = 0; i < 31; i++) {
-        if (((source_actions >> i) & 1) == 0)
-            continue;
-
-        enum wl_data_device_manager_dnd_action action = 1 << i;
-
-        const char *s = NULL;
-
-        switch (action) {
-        case WL_DATA_DEVICE_MANAGER_DND_ACTION_NONE: s = NULL; break;
-        case WL_DATA_DEVICE_MANAGER_DND_ACTION_COPY: s = "copy"; break;
-        case WL_DATA_DEVICE_MANAGER_DND_ACTION_MOVE: s = "move"; break;
-        case WL_DATA_DEVICE_MANAGER_DND_ACTION_ASK: s = "ask"; break;
-        }
-
-        if (s == NULL)
-            continue;
-
-        strncat(actions_as_string, s, sizeof(actions_as_string) - idx - 1);
-        idx += strlen(s);
-        strncat(actions_as_string, ", ", sizeof(actions_as_string) - idx - 1);
-        idx += 2;
-    }
-
-    /* Strip trailing ", " */
-    if (strlen(actions_as_string) > 2)
-        actions_as_string[strlen(actions_as_string) - 2] = '\0';
-
-    LOG_DBG("DnD actions: %s (0x%08x)", actions_as_string, source_actions);
-#endif
-}
-
-static void
-offer_action(void *data, struct wl_data_offer *wl_data_offer, uint32_t dnd_action)
-{
-#if defined(_DEBUG) && LOG_ENABLE_DBG
-    const char *s = NULL;
-
-    switch (dnd_action) {
-    case WL_DATA_DEVICE_MANAGER_DND_ACTION_NONE: s = "<none>"; break;
-    case WL_DATA_DEVICE_MANAGER_DND_ACTION_COPY: s = "copy"; break;
-    case WL_DATA_DEVICE_MANAGER_DND_ACTION_MOVE: s = "move"; break;
-    case WL_DATA_DEVICE_MANAGER_DND_ACTION_ASK: s = "ask"; break;
-    }
-
-    LOG_DBG("DnD offer action: %s (0x%08x)", s, dnd_action);
-#endif
-}
-
-static const struct wl_data_offer_listener data_offer_listener = {
-    .offer = &offer,
-    .source_actions = &source_actions,
-    .action = &offer_action,
-};
-
-static void
-data_offer(void *data, struct wl_data_device *wl_data_device,
-           struct wl_data_offer *offer)
-{
-    struct seat *seat = data;
-    data_offer_reset(&seat->clipboard);
-    seat->clipboard.data_offer = offer;
-    wl_data_offer_add_listener(offer, &data_offer_listener, seat);
-}
-
-static void
-enter(void *data, struct wl_data_device *wl_data_device, uint32_t serial,
-      struct wl_surface *surface, wl_fixed_t x, wl_fixed_t y,
-      struct wl_data_offer *offer)
-{
-    struct seat *seat = data;
-    struct wayland *wayl = seat->wayl;
-
-    xassert(offer == seat->clipboard.data_offer);
-
-    if (seat->clipboard.mime_type == DATA_OFFER_MIME_UNSET)
-        goto reject_offer;
-
-    /* Remember _which_ terminal the current DnD offer is targeting */
-    xassert(seat->clipboard.window == NULL);
-    tll_foreach(wayl->terms, it) {
-        if (term_surface_kind(it->item, surface) == TERM_SURF_GRID &&
-            !it->item->is_sending_paste_data)
-        {
-            wl_data_offer_accept(
-                offer, serial, mime_type_map[seat->clipboard.mime_type]);
-            wl_data_offer_set_actions(
-                offer,
-                WL_DATA_DEVICE_MANAGER_DND_ACTION_COPY,
-                WL_DATA_DEVICE_MANAGER_DND_ACTION_COPY);
-
-            seat->clipboard.window = it->item->window;
-            return;
-        }
-    }
-
-reject_offer:
-    /* Either terminal is already busy sending paste data, or mouse
-     * pointer isn't over the grid */
-    seat->clipboard.window = NULL;
-    wl_data_offer_accept(offer, serial, NULL);
-    wl_data_offer_set_actions(
-        offer,
-        WL_DATA_DEVICE_MANAGER_DND_ACTION_NONE,
-        WL_DATA_DEVICE_MANAGER_DND_ACTION_NONE);
-}
-
-static void
-leave(void *data, struct wl_data_device *wl_data_device)
-{
-    struct seat *seat = data;
-    seat->clipboard.window = NULL;
-}
-
-static void
-motion(void *data, struct wl_data_device *wl_data_device, uint32_t time,
-       wl_fixed_t x, wl_fixed_t y)
-{
-}
-
-struct dnd_context {
-    struct terminal *term;
-    struct wl_data_offer *data_offer;
-};
-
-static void
-receive_dnd(char *data, size_t size, void *user)
-{
-    struct dnd_context *ctx = user;
-    receive_offer(data, size, ctx->term);
-}
-
-static void
-receive_dnd_done(void *user)
-{
-    struct dnd_context *ctx = user;
-
-    wl_data_offer_finish(ctx->data_offer);
-    wl_data_offer_destroy(ctx->data_offer);
-    receive_offer_done(ctx->term);
-    free(ctx);
-}
-
-static void
-drop(void *data, struct wl_data_device *wl_data_device)
-{
-    struct seat *seat = data;
-
-    xassert(seat->clipboard.window != NULL);
-    struct terminal *term = seat->clipboard.window->term;
-
-    struct wl_clipboard *clipboard = &seat->clipboard;
-
-    if (clipboard->mime_type == DATA_OFFER_MIME_UNSET) {
-        LOG_WARN("compositor called data_device::drop() "
-                 "even though we rejected the drag-and-drop");
+    if (term->is_sending_paste_data) {
+        /* We're already pasting... */
+        free(data);
         return;
     }
 
-    struct dnd_context *ctx = xmalloc(sizeof(*ctx));
-    *ctx = (struct dnd_context){
-        .term = term,
-        .data_offer = clipboard->data_offer,
-    };
-
-    /* Prepare a pipe the other client can write its selection to us */
-    int fds[2];
-    if (pipe2(fds, O_CLOEXEC) == -1) {
-        LOG_ERRNO("failed to create pipe");
-        free(ctx);
-        return;
-    }
-
-    int read_fd = fds[0];
-    int write_fd = fds[1];
-
-    LOG_DBG("DnD drop: mime-type=%s", mime_type_map[clipboard->mime_type]);
-
-    /* Give write-end of pipe to other client */
-    wl_data_offer_receive(
-        clipboard->data_offer, mime_type_map[clipboard->mime_type], write_fd);
-
-    /* Don't keep our copy of the write-end open (or we'll never get EOF) */
-    close(write_fd);
+    LOG_DBG("DnD drop: mime-type=%s", mime_type_map[mime_type]);
 
     term->is_sending_paste_data = true;
 
     if (term->bracketed_paste)
         term_paste_data_to_slave(term, "\033[200~", 6);
 
-    begin_receive_clipboard(
-        term, false, read_fd, clipboard->mime_type,
-        &receive_dnd, &receive_dnd_done, ctx);
-
-    /* data offer is now "owned" by the receive context */
-    clipboard->data_offer = NULL;
-    clipboard->mime_type = DATA_OFFER_MIME_UNSET;
+    receive_text(
+        term, false, data, len, mime_type,
+        &receive_offer, &receive_offer_done, term);
 }
-
-static void
-selection(void *data, struct wl_data_device *wl_data_device,
-          struct wl_data_offer *offer)
-{
-    /* Selection offer from other client */
-    struct seat *seat = data;
-    if (offer == NULL)
-        data_offer_reset(&seat->clipboard);
-    else
-        xassert(offer == seat->clipboard.data_offer);
-}
-
-const struct wl_data_device_listener data_device_listener = {
-    .data_offer = &data_offer,
-    .enter = &enter,
-    .leave = &leave,
-    .motion = &motion,
-    .drop = &drop,
-    .selection = &selection,
-};
-
-static void
-primary_offer(void *data,
-              struct zwp_primary_selection_offer_v1 *zwp_primary_selection_offer,
-              const char *mime_type)
-{
-    LOG_DBG("primary offer: %s", mime_type);
-    struct seat *seat = data;
-    select_mime_type_for_offer(mime_type, &seat->primary.mime_type);
-}
-
-static const struct zwp_primary_selection_offer_v1_listener primary_selection_offer_listener = {
-    .offer = &primary_offer,
-};
-
-static void
-primary_offer_reset(struct wl_primary *primary)
-{
-    if (primary->data_offer != NULL) {
-        zwp_primary_selection_offer_v1_destroy(primary->data_offer);
-        primary->data_offer = NULL;
-    }
-
-    primary->mime_type = DATA_OFFER_MIME_UNSET;
-}
-
-static void
-primary_data_offer(void *data,
-                   struct zwp_primary_selection_device_v1 *zwp_primary_selection_device,
-                   struct zwp_primary_selection_offer_v1 *offer)
-{
-    struct seat *seat = data;
-    primary_offer_reset(&seat->primary);
-    seat->primary.data_offer = offer;
-    zwp_primary_selection_offer_v1_add_listener(
-        offer, &primary_selection_offer_listener, seat);
-}
-
-static void
-primary_selection(void *data,
-                  struct zwp_primary_selection_device_v1 *zwp_primary_selection_device,
-                  struct zwp_primary_selection_offer_v1 *offer)
-{
-    /* Selection offer from other client, for primary */
-
-    struct seat *seat = data;
-    if (offer == NULL)
-        primary_offer_reset(&seat->primary);
-    else
-        xassert(seat->primary.data_offer == offer);
-}
-
-const struct zwp_primary_selection_device_v1_listener primary_selection_device_listener = {
-    .data_offer = &primary_data_offer,
-    .selection = &primary_selection,
-};
-

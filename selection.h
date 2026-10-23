@@ -1,12 +1,8 @@
 #pragma once
 
 #include <stdbool.h>
-#include <wayland-client.h>
 
 #include "terminal.h"
-
-extern const struct wl_data_device_listener data_device_listener;
-extern const struct zwp_primary_selection_device_v1_listener primary_selection_device_listener;
 
 void selection_start(
     struct terminal *term, int col, int row,
@@ -71,6 +67,11 @@ void text_from_primary(
     struct seat *seat, struct terminal *term, bool no_strip,
     void (*cb)(char *data, size_t size, void *user),
     void (*dont)(void *user), void *user);
+
+/* Pastes dropped data (drag-and-drop). Takes ownership of 'data' */
+void selection_drop(
+    struct seat *seat, struct terminal *term,
+    char *data, size_t len, enum data_offer_mime_type mime_type);
 
 void selection_start_scroll_timer(
     struct terminal *term, int interval_ns,

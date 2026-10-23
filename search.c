@@ -2,7 +2,6 @@
 
 #include <string.h>
 
-#include <wayland-client.h>
 #include <xkbcommon/xkbcommon-compose.h>
 
 #define LOG_MODULE "search"
@@ -16,7 +15,6 @@
 #include "input.h"
 #include "key-binding.h"
 #include "misc.h"
-#include "quirks.h"
 #include "render.h"
 #include "selection.h"
 #include "shm.h"

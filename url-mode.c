@@ -15,7 +15,6 @@
 #include "char32.h"
 #include "grid.h"
 #include "key-binding.h"
-#include "quirks.h"
 #include "render.h"
 #include "selection.h"
 #include "spawn.h"

@@ -33,6 +33,10 @@ bool render_xcursor_is_valid(const struct seat *seat, const char *cursor);
 
 void render_overlay(struct terminal *term);
 
+/* Called by the platform layer at the display refresh following a
+ * wayl_win_request_frame() */
+void render_frame_callback(struct terminal *term);
+
 struct render_worker_context {
     int my_id;
     struct terminal *term;

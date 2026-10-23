@@ -5,7 +5,7 @@
 #include <stddef.h>
 
 #include <threads.h>
-#include <semaphore.h>
+#include <dispatch/dispatch.h>
 
 #if defined(FOOT_GRAPHEME_CLUSTERING)
  #include <utf8proc.h>
@@ -694,8 +694,8 @@ struct terminal {
         /* Render threads + synchronization primitives */
         struct {
             uint16_t count;
-            sem_t start;
-            sem_t done;
+            dispatch_semaphore_t start;
+            dispatch_semaphore_t done;
             mtx_t lock;
             tll(int) queue;
             thrd_t *threads;
@@ -959,9 +959,6 @@ bool term_spawn_new(const struct terminal *term);
 
 void term_enable_app_sync_updates(struct terminal *term);
 void term_disable_app_sync_updates(struct terminal *term);
-
-enum term_surface term_surface_kind(
-    const struct terminal *term, const struct wl_surface *surface);
 
 bool term_scrollback_to_text(
     const struct terminal *term, char **text, size_t *len);

@@ -229,6 +229,13 @@ enum underline_style {
 
 struct config {
     char *conf_path;
+
+    /* macOS specific options */
+    struct {
+        /* Option key acts as Alt: none, left, right, both (enum option_as_alt) */
+        int option_as_alt;
+    } macos;
+
     char *term;
     char *shell;
     char *title;

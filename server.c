@@ -434,6 +434,33 @@ shutdown:
     return true;
 }
 
+/* macOS has neither SOCK_CLOEXEC/SOCK_NONBLOCK, nor accept4() */
+static bool
+set_cloexec_nonblock(int fd)
+{
+    int flags = fcntl(fd, F_GETFD);
+    if (flags < 0) {
+        LOG_ERRNO("failed to get file descriptors flag for socket");
+        return false;
+    }
+    if (fcntl(fd, F_SETFD, flags | FD_CLOEXEC) == -1) {
+        LOG_ERRNO("failed to set FD_CLOEXEC for socket");
+        return false;
+    }
+
+    flags = fcntl(fd, F_GETFL);
+    if (flags < 0) {
+        LOG_ERRNO("failed to get file status flags for socket");
+        return false;
+    }
+    if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) == -1) {
+        LOG_ERRNO("failed to set non-blocking mode on socket");
+        return false;
+    }
+
+    return true;
+}
+
 static bool
 fdm_server(struct fdm *fdm, int fd, int events, void *data)
 {
@@ -444,11 +471,15 @@ fdm_server(struct fdm *fdm, int fd, int events, void *data)
 
     struct sockaddr_un addr;
     socklen_t addr_size = sizeof(addr);
-    int client_fd = accept4(
-        server->fd, (struct sockaddr *)&addr, &addr_size, SOCK_CLOEXEC | SOCK_NONBLOCK);
+    int client_fd = accept(server->fd, (struct sockaddr *)&addr, &addr_size);
 
     if (client_fd == -1) {
         LOG_ERRNO("failed to accept client connection");
+        return false;
+    }
+
+    if (!set_cloexec_nonblock(client_fd)) {
+        close(client_fd);
         return false;
     }
 
@@ -476,11 +507,14 @@ try_connect(const char *sock_path)
 {
     enum connect_status ret = CONNECT_ERR;
 
-    int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd == -1) {
         LOG_ERRNO("failed to create UNIX socket");
         goto err;
     }
+
+    if (!set_cloexec_nonblock(fd))
+        goto err;
 
     struct sockaddr_un addr = {.sun_family = AF_UNIX};
     strncpy(addr.sun_path, sock_path, sizeof(addr.sun_path) - 1);
@@ -505,29 +539,12 @@ err:
 static bool
 prepare_socket(int fd)
 {
-    int flags = fcntl(fd, F_GETFD);
-    if (flags < 0) {
-        LOG_ERRNO("failed to get file descriptors flag for passed socket");
+    if (!set_cloexec_nonblock(fd))
         return false;
-    }
-    if (fcntl(fd, F_SETFD, flags | FD_CLOEXEC) == -1) {
-        LOG_ERRNO("failed to set FD_CLOEXEC for passed socket");
-        return false;
-    }
 
-    flags = fcntl(fd, F_GETFL);
-    if (flags < 0) {
-        LOG_ERRNO("failed to get file status flags for passed socket");
-        return false;
-    }
-    if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) == -1) {
-        LOG_ERRNO("failed to set non-blocking mode on passed socket");
-        return false;
-    }
-
-    int const socket_options[] = { SO_DOMAIN, SO_ACCEPTCONN, SO_TYPE };
-    int const socket_options_values[] = { AF_UNIX, NON_ZERO_OPT, SOCK_STREAM};
-    char const * const socket_options_names[] = { "SO_DOMAIN", "SO_ACCEPTCONN", "SO_TYPE" };
+    int const socket_options[] = { SO_ACCEPTCONN, SO_TYPE };
+    int const socket_options_values[] = { NON_ZERO_OPT, SOCK_STREAM};
+    char const * const socket_options_names[] = { "SO_ACCEPTCONN", "SO_TYPE" };
 
     xassert(ALEN(socket_options) == ALEN(socket_options_values));
     xassert(ALEN(socket_options) == ALEN(socket_options_names));
@@ -573,11 +590,14 @@ server_init(struct config *conf, struct fdm *fdm, struct reaper *reaper,
     }
     else {
         LOG_DBG("no suitable pre-existing socket found, creating our own");
-        fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
+        fd = socket(AF_UNIX, SOCK_STREAM, 0);
         if (fd == -1) {
             LOG_ERRNO("failed to create UNIX socket");
             return NULL;
         }
+
+        if (!set_cloexec_nonblock(fd))
+            goto err;
 
         switch (try_connect(sock_path)) {
         case CONNECT_FAIL:
