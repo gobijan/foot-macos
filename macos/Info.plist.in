@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>foot</string>
+	<key>CFBundleExecutable</key>
+	<string>foot</string>
+	<key>CFBundleIconFile</key>
+	<string>foot</string>
+	<key>CFBundleIdentifier</key>
+	<string>@bundle_id@</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>foot</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>@version@</string>
+	<key>CFBundleVersion</key>
+	<string>@version@</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.developer-tools</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>@macos_min_version@</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+	<key>NSSupportsAutomaticGraphicsSwitching</key>
+	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string>foot is written by Daniel Eklöf and contributors. MIT license.</string>
+
+	<!-- Programs running in the terminal inherit its privacy permissions -->
+	<key>NSAppleEventsUsageDescription</key>
+	<string>A program running in foot wants to control another application.</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>A program running in foot wants to use Bluetooth.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>A program running in foot wants to use the camera.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>A program running in foot wants to use the microphone.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>A program running in foot wants to access your contacts.</string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>A program running in foot wants to access your calendars.</string>
+	<key>NSRemindersUsageDescription</key>
+	<string>A program running in foot wants to access your reminders.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>A program running in foot wants to access your photos.</string>
+	<key>NSLocationUsageDescription</key>
+	<string>A program running in foot wants to use your location.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>A program running in foot wants to access the local network.</string>
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>A program running in foot wants to access files on your Desktop.</string>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>A program running in foot wants to access files in your Documents folder.</string>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>A program running in foot wants to access files in your Downloads folder.</string>
+	<key>NSNetworkVolumesUsageDescription</key>
+	<string>A program running in foot wants to access files on a network volume.</string>
+	<key>NSRemovableVolumesUsageDescription</key>
+	<string>A program running in foot wants to access files on a removable volume.</string>
+</dict>
+</plist>

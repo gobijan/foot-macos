@@ -32,8 +32,12 @@ Requirements: Xcode (or the command line tools), and
 ```sh
 meson setup build --native-file macos/native.ini --buildtype=release
 ninja -C build
-./build/macos/foot
+cp -R build/macos/foot.app /Applications/
 ```
+
+This builds `foot.app` (with `foot` and `footclient` inside
+`foot.app/Contents/MacOS/`). Without installing it, run
+`./build/macos/foot` directly.
 
 All dependencies (pixman, utf8proc, xkbcommon) are built from source,
 and linked statically; the resulting binary only depends on system

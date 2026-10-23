@@ -609,6 +609,13 @@ create_menu(void)
     return NSTerminateCancel;
 }
 
+- (NSMenu *)applicationDockMenu:(NSApplication *)sender
+{
+    NSMenu *menu = [[NSMenu alloc] init];
+    [menu addItemWithTitle:@"New Window" action:@selector(newWindow:) keyEquivalent:@""];
+    return menu;
+}
+
 - (BOOL)applicationShouldHandleReopen:(NSApplication *)sender hasVisibleWindows:(BOOL)visible
 {
     if (!visible && tll_length(app.wayl->terms) == 0)

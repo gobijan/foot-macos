@@ -299,7 +299,7 @@ foot = executable(
   link_with: pgolib,
   install: true)
 
-executable(
+footclient = executable(
   'footclient',
   '../client.c', '../client-protocol.h',
   '../foot-features.c', '../foot-features.h',
@@ -350,6 +350,26 @@ if tic.found()
     build_by_default: true,
   )
 endif
+
+# The application bundle
+info_plist = configure_file(
+  input: 'Info.plist.in',
+  output: 'Info.plist',
+  configuration: {
+    'version': meson.project_version(),
+    'bundle_id': 'io.github.gobijan.foot',
+    'macos_min_version': macos_min_version,
+  },
+)
+
+custom_target(
+  'foot.app',
+  output: 'foot.app',
+  input: [foot, footclient, info_plist, files('icon/foot.icns'), terminfo],
+  command: [files('make-bundle.sh'), '@OUTPUT@', '@INPUT@'],
+  build_by_default: true,
+  build_always_stale: true,
+)
 
 install_data('../completions/zsh/_foot', '../completions/zsh/_footclient',
              install_dir: join_paths(get_option('datadir'), 'zsh', 'site-functions'))
