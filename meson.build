@@ -8,6 +8,12 @@ project('foot', 'c',
           'werror=true',
           'b_ndebug=if-release'])
 
+# The native macOS port is built by macos/meson.build
+if host_machine.system() == 'darwin'
+  subdir('macos')
+  subdir_done()
+endif
+
 is_debug_build = get_option('buildtype').startswith('debug')
 
 cc = meson.get_compiler('c')

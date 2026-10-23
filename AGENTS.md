@@ -1,0 +1,35 @@
+# foot for macOS: notes for AI assistants
+
+A native macOS port of the foot terminal emulator. foot's terminal core
+is upstream code; the macOS platform layer (AppKit, Core Animation,
+CoreText, kqueue) lives in `macos/`.
+
+## Build and test
+
+```sh
+brew install meson ninja bison
+meson setup build --native-file macos/native.ini
+ninja -C build
+meson test -C build config
+./build/macos/foot
+```
+
+Debug builds run foot's unit tests (`UNITTEST` blocks) at startup.
+
+## Rules
+
+- **Keep upstream merges trivial.** Read `macos/UPSTREAM.md` before
+  changing any file outside `macos/`. New code goes in `macos/`; changes
+  to upstream files must be minimal and local. Never reformat upstream
+  code.
+- **Native only.** No Wayland/X11 shims, compositors or emulation
+  layers. Use AppKit, Core Animation, CoreText and kqueue directly.
+- **Performance matters.** Rendering stays on the CPU (pixman), with
+  zero copy presentation (IOSurfaces); nothing may poll or wake up
+  while idle.
+- **Upstream syncs** are merges (`macos/sync-upstream.sh`), never
+  rebases. Resolve conflicts as described in `macos/UPSTREAM.md`.
+- **Testing input:** never send global keystrokes (e.g. with
+  `osascript`/System Events); they end up in whatever application the
+  user is working in. Post events to foot's PID only
+  (`CGEventPostToPid()`).

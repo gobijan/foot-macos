@@ -1,0 +1,30 @@
+name: macOS
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: brew install meson ninja bison
+
+      - name: Cache subprojects
+        uses: actions/cache@v4
+        with:
+          path: subprojects/packagecache
+          key: subprojects-${{ hashFiles('subprojects/*.wrap') }}
+
+      - name: Configure
+        run: meson setup build --native-file macos/native.ini --buildtype=release
+
+      - name: Build
+        run: ninja -C build
+
+      - name: Test
+        run: meson test -C build config --print-errorlogs

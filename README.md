@@ -1,71 +1,3 @@
-# foot for macOS
-
-A native macOS port of [foot](https://codeberg.org/dnkl/foot), the fast,
-lightweight and minimalistic terminal emulator.
-
-**Status:** work in progress. Usable day to day, but expect rough edges.
-
-foot's terminal core (VT parser, grid, sixel, search, URL mode etc) is
-unchanged. Only the platform layer is new, and it is native - no
-Wayland compositor, no X11, no emulation:
-
-| | Upstream (Linux) | macOS |
-|---|---|---|
-| Windows, input | Wayland | AppKit |
-| Presentation | `wl_shm` buffers | IOSurfaces as `CALayer` contents (zero copy) |
-| Frame pacing | frame callbacks | `CADisplayLink` (paused when idle or hidden) |
-| Event loop | epoll | kqueue, integrated with the main run loop |
-| Fonts | fcft (fontconfig, FreeType, HarfBuzz) | fcft API implemented on CoreText |
-| Keyboard | xkbcommon keymap from the compositor | xkbcommon keymap generated from the macOS layout |
-| Input methods | text-input-v3 | `NSTextInputClient` (dead keys, IMEs) |
-| Clipboard | Wayland data devices | `NSPasteboard` |
-
-Rendering is still done on the CPU, with pixman, exactly like upstream
-foot; that is what keeps it lean (an idle window uses ~0% CPU, with no
-wakeups, and ~20MB of memory).
-
-## Building
-
-Requirements: Xcode (or the command line tools), and
-`brew install meson ninja bison`.
-
-```sh
-meson setup build --native-file macos/native.ini --buildtype=release
-ninja -C build
-./build/foot
-```
-
-All dependencies (pixman, utf8proc, xkbcommon) are built from source,
-and linked statically; the resulting binary only depends on system
-frameworks.
-
-## macOS specifics
-
-* `Cmd+C` / `Cmd+V` copy and paste, `Cmd+N` opens a new window (in the
-  same process), `Cmd+,` opens the configuration in `$EDITOR`, `Cmd+=`
-  / `Cmd+-` / `Cmd+0` change the font size, `Ctrl+Cmd+F` toggles
-  fullscreen. foot's own key bindings (e.g. `Ctrl+Shift+C`) still work.
-* The Option key produces characters (like on any Mac). To use it as
-  Alt/Meta, set `macos-option-as-alt=left|right|both` in `[main]`.
-* The configuration is read from `~/.config/foot/foot.ini`. New windows
-  re-read it, so changes apply without restarting foot.
-* Font sizes are in points, like in other macOS applications. The
-  default font is SF Mono (`monospace`), 13pt. Icons from installed Nerd
-  Fonts are used automatically.
-* The shell is started as a login shell, so that it sets up `$PATH`.
-* `TERM=foot`; the terminfo entry is bundled, and found through
-  `$TERMINFO_DIRS`.
-
-## Credits
-
-foot is written by [Daniel Eklöf](https://codeberg.org/dnkl) and
-contributors, and licensed under the MIT license. This port keeps
-upstream's license.
-
-The upstream README follows.
-
----
-
 # ![Logo: a terminal with a foot shaped prompt](icons/hicolor/48x48/apps/foot.png) foot
 
 The fast, lightweight and minimalistic Wayland terminal emulator.
@@ -102,7 +34,7 @@ The fast, lightweight and minimalistic Wayland terminal emulator.
 1. [Supported OSCs](#supported-oscs)
 1. [Programmatically checking if running in foot](#programmatically-checking-if-running-in-foot)
 1. [XTGETTCAP](#xtgettcap)
-1. [AI-assisted contributions welcome](#ai-assisted-contributions-welcome)
+1. [No AI / LLM policy](#no-ai-llm-policy)
 1. [Contributing](#contributing)
 1. [Code of Conduct](#code-of-conduct)
 1. [Bugs](#bugs)
@@ -716,14 +648,13 @@ will be answered with a response of the form `uname=$(uname -s)`,
 where `$(uname -s)` is the name of the OS foot was compiled for.
 
 
-# AI-assisted contributions welcome
+# No AI / LLM policy
 
-Unlike upstream foot, this fork explicitly welcomes the use of
-generative AI/LLMs for **all** contributions: patches, documentation,
-bug reports, and comments on the issue and pull request trackers.
+Use of generative AI/LLMs is strictly forbidden for **all**
+contributions to foot.
 
-As with any contribution, you are responsible for what you submit;
-review and test it before opening a pull request.
+This includes bug reports and comments on the issue and pull request
+trackers.
 
 
 # Contributing
@@ -738,7 +669,7 @@ See [Code of Conduct](CODE_OF_CONDUCT.md)
 
 # Bugs
 
-Please report bugs to https://github.com/gobijan/foot-macos/issues
+Please report bugs to https://codeberg.org/dnkl/foot/issues
 
 Before you open a new issue, please search existing bug reports, both
 open **and** closed ones. Chances are someone else has already
@@ -748,7 +679,7 @@ The report should contain the following:
 
 - Foot version (`foot --version`).
 - Log output from foot (run `foot -d info` from another terminal).
-- Which macOS version you are running (`sw_vers`).
+- Which Wayland compositor (and version) you are running.
 - If reporting a crash, please try to provide a `bt full` backtrace
   with symbols.
 - Steps to reproduce. The more details the better.

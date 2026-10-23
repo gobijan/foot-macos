@@ -1,8 +1,16 @@
 #pragma once
 
 #include <stdbool.h>
+#if !defined(__APPLE__)
+#include <wayland-client.h>
+#endif
 
 #include "terminal.h"
+
+#if !defined(__APPLE__)
+extern const struct wl_data_device_listener data_device_listener;
+extern const struct zwp_primary_selection_device_v1_listener primary_selection_device_listener;
+#endif
 
 void selection_start(
     struct terminal *term, int col, int row,

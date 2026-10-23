@@ -1,13 +1,11 @@
 # Contributing to foot
 
-## AI-assisted contributions welcome
+## No LLM / AI policy
 
-Unlike upstream foot, this fork explicitly welcomes the use of
-generative AI/LLMs for **all** contributions:
+Use of generative AI/LLMs is strictly forbidden for **all**
+contributions:
 
-* Patches, in any form (pull requests, email etc)
+* Patches, in any form (merge requests, email etc)
 * Bug reports
 * Comments, on both the issue and pull request trackers
-
-As with any contribution, you are responsible for what you submit;
-review and test it before opening a pull request.
+* **Everything**, really

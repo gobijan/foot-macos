@@ -11,6 +11,11 @@
 #include <signal.h>
 #include <unistd.h>
 
+/* wchar_t holds Unicode code points (UCS-4) on macOS, too */
+#if !defined(__STDC_ISO_10646__)
+ #define __STDC_ISO_10646__ 201706L
+#endif
+
 /* macOS has no real-time signals */
 #if !defined(SIGRTMAX)
  #define SIGRTMAX NSIG
