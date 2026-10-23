@@ -12,7 +12,8 @@ happens in the terminal core, which this port doesn't touch.
 ## Syncing
 
 ```sh
-macos/sync-upstream.sh
+make upstream   # what's new upstream
+make sync       # macos/sync-upstream.sh
 ```
 
 The script fetches upstream, prints what's coming (and flags upstream
@@ -32,8 +33,9 @@ macOS.
 
 ## How the port touches upstream files
 
-New code lives in `macos/`. Upstream files are changed as little as
-possible, in one of three ways:
+New code lives in `macos/`; the port's other own files are `.github/`,
+`Makefile`, `AGENTS.md` and `CLAUDE.md` (none of them exist upstream).
+Upstream files are changed as little as possible, in one of three ways:
 
 1. **Not built on macOS, left untouched.** Upstream's Wayland backend
    is kept as is, so it never conflicts: `wayland.c`, `shm.c`,
@@ -89,12 +91,14 @@ For humans and AI assistants alike:
 3. **Mirror platform changes.** If upstream changes Wayland specific
    code (the files in group 1, or code in `#if !defined(__APPLE__)`
    blocks), decide whether the macOS layer needs the equivalent.
-4. **Verify.** `ninja -C build && meson test -C build config`, then run
-   `./build/macos/foot` (debug builds run foot's unit tests at startup).
+4. **Verify.** `make test` (`ninja -C build && meson test -C build
+   config`), then `make run` (debug builds run foot's unit tests at
+   startup).
 5. **Update this file** if the way the port touches upstream changes.
 
-To see the port's complete diff against upstream:
+To see the port's complete diff against upstream (`make port-diff`
+prints a summary):
 
 ```sh
-git diff master...macos -- . ':!macos' ':!.github'
+git diff master...macos -- . ':!macos' ':!.github' ':!Makefile' ':!AGENTS.md' ':!CLAUDE.md'
 ```

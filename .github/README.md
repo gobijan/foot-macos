@@ -27,7 +27,15 @@ wakeups, and ~20MB of memory).
 ## Building
 
 Requirements: Xcode (or the command line tools), and
-`brew install meson ninja bison`.
+`brew install meson ninja bison` (or `make deps`).
+
+```sh
+make install    # builds foot.app, and installs it to /Applications
+```
+
+`make` lists all commands: building and running the debug and release
+builds, tests, upstream syncs, CI. The Makefile is only a frontend for
+meson; without it:
 
 ```sh
 meson setup build --native-file macos/native.ini --buildtype=release
