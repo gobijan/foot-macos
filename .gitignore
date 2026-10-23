@@ -1,4 +1,5 @@
 /build/
+/.cache/
 /bld/
 /pkg/
 /src/
