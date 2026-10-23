@@ -12,6 +12,8 @@ make build      # debug build in build/ (configures it the first time)
 make test
 make run        # ./build/macos/foot
 make release    # optimized build and foot.app in build-release/
+make dist       # universal, notarized foot.app (NOTARY_PROFILE=...)
+make publish    # a release: GitHub, Sparkle, Homebrew (.github/RELEASING.md)
 ```
 
 `make` lists all commands. The `Makefile` only wraps meson and ninja

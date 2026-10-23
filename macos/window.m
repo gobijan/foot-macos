@@ -472,15 +472,17 @@ wayl_win_init(struct terminal *term, const char *token)
     /*
      * Configure (size, and show) once the terminal is fully
      * initialized, i.e. after we've returned to the run loop. Like a
-     * Wayland compositor's first configure event.
+     * Wayland compositor's first configure event. In the run loop's
+     * common modes, like FDM events (see wayl_init()).
      */
     __weak NSWindow *weak_window = nswindow;
-    dispatch_async(dispatch_get_main_queue(), ^{
+    CFRunLoopPerformBlock(CFRunLoopGetMain(), kCFRunLoopCommonModes, ^{
         NSWindow *w = weak_window;
         FootWindowDelegate *d = w != nil ? w.delegate : nil;
         if (d != nil && d.win != NULL && !d.win->is_configured)
             window_configure(d.win);
     });
+    CFRunLoopWakeUp(CFRunLoopGetMain());
 
     return win;
 }

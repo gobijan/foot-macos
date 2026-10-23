@@ -24,6 +24,24 @@ Rendering is still done on the CPU, with pixman, exactly like upstream
 foot; that is what keeps it lean (an idle window uses ~0% CPU, with no
 wakeups, and ~20MB of memory).
 
+## Installing
+
+With [Homebrew](https://brew.sh):
+
+```sh
+brew install --cask gobijan/tap/foot
+```
+
+Or download `foot-<version>.zip` from the
+[latest release](https://github.com/gobijan/foot-macos/releases/latest),
+and move `foot.app` to Applications. It's a universal app (Apple
+silicon and Intel) for macOS 14 and later, signed and notarized.
+
+foot updates itself (foot > Check for Updates…, with
+[Sparkle](https://sparkle-project.org)); on the second launch, it asks
+whether to check automatically, once a day. Homebrew's cask also puts
+`foot` and `footclient` in your `$PATH`.
+
 ## Building
 
 Requirements: Xcode (or the command line tools), and

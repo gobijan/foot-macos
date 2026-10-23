@@ -28,3 +28,9 @@ jobs:
 
       - name: Test
         run: meson test -C build config --print-errorlogs
+
+      # The Intel half of the universal foot.app (macos/dist.sh)
+      - name: Build for Intel
+        run: |
+          meson setup build-x86_64 --native-file macos/native.ini --cross-file macos/x86_64.ini --buildtype=release
+          ninja -C build-x86_64

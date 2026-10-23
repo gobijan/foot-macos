@@ -2,6 +2,8 @@
 
 #import <QuartzCore/QuartzCore.h>
 
+#include <crt_externs.h>
+#include <limits.h>
 #include <locale.h>
 #include <math.h>
 #include <unistd.h>
@@ -40,7 +42,8 @@ static struct {
     struct wayland *wayl;
     uint32_t serial;
 
-    dispatch_source_t fdm_source;
+    CFFileDescriptorRef fdm_cffd;
+    CFRunLoopSourceRef fdm_source;
     CFRunLoopObserverRef observer;
 
     volatile sig_atomic_t *aborted;
@@ -109,6 +112,13 @@ stop_running(void)
     if (!app.running)
         return;
 
+    /* -stop: would only end the modal session (e.g. an alert); the
+     * main event loop is stopped when this is called again from it */
+    if (NSApp.modalWindow != nil) {
+        [NSApp abortModal];
+        return;
+    }
+
     app.running = false;
     [NSApp stop:nil];
 
@@ -151,6 +161,16 @@ fdm_readable(void)
         app.fdm_failed = true;
         stop_running();
     }
+}
+
+static void
+fdm_callback(CFFileDescriptorRef fd, CFOptionFlags types, void *info)
+{
+    fdm_readable();
+
+    /* Callbacks are one-shot */
+    if (!app.fdm_failed)
+        CFFileDescriptorEnableCallBacks(fd, kCFFileDescriptorReadCallBack);
 }
 
 bool
@@ -209,6 +229,19 @@ wayl_prepare_environment(void)
     app.launched_as_app = getppid() == 1;
 
     @autoreleasepool {
+        /* Started through a symlink to foot.app's executable (e.g.
+         * Homebrew's, in $PATH): it isn't the main bundle then. Run
+         * the executable itself, for the bundle's resources (terminfo,
+         * themes, Sparkle) */
+        char path[PATH_MAX];
+        if (NSBundle.mainBundle.bundleIdentifier == nil &&
+            realpath(NSBundle.mainBundle.executablePath.fileSystemRepresentation, path) != NULL &&
+            strstr(path, ".app/Contents/MacOS/") != NULL)
+        {
+            execv(path, *_NSGetArgv());
+            LOG_ERRNO("%s: failed to execute", path);
+        }
+
         /* Started from Finder/Dock: no locale in the environment */
         if (getenv("LANG") == NULL && getenv("LC_ALL") == NULL &&
             getenv("LC_CTYPE") == NULL)
@@ -570,6 +603,9 @@ create_menu(void)
         NSMenu *menu = [[NSMenu alloc] initWithTitle:@"foot"];
 
         [menu addItem:menu_item(@"About foot", @selector(orderFrontStandardAboutPanel:), @"", 0)];
+        NSMenuItem *updates = updates_menu_item();
+        if (updates != nil)
+            [menu addItem:updates];
         [menu addItem:[NSMenuItem separatorItem]];
         [menu addItem:menu_item(@"Settings…", @selector(openSettings:), @",", cmd)];
         [menu addItem:[NSMenuItem separatorItem]];
@@ -779,11 +815,14 @@ wayl_init(struct fdm *fdm, struct key_binding_manager *key_binding_manager,
 
     seat_init(wayl);
 
-    /* FDM events are dispatched from the main run loop */
-    app.fdm_source = dispatch_source_create(
-        DISPATCH_SOURCE_TYPE_READ, fdm_fd(fdm), 0, dispatch_get_main_queue());
-    dispatch_source_set_event_handler(app.fdm_source, ^{ fdm_readable(); });
-    dispatch_resume(app.fdm_source);
+    /* FDM events are dispatched from the main run loop, in its common
+     * modes. Not from the main dispatch queue: run loops nested in a
+     * main queue block (e.g. a modal alert shown from one) don't
+     * service it */
+    app.fdm_cffd = CFFileDescriptorCreate(NULL, fdm_fd(fdm), false, &fdm_callback, NULL);
+    CFFileDescriptorEnableCallBacks(app.fdm_cffd, kCFFileDescriptorReadCallBack);
+    app.fdm_source = CFFileDescriptorCreateRunLoopSource(NULL, app.fdm_cffd, 0);
+    CFRunLoopAddSource(CFRunLoopGetMain(), app.fdm_source, kCFRunLoopCommonModes);
 
     /* Run FDM hooks before the run loop goes to sleep (and before
      * Core Animation commits its implicit transactions) */
@@ -821,8 +860,15 @@ wayl_destroy(struct wayland *wayl)
     }
 
     if (app.fdm_source != NULL) {
-        dispatch_source_cancel(app.fdm_source);
+        CFRunLoopRemoveSource(CFRunLoopGetMain(), app.fdm_source, kCFRunLoopCommonModes);
+        CFRelease(app.fdm_source);
         app.fdm_source = NULL;
+    }
+
+    if (app.fdm_cffd != NULL) {
+        CFFileDescriptorInvalidate(app.fdm_cffd);
+        CFRelease(app.fdm_cffd);
+        app.fdm_cffd = NULL;
     }
 
     tll_foreach(wayl->seats, it) {

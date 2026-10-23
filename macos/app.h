@@ -28,6 +28,9 @@ void app_apply_color_theme(struct terminal *term, bool reload);
 /* themes.m: View > Theme */
 NSMenuItem *themes_menu_item(void);
 
+/* updates.m: foot > Check for Updates… (nil without Sparkle.framework) */
+NSMenuItem *updates_menu_item(void);
+
 /* The monitor corresponding to 'screen' (may be NULL) */
 const struct monitor *app_monitor_for_screen(NSScreen *screen);
 

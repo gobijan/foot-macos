@@ -295,6 +295,7 @@ foot = executable(
   'selection-clipboard.c',
   'windows.c', 'windows.h',
   'themes.m',
+  'updates.m',
   'default-colors.c', 'default-colors.h',
   default_config, srgb_funcs, version,
   dependencies: [math, threads, pixman, xkb, utf8proc, tllist, fcft, appkit],
