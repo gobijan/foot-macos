@@ -10,11 +10,12 @@ cask "foot" do
 
   livecheck do
     url :url
+    regex(/^v?(\d+(?:\.\d+)+-macos\.\d+)$/i)
     strategy :github_latest
   end
 
   auto_updates true
-  depends_on macos: ">= :sonoma"
+  depends_on macos: :sonoma
 
   app "foot.app"
   binary "#{appdir}/foot.app/Contents/MacOS/foot"
