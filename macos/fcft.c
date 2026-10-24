@@ -7,6 +7,13 @@
  *
  * Glyphs and graphemes are cached per font. The caches are shared by
  * foot's render worker threads, and protected by a rwlock.
+ *
+ * Glyphs are looked up for every rendered cell, by all render worker
+ * threads at once, and a contended rwlock is expensive on macOS. Each
+ * thread therefore has a small, lock-free cache of its own in front
+ * of the shared one (as for pre-composed characters). Glyphs live as
+ * long as their font, and font IDs are never re-used: an entry is
+ * valid if its font ID matches the font's.
  */
 
 #include <fcft/fcft.h>
@@ -81,6 +88,7 @@ struct font_priv {
     pixman_format_code_t color_format;
 
     pthread_rwlock_t lock;
+    uint64_t id;              /* Unique; keys the per-thread caches */
 
     struct {
         struct glyph_entry *table;
@@ -677,6 +685,9 @@ fcft_from_name2(size_t count, const char *names[static count],
     font->smoothing_strength = options != NULL ? options->smoothing.strength : 1.;
     pthread_rwlock_init(&font->lock, NULL);
 
+    static atomic_uint_fast64_t next_id = 1;
+    font->id = atomic_fetch_add(&next_id, 1);
+
     for (size_t i = 0; i < count; i++) {
         struct font_pattern pat;
         if (!font_pattern_parse(names[i], &pat)) {
@@ -1225,18 +1236,42 @@ glyph_cache_insert(struct font_priv *font, uint32_t cp, struct fcft_glyph *glyph
     }
 }
 
+/* Per-thread caches (see the top of this file); 'key' is at most 42 bits */
+static size_t
+thread_cache_slot(uint64_t font_id, uint64_t key, unsigned bits)
+{
+    return ((key ^ (font_id << 42)) * 0x9e3779b97f4a7c15ull) >> (64 - bits);
+}
+
+#define THREAD_GLYPHS_BITS 10
+
+struct thread_glyph {
+    uint64_t font_id;
+    uint32_t cp;
+    struct fcft_glyph *glyph;
+};
+
+static _Thread_local struct thread_glyph thread_glyphs[1 << THREAD_GLYPHS_BITS];
+
 const struct fcft_glyph *
 fcft_rasterize_char_utf32(struct fcft_font *_font, uint32_t cp,
                           enum fcft_subpixel subpixel)
 {
     struct font_priv *font = (struct font_priv *)_font;
 
+    struct thread_glyph *cached =
+        &thread_glyphs[thread_cache_slot(font->id, cp, THREAD_GLYPHS_BITS)];
+    if (cached->font_id == font->id && cached->cp == cp)
+        return cached->glyph;
+
     pthread_rwlock_rdlock(&font->lock);
     struct fcft_glyph *glyph = glyph_cache_lookup(font, cp);
     pthread_rwlock_unlock(&font->lock);
 
-    if (glyph != NULL)
+    if (glyph != NULL) {
+        *cached = (struct thread_glyph){.font_id = font->id, .cp = cp, .glyph = glyph};
         return glyph;
+    }
 
     const struct face *face;
     CGGlyph glyph_id;
@@ -1263,6 +1298,7 @@ fcft_rasterize_char_utf32(struct fcft_font *_font, uint32_t cp,
     }
     pthread_rwlock_unlock(&font->lock);
 
+    *cached = (struct thread_glyph){.font_id = font->id, .cp = cp, .glyph = glyph};
     return glyph;
 }
 
@@ -1565,19 +1601,30 @@ font_has_codepoint(CTFontRef font, uint32_t cp)
     return CTFontGetGlyphsForCharacters(font, utf16, glyphs, count) && glyphs[0] != 0;
 }
 
-uint32_t
-fcft_precompose(const struct fcft_font *_font, uint32_t base, uint32_t comb,
-                bool *base_is_from_primary,
-                bool *comb_is_from_primary,
-                bool *composed_is_from_primary)
-{
-    const struct font_priv *font = (const struct font_priv *)_font;
-    CTFontRef primary = font->faces[0].font;
+#define THREAD_PRECOMPOSED_BITS 8
 
-    if (base_is_from_primary != NULL)
-        *base_is_from_primary = font_has_codepoint(primary, base);
-    if (comb_is_from_primary != NULL)
-        *comb_is_from_primary = font_has_codepoint(primary, comb);
+struct thread_precomposed {
+    uint64_t font_id;
+    uint32_t base;
+    uint32_t comb;
+    uint32_t composed;
+    bool base_is_from_primary;
+    bool comb_is_from_primary;
+    bool composed_is_from_primary;
+};
+
+static _Thread_local struct thread_precomposed
+    thread_precomposed[1 << THREAD_PRECOMPOSED_BITS];
+
+static void
+precompose(const struct font_priv *font, struct thread_precomposed *out)
+{
+    CTFontRef primary = font->faces[0].font;
+    const uint32_t base = out->base;
+    const uint32_t comb = out->comb;
+
+    out->base_is_from_primary = font_has_codepoint(primary, base);
+    out->comb_is_from_primary = font_has_codepoint(primary, comb);
 
     /* Canonical composition (NFC) of the pair */
     const uint32_t pair[] = {base, comb};
@@ -1599,9 +1646,35 @@ fcft_precompose(const struct fcft_font *_font, uint32_t base, uint32_t comb,
     }
     CFRelease(nfc);
 
-    if (composed_is_from_primary != NULL)
-        *composed_is_from_primary =
-            composed != (uint32_t)-1 && font_has_codepoint(primary, composed);
+    out->composed = composed;
+    out->composed_is_from_primary =
+        composed != (uint32_t)-1 && font_has_codepoint(primary, composed);
+}
 
-    return composed;
+uint32_t
+fcft_precompose(const struct fcft_font *_font, uint32_t base, uint32_t comb,
+                bool *base_is_from_primary,
+                bool *comb_is_from_primary,
+                bool *composed_is_from_primary)
+{
+    const struct font_priv *font = (const struct font_priv *)_font;
+
+    /* Normalizing is expensive; called for every combining character */
+    struct thread_precomposed *cached = &thread_precomposed[thread_cache_slot(
+        font->id, (uint64_t)base << 21 | comb, THREAD_PRECOMPOSED_BITS)];
+
+    if (cached->font_id != font->id || cached->base != base || cached->comb != comb) {
+        *cached = (struct thread_precomposed){
+            .font_id = font->id, .base = base, .comb = comb};
+        precompose(font, cached);
+    }
+
+    if (base_is_from_primary != NULL)
+        *base_is_from_primary = cached->base_is_from_primary;
+    if (comb_is_from_primary != NULL)
+        *comb_is_from_primary = cached->comb_is_from_primary;
+    if (composed_is_from_primary != NULL)
+        *composed_is_from_primary = cached->composed_is_from_primary;
+
+    return cached->composed;
 }
