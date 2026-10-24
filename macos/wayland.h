@@ -363,6 +363,10 @@ struct wl_window {
     bool is_tiled;  /* At least one of is_tiled_{top,bottom,left,right} is true */
 
     int resize_timeout_fd;
+
+    /* The terminal's cell size (pixels), as of the last resize */
+    int cell_width;
+    int cell_height;
 };
 
 struct terminal;
@@ -477,7 +481,8 @@ void wayl_win_close(struct wl_window *win);
 /* Asks the window to resize itself to fit width x height (logical) */
 void wayl_win_set_content_size(struct wl_window *win, int width, int height);
 
-/* Cell size, for window resize increments */
+/* Cell size, for window resize increments; when it changes (font size,
+ * scale), the window adopts the terminal's size (resize-keep-grid) */
 void wayl_win_set_resize_increments(
     struct wl_window *win, int cell_width, int cell_height);
 

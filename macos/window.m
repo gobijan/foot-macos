@@ -363,6 +363,42 @@ window_resized(struct wl_window *win)
     app_run_hooks();
 }
 
+/*
+ * The cell size changed (font size, scale), and the terminal kept its
+ * grid (resize-keep-grid): like a Wayland compositor, the window adopts
+ * the terminal's new size. Within the screen; if it can't (or a window
+ * manager resizes it back), the grid follows the window instead.
+ */
+static void
+window_fit(struct wl_window *win)
+{
+    struct terminal *term = win->term;
+    NSWindow *nswindow = nswindow_of(win);
+
+    if (!win->is_fullscreen && !win->is_maximized && !win->is_resizing) {
+        const NSRect old = nswindow.frame;
+        NSRect frame = [nswindow frameRectForContentRect:NSMakeRect(
+            0, 0, term->width / term->scale, term->height / term->scale)];
+
+        /* Keep the top left corner, but stay on the screen */
+        const NSRect visible = nswindow.screen != nil
+            ? nswindow.screen.visibleFrame : old;
+        frame.size.width = MIN(NSWidth(frame), NSWidth(visible));
+        frame.size.height = MIN(NSHeight(frame), NSHeight(visible));
+        frame.origin.x = MAX(
+            MIN(NSMinX(old), NSMaxX(visible) - NSWidth(frame)), NSMinX(visible));
+        frame.origin.y = MIN(
+            MAX(NSMaxY(old) - NSHeight(frame), NSMinY(visible)),
+            NSMaxY(visible) - NSHeight(frame));
+
+        if (!NSEqualRects(frame, old))
+            [nswindow setFrame:frame display:YES];
+    }
+
+    /* Whatever size the window ended up with, the grid must fit it */
+    window_resized(win);
+}
+
 /* The initial configure; picks the window size, and shows the window */
 static void
 window_configure(struct wl_window *win)
@@ -627,6 +663,28 @@ wayl_win_set_resize_increments(struct wl_window *win, int cell_width, int cell_h
     nswindow.contentMinSize = NSMakeSize(
         cell_width + conf->pad_left + conf->pad_right,
         cell_height + conf->pad_top + conf->pad_bottom);
+
+    /* A new cell size; not the initial one (see window_configure()) */
+    const struct terminal *term = win->term;
+    const bool changed = win->cell_width != 0 &&
+        (term->cell_width != win->cell_width ||
+         term->cell_height != win->cell_height);
+
+    win->cell_width = term->cell_width;
+    win->cell_height = term->cell_height;
+
+    if (!changed)
+        return;
+
+    /* We're in render_resize(); fit once back in the run loop */
+    __weak NSWindow *weak_window = nswindow;
+    CFRunLoopPerformBlock(CFRunLoopGetMain(), kCFRunLoopCommonModes, ^{
+        NSWindow *w = weak_window;
+        FootWindowDelegate *d = w != nil ? w.delegate : nil;
+        if (d != nil && d.win != NULL)
+            window_fit(d.win);
+    });
+    CFRunLoopWakeUp(CFRunLoopGetMain());
 }
 
 bool
