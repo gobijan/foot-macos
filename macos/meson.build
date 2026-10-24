@@ -114,7 +114,7 @@ if get_option('grapheme-clustering').disabled()
 else
   utf8proc = subproject(
     'utf8proc',
-    default_options: ['default_library=static', 'werror=false'],
+    default_options: ['default_library=static', 'werror=false', 'tests=disabled'],
   ).get_variable('utf8proc_dep')
 endif
 
@@ -129,11 +129,16 @@ tllist = dependency('tllist', version: '>=1.1.0', fallback: 'tllist')
 # xkbcommon is used purely as a keyboard state machine, with keymaps
 # generated from the active macOS keyboard layout. It is always built
 # statically, without any X11/Wayland support.
+#
+# Its tests and benchmarks are built unconditionally (there's no option
+# for them). In release builds (NDEBUG) their assert()s compile away,
+# leaving hundreds of unused-variable warnings, hence warning_level=0.
 xkb = subproject(
   'libxkbcommon',
   default_options: [
     'default_library=static',
     'werror=false',
+    'warning_level=0',
     'enable-x11=false',
     'enable-wayland=false',
     'enable-tools=false',
