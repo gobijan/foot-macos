@@ -33,7 +33,7 @@
 	<key>NSSupportsAutomaticGraphicsSwitching</key>
 	<true/>
 	<key>NSHumanReadableCopyright</key>
-	<string>foot is written by Daniel Eklöf and contributors. MIT license.</string>
+	<string>foot is written by Daniel Eklöf and contributors. macOS port by Bijan Rahnema. MIT license.</string>
 
 	<!-- Programs running in the terminal inherit its privacy permissions -->
 	<key>NSAppleEventsUsageDescription</key>
