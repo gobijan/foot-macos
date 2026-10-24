@@ -34,7 +34,7 @@
  * Besides the classic blocking fdm_poll(), the FDM can be driven by a
  * native run loop: fdm_fd() is readable whenever events are pending,
  * fdm_dispatch() handles them without blocking, and fdm_run_hooks()
- * should be called before the run loop goes to sleep.
+ * should be called after that, and before the run loop goes to sleep.
  */
 
 struct fd_handler {
@@ -560,13 +560,14 @@ dispatch(struct fdm *fdm, const struct kevent *events, int count)
     return ret;
 }
 
-static bool
+/* Returns the number of events handled, or -1 on failure */
+static int
 fdm_wait_and_dispatch(struct fdm *fdm, const struct timespec *timeout)
 {
     xassert(!fdm->is_polling && "nested calls to fdm_poll() not allowed");
     if (fdm->is_polling) {
         LOG_ERR("nested calls to fdm_poll() not allowed");
-        return false;
+        return -1;
     }
 
     /* Read and write filters per FD, plus signals */
@@ -576,16 +577,16 @@ fdm_wait_and_dispatch(struct fdm *fdm, const struct timespec *timeout)
     int r = kevent(fdm->kq, NULL, 0, events, (int)max_events, timeout);
     if (unlikely(r < 0)) {
         if (errno == EINTR)
-            return true;
+            return 0;
 
         LOG_ERRNO("failed to wait for kqueue events");
-        return false;
+        return -1;
     }
 
-    return dispatch(fdm, events, r);
+    return dispatch(fdm, events, r) ? r : -1;
 }
 
-bool
+int
 fdm_dispatch(struct fdm *fdm)
 {
     return fdm_wait_and_dispatch(fdm, &(struct timespec){0});
@@ -595,5 +596,5 @@ bool
 fdm_poll(struct fdm *fdm)
 {
     fdm_run_hooks(fdm);
-    return fdm_wait_and_dispatch(fdm, NULL);
+    return fdm_wait_and_dispatch(fdm, NULL) >= 0;
 }

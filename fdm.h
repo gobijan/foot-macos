@@ -35,9 +35,11 @@ bool fdm_poll(struct fdm *fdm);
 
 /*
  * Native run loop integration: fdm_fd() becomes readable when events
- * are pending; fdm_dispatch() handles them without blocking. The run
- * loop must call fdm_run_hooks() before going to sleep.
+ * are pending; fdm_dispatch() handles them without blocking, and
+ * returns the number of events handled (-1 on failure). Like
+ * fdm_poll(), the run loop must call fdm_run_hooks() after handling
+ * events, and before going to sleep.
  */
 int fdm_fd(const struct fdm *fdm);
-bool fdm_dispatch(struct fdm *fdm);
+int fdm_dispatch(struct fdm *fdm);
 void fdm_run_hooks(struct fdm *fdm);

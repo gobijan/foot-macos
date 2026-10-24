@@ -30,11 +30,12 @@
  * The application: NSApplication, with foot's FDM integrated into
  * the main run loop.
  *
- * The FDM's kqueue is watched by a dispatch source on the main queue;
- * when it becomes readable, pending events are dispatched without
- * blocking. foot's FDM hooks (which, among other things, render
- * terminals with pending updates) run right before the run loop goes
- * to sleep - just like they run before epoll_wait() on Linux.
+ * The FDM's kqueue is watched by a CFFileDescriptor on the main run
+ * loop; when it becomes readable, pending events are dispatched
+ * without blocking. foot's FDM hooks (which, among other things,
+ * render terminals with pending updates) run after each dispatch, and
+ * right before the run loop goes to sleep - just like they run before
+ * every epoll_wait() on Linux.
  */
 
 @interface FootAppDelegate : NSObject <NSApplicationDelegate>
@@ -155,13 +156,41 @@ before_waiting(CFRunLoopObserverRef observer, CFRunLoopActivity activity, void *
     app_run_hooks();
 }
 
+/*
+ * A PTY hands out (at most) 1 KiB per read(), and a run loop iteration
+ * per read() is expensive. While events keep coming, keep dispatching
+ * them, for at most this long, before returning to the run loop.
+ */
+#define DISPATCH_BUDGET_NS (2 * 1000 * 1000)
+
 static void
 fdm_readable(void)
 {
-    if (!fdm_dispatch(app.wayl->fdm)) {
-        LOG_ERR("FDM failure; exiting");
-        app.fdm_failed = true;
-        stop_running();
+    const uint64_t deadline =
+        clock_gettime_nsec_np(CLOCK_UPTIME_RAW) + DISPATCH_BUDGET_NS;
+
+    for (;;) {
+        const int count = fdm_dispatch(app.wayl->fdm);
+        if (count < 0) {
+            LOG_ERR("FDM failure; exiting");
+            app.fdm_failed = true;
+            stop_running();
+            return;
+        }
+
+        if (count == 0)
+            return;
+
+        /*
+         * The run loop doesn't go to sleep (and thus doesn't run the
+         * hooks) as long as events keep coming; run them here, or
+         * nothing would be rendered while e.g. a command floods the
+         * terminal with output.
+         */
+        app_run_hooks();
+
+        if (!app.running || clock_gettime_nsec_np(CLOCK_UPTIME_RAW) >= deadline)
+            return;
     }
 }
 
