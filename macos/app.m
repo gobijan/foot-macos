@@ -3,9 +3,11 @@
 #import <QuartzCore/QuartzCore.h>
 
 #include <crt_externs.h>
+#include <libproc.h>
 #include <limits.h>
 #include <locale.h>
 #include <math.h>
+#include <string.h>
 #include <unistd.h>
 
 #include <tllist.h>
@@ -220,6 +222,43 @@ new_window(const char *cwd)
 
     if (!app.new_window(app.new_window_data, cwd))
         LOG_ERR("failed to open a new window");
+}
+
+/*
+ * The working directory of the main window's terminal, for a new
+ * window to start in: the foreground process' (e.g. a sub shell), or
+ * else the shell's. Asked from the processes, so that it works with
+ * any shell (no OSC 7 needed).
+ */
+static bool
+main_window_cwd(char cwd[static PATH_MAX])
+{
+    NSWindow *main = NSApp.mainWindow;
+    if (main == nil)
+        return false;
+
+    tll_foreach(app.wayl->terms, it) {
+        const struct terminal *term = it->item;
+        if (term->window == NULL || (__bridge NSWindow *)term->window->nswindow != main)
+            continue;
+
+        const pid_t pids[] = {tcgetpgrp(term->ptmx), term->slave};
+        for (size_t i = 0; i < ALEN(pids); i++) {
+            struct proc_vnodepathinfo info;
+            if (pids[i] <= 0 ||
+                proc_pidinfo(pids[i], PROC_PIDVNODEPATHINFO, 0, &info, sizeof(info)) != sizeof(info))
+            {
+                continue;
+            }
+
+            /* The shell fails to start in a removed directory */
+            strlcpy(cwd, info.pvi_cdir.vip_path, PATH_MAX);
+            if (cwd[0] == '/' && access(cwd, X_OK) == 0)
+                return true;
+        }
+        return false;
+    }
+    return false;
 }
 
 void
@@ -700,7 +739,15 @@ create_menu(void)
 
 @implementation FootAppDelegate
 
+/* In the working directory of the window it's opened from */
 - (void)newWindow:(id)sender
+{
+    char cwd[PATH_MAX];
+    new_window(main_window_cwd(cwd) ? cwd : NULL);
+}
+
+/* The Dock's menu isn't a window's: in the home directory */
+- (void)newHomeWindow:(id)sender
 {
     new_window(NULL);
 }
@@ -730,7 +777,7 @@ create_menu(void)
 - (NSMenu *)applicationDockMenu:(NSApplication *)sender
 {
     NSMenu *menu = [[NSMenu alloc] init];
-    [menu addItemWithTitle:@"New Window" action:@selector(newWindow:) keyEquivalent:@""];
+    [menu addItemWithTitle:@"New Window" action:@selector(newHomeWindow:) keyEquivalent:@""];
     return menu;
 }
 

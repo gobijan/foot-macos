@@ -72,9 +72,10 @@ frameworks.
 ## macOS specifics
 
 * `Cmd+C` / `Cmd+V` copy and paste, `Cmd+N` opens a new window (in the
-  same process), `Cmd+,` opens the configuration in `$EDITOR`, `Cmd+=`
-  / `Cmd+-` / `Cmd+0` change the font size, `Ctrl+Cmd+F` toggles
-  fullscreen. foot's own key bindings (e.g. `Ctrl+Shift+C`) still work.
+  same process, and in the current window's working directory), `Cmd+,`
+  opens the configuration in `$EDITOR`, `Cmd+=` / `Cmd+-` / `Cmd+0`
+  change the font size, `Ctrl+Cmd+F` toggles fullscreen. foot's own key
+  bindings (e.g. `Ctrl+Shift+C`) still work.
 * Like other Mac apps, foot keeps running when its last window is
   closed, until `Cmd+Q`; the Dock icon opens a new window. Started from
   a shell, foot exits with its last window, as on Linux.
