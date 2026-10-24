@@ -9,7 +9,9 @@
 #
 # Environment:
 #   NOTARY_PROFILE  notarytool credentials in the keychain (see
-#                   `xcrun notarytool store-credentials`); required
+#                   `xcrun notarytool store-credentials`); default: the
+#                   profile make publish remembered (git config
+#                   foot.notaryprofile)
 #   SIGN_IDENTITY   the signing identity; default: the keychain's
 #                   Developer ID Application identity
 #
@@ -57,7 +59,8 @@ fi
 
 version=$1
 [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || fail "invalid version: $version"
-[[ -n ${NOTARY_PROFILE:-} ]] || fail "NOTARY_PROFILE isn't set (xcrun notarytool store-credentials)"
+NOTARY_PROFILE=${NOTARY_PROFILE:-$(git config foot.notaryprofile || true)}
+[[ -n $NOTARY_PROFILE ]] || fail "NOTARY_PROFILE isn't set (xcrun notarytool store-credentials)"
 [[ -n $SPARKLE_PUBLIC_KEY ]] || fail "SPARKLE_PUBLIC_KEY isn't set"
 
 if [[ -z ${SIGN_IDENTITY:-} ]]; then

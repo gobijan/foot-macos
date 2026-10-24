@@ -1,4 +1,6 @@
 /build/
+/build-release/
+/build-x86_64/
 /.cache/
 /bld/
 /pkg/

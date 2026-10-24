@@ -95,13 +95,12 @@ crash: ## Open foot's newest crash report in Console
 ##@ Release
 
 .PHONY: dist
-dist: ## Build foot.app for distribution: universal, notarized, zipped (NOTARY_PROFILE=...)
+dist: ## Build foot.app for distribution: universal, notarized, zipped (no release)
 	macos/dist.sh $(VERSION)
 
 .PHONY: publish
-publish: ## Publish a release on GitHub, for Sparkle and Homebrew (RELEASE=1.28.0-macos.1 [NOTES=file])
-	@[[ -n "$(RELEASE)" ]] || { echo 'Usage: make publish RELEASE=<version> [NOTES=notes.md] NOTARY_PROFILE=<profile>'; exit 1; }
-	macos/publish.sh $(RELEASE) $(NOTES)
+publish: ## Publish a release: GitHub, Sparkle, Homebrew (asks for everything)
+	@macos/publish.sh
 
 .PHONY: sparkle-key
 sparkle-key: ## Create the key that updates are signed with, in the keychain (once)

@@ -24,6 +24,8 @@ version.
        --key AuthKey_<key id>.p8 --key-id <key id> --issuer <issuer id>
    ```
 
+   The first `make publish` asks for `<profile>`, and remembers it.
+
 3. **Sparkle:** the key that updates are signed with, also in the
    keychain: `make sparkle-key`. It prints the public key; it goes in
    `macos/dist.sh` (`SPARKLE_PUBLIC_KEY`). Back the private key up, e.g.
@@ -38,23 +40,35 @@ version.
 
 ## Every release
 
-Commit and push, then:
-
 ```sh
-make publish RELEASE=1.28.0-macos.1 NOTARY_PROFILE=<profile> [NOTES=notes.md]
+make publish
 ```
 
-Without `NOTES`, the release notes are the subjects of the commits
-since the previous release. `macos/publish.sh`:
+It asks for everything, and publishes nothing before the last question.
+`macos/publish.sh`:
 
-1. checks that `HEAD` is pushed, and tags it,
-2. builds the universal `foot.app` with Sparkle, signs it with the
+1. checks what a release needs: everything committed and pushed (it
+   offers to push), CI passed on this commit (it offers to wait for
+   it), the Developer ID certificate, the notarization profile (asked
+   for the first time, then remembered in the clone's git config,
+   `foot.notaryprofile`) and Sparkle's key,
+2. suggests the version: the next `-macos.<n>` of the upstream version
+   in `meson.build`,
+3. shows the release notes, the subjects of the commits since the
+   previous release, and offers to edit them (`$EDITOR`); write them
+   for the users, Sparkle's update window shows them,
+4. asks whether to publish, then tags `HEAD`,
+5. builds the universal `foot.app` with Sparkle, signs it with the
    hardened runtime, notarizes and staples it, and zips it
    (`macos/dist.sh`, also `make dist` for a build without releasing),
-3. signs the zip for Sparkle, and writes the appcast,
-4. pushes the tag, and creates the GitHub release with both,
-5. updates the cask in gobijan/homebrew-tap (the first release creates
+6. signs the zip for Sparkle, and writes the appcast,
+7. pushes the tag, and creates the GitHub release with both,
+8. updates the cask in gobijan/homebrew-tap (the first release creates
    that repository).
+
+If it fails, fix the cause and run `make publish` again: the tag is
+only pushed once `foot.app` is built and notarized, and the edited
+release notes are kept (`build-release/release-notes-<version>.md`).
 
 Installed copies find the update through the appcast of the latest
 release
