@@ -114,7 +114,8 @@ sign "$framework/Versions/B/Autoupdate"
 sign "$framework/Versions/B/Updater.app"
 sign "$framework"
 sign "$app/Contents/MacOS/footclient"
-sign "$app"
+# The privacy permissions of the programs running in foot
+sign --entitlements macos/foot.entitlements "$app"
 codesign --verify --deep --strict "$app"
 
 echo "==> Notarizing"
