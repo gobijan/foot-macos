@@ -481,7 +481,7 @@ void wayl_win_close(struct wl_window *win);
 /* Asks the window to resize itself to fit width x height (logical) */
 void wayl_win_set_content_size(struct wl_window *win, int width, int height);
 
-/* Cell size, for window resize increments; when it changes (font size,
+/* Cell size, for the window's minimum size; when it changes (font size,
  * scale), the window adopts the terminal's size (resize-keep-grid) */
 void wayl_win_set_resize_increments(
     struct wl_window *win, int cell_width, int cell_height);

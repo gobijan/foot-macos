@@ -656,10 +656,9 @@ wayl_win_set_resize_increments(struct wl_window *win, int cell_width, int cell_h
     NSWindow *nswindow = nswindow_of(win);
     const struct config *conf = win->term->conf;
 
-    nswindow.contentResizeIncrements = conf->resize_by_cells
-        ? NSMakeSize(MAX(cell_width, 1), MAX(cell_height, 1))
-        : NSMakeSize(1, 1);
-
+    /* Not contentResizeIncrements: AppKit applies those to tiled
+     * windows too, rounding up (overlapping the neighbor). See
+     * windowWillResize:toSize: instead */
     nswindow.contentMinSize = NSMakeSize(
         cell_width + conf->pad_left + conf->pad_right,
         cell_height + conf->pad_top + conf->pad_bottom);
@@ -781,6 +780,43 @@ wayl_win_ime_cursor_rect_changed(struct wl_window *win)
     win->is_activated = false;
     term_visual_focus_out(term);
     app_run_hooks();
+}
+
+/*
+ * resize-by-cells: the user resizes the window in whole cells. Only
+ * while resizing it with the mouse; tiled, zoomed etc windows get the
+ * exact size they're given. Never larger than proposed.
+ */
+- (NSSize)windowWillResize:(NSWindow *)sender toSize:(NSSize)size
+{
+    struct wl_window *win = _win;
+    if (win == NULL || !sender.inLiveResize)
+        return size;
+
+    const struct terminal *term = win->term;
+    const struct config *conf = term->conf;
+    if (!conf->resize_by_cells || term->cell_width == 0 || term->cell_height == 0)
+        return size;
+
+    /* In pixels, as render_resize() */
+    const float scale = term->scale;
+    const int pad_x = scale * conf->pad_left + scale * conf->pad_right;
+    const int pad_y = scale * conf->pad_top + scale * conf->pad_bottom;
+
+    NSRect content = [sender contentRectForFrameRect:
+        NSMakeRect(0, 0, size.width, size.height)];
+
+    const int width = roundf(NSWidth(content) * scale);
+    const int height = roundf(NSHeight(content) * scale);
+    const int cols = MAX((width - pad_x) / term->cell_width, 1);
+    const int rows = MAX((height - pad_y) / term->cell_height, 1);
+
+    /* Whole points: the grid is sized from the view's (integral) size */
+    content.size = NSMakeSize(
+        ceilf((cols * term->cell_width + pad_x) / scale),
+        ceilf((rows * term->cell_height + pad_y) / scale));
+
+    return [sender frameRectForContentRect:content].size;
 }
 
 - (void)windowWillStartLiveResize:(NSNotification *)notification
