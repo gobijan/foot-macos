@@ -85,6 +85,10 @@ check-config: build ## Check your foot.ini (or CONFIG=path)
 	./$(DEBUG_DIR)/macos/foot --check-config $(if $(CONFIG),--config='$(CONFIG)')
 	@echo 'The configuration is valid.'
 
+.PHONY: bench
+bench: release ## Benchmark foot against kitty and Ghostty (macos/bench; ~10 minutes, windows open)
+	macos/bench/bench.py $(ARGS)
+
 .PHONY: crash
 crash: ## Open foot's newest crash report in Console
 	@report=$$(ls -t ~/Library/Logs/DiagnosticReports/foot*.ips 2>/dev/null | head -1); \
@@ -189,7 +193,7 @@ help: ## List the commands
 	awk -v b="$$b" -v r="$$r" 'BEGIN { FS = ":.*## "; split("36;172;212 71;180;19 227;196;1 242;175;253 19;194;153 246;43;90 230;230;230", palette, " ") } \
 		/^##@/ { c = b == "" ? "" : "\033[38;2;" palette[n++ % 7 + 1] "m"; printf "\n  %s%s%s\n", b, substr($$0, 5), r } \
 		/^[a-z0-9-]+:.*## / { printf "    %s%-14s%s %s\n", c, $$1, r, $$2 }' $(MAKEFILE_LIST); \
-	printf "\n  $${d}Variables: ARGS='-e htop' for run and run-release, CONFIG=<path> for check-config$${r}\n\n"
+	printf "\n  $${d}Variables: ARGS='-e htop' for run and run-release, ARGS='--save' (or --help) for bench, CONFIG=<path> for check-config$${r}\n\n"
 
 # Configures a build directory the first time it's used.
 $(DEBUG_DIR)/build.ninja:
