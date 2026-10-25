@@ -10,6 +10,7 @@
 #include "char32.h"
 #include "render.h"
 #include "search.h"
+#include "selection.h"
 #include "terminal.h"
 #include "util.h"
 #include "wayland.h"
@@ -138,8 +139,11 @@ ime_done(struct seat *seat)
         if (term != NULL) {
             if (term->is_searching)
                 render_refresh_search(term);
-            else
+            else {
+                term_reset_view(term);
+                selection_cancel(term);
                 render_refresh(term);
+            }
         }
     }
 
