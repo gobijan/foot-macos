@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# Merges upstream foot into the current branch (normally 'macos'), and
+# Merges upstream foot into the current branch (normally 'main'), and
 # builds and tests the result.
 #
 #   macos/sync-upstream.sh [--no-build]

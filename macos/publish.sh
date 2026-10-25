@@ -48,7 +48,7 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
 
 echo "==> Checking"
-[[ $(git rev-parse --abbrev-ref HEAD) == macos ]] || fail "not on the 'macos' branch (git switch macos)"
+[[ $(git rev-parse --abbrev-ref HEAD) == main ]] || fail "not on the 'main' branch (git switch main)"
 if [[ -n $(git status --porcelain) ]]; then
     git status --short | sed 's/^/    /'
     fail "there are uncommitted changes; commit them, or put them aside (git stash)"
@@ -57,14 +57,14 @@ ok "everything is committed"
 
 gh auth status >/dev/null 2>&1 || fail "the GitHub CLI isn't signed in (gh auth login)"
 
-git fetch -q origin macos
-behind=$(git rev-list --count HEAD..origin/macos)
-[[ $behind -eq 0 ]] || fail "origin/macos has $behind commit(s) that aren't here (git pull)"
-ahead=$(git rev-list --count origin/macos..HEAD)
+git fetch -q origin main
+behind=$(git rev-list --count HEAD..origin/main)
+[[ $behind -eq 0 ]] || fail "origin/main has $behind commit(s) that aren't here (git pull)"
+ahead=$(git rev-list --count origin/main..HEAD)
 if [[ $ahead -gt 0 ]]; then
-    git log --oneline --no-decorate origin/macos..HEAD | sed 's/^/    /'
+    git log --oneline --no-decorate origin/main..HEAD | sed 's/^/    /'
     ask "$ahead commit(s) aren't pushed yet. Push them now?" y || fail "HEAD isn't pushed"
-    git push -q origin macos
+    git push -q origin main
 fi
 ok "pushed"
 

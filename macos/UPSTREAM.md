@@ -7,7 +7,7 @@ happens in the terminal core, which this port doesn't touch.
 ## Branches
 
 - `master`: identical to upstream's `master` (never commit to it).
-- `macos`: the port; upstream is *merged* into it (never rebased).
+- `main`: the port; upstream is *merged* into it (never rebased).
 
 ## Syncing
 
@@ -102,5 +102,5 @@ To see the port's complete diff against upstream (`make port-diff`
 prints a summary):
 
 ```sh
-git diff master...macos -- . ':!macos' ':!.github' ':!Makefile' ':!AGENTS.md' ':!CLAUDE.md'
+git diff master...main -- . ':!macos' ':!.github' ':!Makefile' ':!AGENTS.md' ':!CLAUDE.md'
 ```

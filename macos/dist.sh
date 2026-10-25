@@ -95,7 +95,7 @@ for exe in foot footclient; do
 done
 
 # CFBundleVersion: a number that grows with every release (Sparkle
-# compares it); the commit count of the 'macos' branch
+# compares it); the commit count of the 'main' branch
 plist=$app/Contents/Info.plist
 plutil -replace CFBundleShortVersionString -string "$version" "$plist"
 plutil -replace CFBundleVersion -string "$(git rev-list --count HEAD)" "$plist"
