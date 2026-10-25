@@ -649,6 +649,10 @@ wayl_theme_switch_all(bool dark)
 
 /*
  * Menu
+ *
+ * Key equivalents are macOS' usual ones (Cmd+C, Cmd+F, Ctrl+Cmd+F) or,
+ * where there's none, foot's default binding with Cmd instead of Ctrl
+ * (Ctrl+Shift+O: Cmd+Shift+O). foot's own bindings keep working.
  */
 
 static NSMenuItem *
@@ -738,7 +742,7 @@ create_menu(void)
         [menu addItem:[NSMenuItem separatorItem]];
         [menu addItem:themes_menu_item()];
         [menu addItem:[NSMenuItem separatorItem]];
-        [menu addItem:menu_item(@"Show URLs", @selector(showURLs:), @"u",
+        [menu addItem:menu_item(@"Show URLs", @selector(showURLs:), @"o",
                                 cmd | NSEventModifierFlagShift)];
         [menu addItem:[NSMenuItem separatorItem]];
         [menu addItem:menu_item(@"Enter Full Screen", @selector(toggleFullScreen:), @"f",
