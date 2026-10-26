@@ -12,6 +12,7 @@ import sys
 
 MACOS_DEFAULTS = [
     ('# login-shell=no\n', '# login-shell=yes\n'),
+    ('# pad=0x0 center-when-maximized-and-fullscreen\n', '# pad=8x8 center-when-maximized-and-fullscreen\n'),
     ('# font=monospace:size=8\n', '# font=monospace:size=13\n'),
     ("# shell=$SHELL (if set, otherwise user's default shell from /etc/passwd)\n",
      "# shell=$SHELL (if set, otherwise user's default shell from /etc/passwd)\n"

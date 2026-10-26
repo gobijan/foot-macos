@@ -3861,6 +3861,9 @@ config_load(struct config *conf, const char *conf_path,
     /* macOS: Grok Night and Grok Day (macos/default-colors.c) */
     default_colors(&conf->colors_dark, &conf->colors_light);
 
+    /* macOS: some room around the text (pad=8x8) */
+    conf->pad_left = conf->pad_top = conf->pad_right = conf->pad_bottom = 8;
+
     parse_modifiers(XKB_MOD_NAME_SHIFT, 5, &conf->mouse.selection_override_modifiers);
 
     /* macOS: Notification Center via osascript; URLs open with the default app */

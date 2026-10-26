@@ -129,6 +129,8 @@ frameworks.
 * Font sizes are in points, like in other macOS applications. The
   default font is SF Mono (`monospace`), 13pt. Icons from installed Nerd
   Fonts are used automatically.
+* There's some room around the text: 8pt (`pad=8x8` in `[main]`;
+  upstream's default is none).
 * Glyphs are thickened (font smoothing) like macOS' own text rendering,
   which matters most on non-Retina displays. Tune it with
   `macos-font-smoothing-strength=0.0-1.0`, or turn it off with
