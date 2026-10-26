@@ -55,6 +55,19 @@ void quake_window_destroyed(struct wl_window *win);
 /* themes.m: the quake terminal's color themes were replaced */
 void quake_theme_changed(void);
 
+/* Shown, and has the keyboard focus (a toggle hides it) */
+bool quake_is_focused(void);
+
+/*
+ * hotkey.m: the quake terminal's global hotkey (macos-quake-hotkey);
+ * sym 0 (XKB_KEY_NoSymbol): none
+ */
+void hotkey_register(uint32_t sym, unsigned mods, void (*pressed)(void));
+void hotkey_layout_changed(void);
+
+/* Shows the hotkey in the menu */
+void hotkey_set_key_equivalent(NSMenuItem *item, uint32_t sym, unsigned mods);
+
 /* window.m */
 void window_update_outputs(struct wl_window *win);
 void window_resized(struct wl_window *win);

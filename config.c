@@ -1224,6 +1224,65 @@ parse_section_main(struct context *ctx)
         return true;
     }
 
+    else if (streq(key, "macos-quake-hotkey")) {
+        /* E.g. Mod1+grave (Mod1: Option, Mod4: Command), or none */
+        static const struct {
+            const char *name;
+            enum macos_hotkey_mod mod;
+        } mods[] = {
+            {"Shift", MACOS_HOTKEY_SHIFT},
+            {"Control", MACOS_HOTKEY_CONTROL},
+            {"Mod1", MACOS_HOTKEY_OPTION}, {"Alt", MACOS_HOTKEY_OPTION},
+            {"Mod4", MACOS_HOTKEY_COMMAND}, {"Super", MACOS_HOTKEY_COMMAND},
+        };
+
+        conf->macos.quake.hotkey.sym = XKB_KEY_NoSymbol;
+        conf->macos.quake.hotkey.mods = 0;
+        if (streq(ctx->value, "none"))
+            return true;
+
+        char *copy = xstrdup(ctx->value);
+        char *key = strrchr(copy, '+');
+        unsigned hotkey_mods = 0;
+        bool ok = true;
+
+        if (key == NULL)
+            key = copy;
+        else {
+            *key++ = '\0';
+            for (char *tok_ctx = NULL, *mod = strtok_r(copy, "+", &tok_ctx);
+                 mod != NULL && ok;
+                 mod = strtok_r(NULL, "+", &tok_ctx))
+            {
+                ok = false;
+                for (size_t i = 0; i < ALEN(mods); i++) {
+                    if (streq(mod, mods[i].name)) {
+                        hotkey_mods |= mods[i].mod;
+                        ok = true;
+                    }
+                }
+                if (!ok) {
+                    LOG_CONTEXTUAL_ERR(
+                        "%s: not one of Shift, Control, Mod1 (Option) or Mod4 (Command)", mod);
+                }
+            }
+        }
+
+        const xkb_keysym_t sym = ok ? xkb_keysym_from_name(key, 0) : XKB_KEY_NoSymbol;
+        if (ok && sym == XKB_KEY_NoSymbol) {
+            LOG_CONTEXTUAL_ERR("not a valid XKB key name: %s", key);
+            ok = false;
+        }
+        free(copy);
+
+        if (!ok)
+            return false;
+
+        conf->macos.quake.hotkey.sym = sym;
+        conf->macos.quake.hotkey.mods = hotkey_mods;
+        return true;
+    }
+
     else if (streq(key, "macos-quake-area")) {
         float x, y, width, height;
         char end;
@@ -3623,6 +3682,7 @@ config_load(struct config *conf, const char *conf_path,
                 .alpha = -1.,
                 .auto_hide = true,
                 .animation_duration = .2,
+                .hotkey = {.sym = XKB_KEY_grave, .mods = MACOS_HOTKEY_OPTION},
             },
         },
 

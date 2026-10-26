@@ -63,6 +63,13 @@ static struct {
     bool (*settings)(void *data);
     void *settings_data;
 
+    /* The quake terminal: Shell > Show Quake Terminal, the Dock menu, the hotkey */
+    void (*quake)(void *data);
+    void *quake_data;
+    uint32_t hotkey_sym;
+    unsigned hotkey_mods;
+    NSMenuItem *quake_item;
+
     FootAppDelegate *delegate;
 } app;
 
@@ -205,6 +212,35 @@ fdm_callback(CFFileDescriptorRef fd, CFOptionFlags types, void *info)
         CFFileDescriptorEnableCallBacks(fd, kCFFileDescriptorReadCallBack);
 }
 
+void
+wayl_set_quake_handler(struct wayland *wayl, void (*handler)(void *data),
+                       void *data, uint32_t hotkey_sym, unsigned hotkey_mods)
+{
+    app.quake = handler;
+    app.quake_data = data;
+    app.hotkey_sym = hotkey_sym;
+    app.hotkey_mods = hotkey_mods;
+
+    if (app.quake_item != nil)
+        hotkey_set_key_equivalent(app.quake_item, hotkey_sym, hotkey_mods);
+}
+
+static void
+toggle_quake(void)
+{
+    if (app.quake == NULL)
+        return;
+
+    app.quake(app.quake_data);
+    app_run_hooks();
+}
+
+static NSString *
+quake_item_title(void)
+{
+    return quake_is_focused() ? @"Hide Quake Terminal" : @"Show Quake Terminal";
+}
+
 bool
 wayl_run(struct wayland *wayl, volatile sig_atomic_t *aborted, bool keep_running)
 {
@@ -223,6 +259,14 @@ wayl_run(struct wayland *wayl, volatile sig_atomic_t *aborted, bool keep_running
         app_windows_changed();
     else if (@available(macOS 14.0, *))
         [NSApp activate];
+
+    /*
+     * Only for the application: a server is controlled by footclient,
+     * and foot started from a shell exits with its last window (also,
+     * there may be many of those)
+     */
+    if (app.launched_as_app && !app.server && app.quake != NULL)
+        hotkey_register(app.hotkey_sym, app.hotkey_mods, &toggle_quake);
 
     app.running = true;
     [NSApp run];
@@ -554,6 +598,9 @@ static void
 layout_changed(void *data)
 {
     load_keymap(data);
+
+    /* The hotkey's key may be another one now */
+    hotkey_layout_changed();
 }
 
 static void
@@ -734,6 +781,8 @@ create_menu(void)
         NSMenu *menu = [[NSMenu alloc] initWithTitle:@"Shell"];
 
         [menu addItem:menu_item(@"New Window", @selector(newWindow:), @"n", cmd)];
+        app.quake_item = menu_item(quake_item_title(), @selector(toggleQuakeTerminal:), @"", 0);
+        [menu addItem:app.quake_item];
         [menu addItem:[NSMenuItem separatorItem]];
         [menu addItem:menu_item(@"Close Window", @selector(performClose:), @"w", cmd)];
 
@@ -813,6 +862,20 @@ create_menu(void)
     new_window(NULL);
 }
 
+- (void)toggleQuakeTerminal:(id)sender
+{
+    toggle_quake();
+}
+
+- (BOOL)validateMenuItem:(NSMenuItem *)item
+{
+    if (item.action == @selector(toggleQuakeTerminal:)) {
+        item.title = quake_item_title();
+        return app.quake != NULL;
+    }
+    return YES;
+}
+
 - (void)openSettings:(id)sender
 {
     if (app.settings != NULL && !app.settings(app.settings_data))
@@ -839,6 +902,7 @@ create_menu(void)
 {
     NSMenu *menu = [[NSMenu alloc] init];
     [menu addItemWithTitle:@"New Window" action:@selector(newHomeWindow:) keyEquivalent:@""];
+    [menu addItemWithTitle:quake_item_title() action:@selector(toggleQuakeTerminal:) keyEquivalent:@""];
     return menu;
 }
 

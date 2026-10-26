@@ -372,6 +372,14 @@ is_visible(void)
     return quake.visible || quake.show_when_configured;
 }
 
+bool
+quake_is_focused(void)
+{
+    return quake.term != NULL && !quake.term->shutdown.in_progress &&
+        quake.term->window != NULL && quake.term->window->is_configured &&
+        quake.visible && quake_window().isKeyWindow;
+}
+
 /*
  * macos-quake-alpha: in place of the color themes' alpha
  */

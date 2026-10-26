@@ -1,6 +1,7 @@
 /*
- * Additional terminal windows in this process (Cmd+N, the Dock), and
- * opening the configuration in an editor (Cmd+,).
+ * Additional terminal windows in this process (Cmd+N, the Dock),
+ * opening the configuration in an editor (Cmd+,), and the quake
+ * terminal (Shell > Show Quake Terminal, the Dock, the hotkey).
  */
 
 #include <errno.h>
@@ -16,6 +17,7 @@
 #define LOG_MODULE "windows"
 #define LOG_ENABLE_DBG 0
 #include "log.h"
+#include "client-protocol.h"
 #include "config.h"
 #include "terminal.h"
 #include "tokenize.h"
@@ -95,6 +97,35 @@ static bool
 new_window(void *data, const char *cwd)
 {
     return new_terminal(data, cwd, 0, NULL);
+}
+
+/*
+ * Toggles the quake terminal, in the home directory. Its macos-quake-*
+ * options are re-loaded each time, so that changes apply right away.
+ */
+static void
+toggle_quake(void *data)
+{
+    struct new_window_context *ctx = data;
+    struct config *conf = xmalloc(sizeof(*conf));
+
+    if (!windows_load_config(conf)) {
+        config_free(conf);
+        free(conf);
+        conf = config_clone(ctx->conf);
+    }
+
+    const char *home = getenv("HOME");
+    config_override_t overrides = tll_init();
+
+    if (wayl_quake(ctx->wayl, ctx->fdm, ctx->reaper, conf, CLIENT_QUAKE_TOGGLE,
+                   &overrides, home != NULL ? home : "/", 0, NULL, NULL) < 0)
+    {
+        LOG_ERR("failed to open the quake terminal");
+    }
+
+    config_free(conf);
+    free(conf);
 }
 
 static char *
@@ -255,4 +286,7 @@ wayl_enable_new_windows(struct wayland *wayl, const struct config *conf,
 
     wayl_set_new_window_handler(wayl, &new_window, &context);
     wayl_set_settings_handler(wayl, &open_settings, &context);
+    wayl_set_quake_handler(wayl, &toggle_quake, &context,
+                           conf->macos.quake.hotkey.sym,
+                           conf->macos.quake.hotkey.mods);
 }

@@ -227,6 +227,14 @@ enum underline_style {
     UNDERLINE_DASHED,
 };
 
+/* macos-quake-hotkey's modifiers */
+enum macos_hotkey_mod {
+    MACOS_HOTKEY_SHIFT = 1 << 0,
+    MACOS_HOTKEY_CONTROL = 1 << 1,
+    MACOS_HOTKEY_OPTION = 1 << 2,
+    MACOS_HOTKEY_COMMAND = 1 << 3,
+};
+
 struct config {
     char *conf_path;
 
@@ -250,6 +258,12 @@ struct config {
             bool auto_hide;
             float animation_duration;   /* Seconds */
             struct { float x, y, width, height; } area;  /* width 0: the screen's */
+
+            /* The global hotkey; sym 0 (XKB_KEY_NoSymbol): none */
+            struct {
+                uint32_t sym;           /* xkb_keysym_t */
+                unsigned mods;          /* enum macos_hotkey_mod */
+            } hotkey;
         } quake;
     } macos;
 

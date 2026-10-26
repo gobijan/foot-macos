@@ -424,6 +424,15 @@ void wayl_set_settings_handler(
     struct wayland *wayl, bool (*handler)(void *data), void *data);
 
 /*
+ * Toggles the quake terminal (application and Dock menus); and, when
+ * started as an application (not a server), with the global hotkey
+ * ('hotkey_sym', 'hotkey_mods': macos-quake-hotkey)
+ */
+void wayl_set_quake_handler(
+    struct wayland *wayl, void (*handler)(void *data), void *data,
+    uint32_t hotkey_sym, unsigned hotkey_mods);
+
+/*
  * Enables the above, with foot's implementation (macos/windows.c):
  * new windows re-load the configuration ('conf_path', or the default
  * location); 'conf' is used if that fails.
@@ -435,12 +444,13 @@ void wayl_enable_new_windows(
     struct fdm *fdm, struct reaper *reaper);
 
 /*
- * footclient --quake (macos/quake.m): shows, hides or toggles the
- * quake terminal ('action': enum client_quake). If there's none, it's
- * created first, as footclient's other terminals are ('cwd', 'argv',
- * 'envp'), with 'conf' and 'overrides'. The overrides' macos-quake-*
- * options also apply to an existing quake terminal. Returns its state
- * (enum client_quake_state), or a negative value on errors.
+ * footclient --quake, and the menus and the hotkey (macos/windows.c):
+ * shows, hides or toggles the quake terminal (macos/quake.m; 'action':
+ * enum client_quake). If there's none, it's created first, as
+ * footclient's other terminals are ('cwd', 'argv', 'envp'), with
+ * 'conf' and 'overrides'. Their macos-quake-* options apply to an
+ * existing quake terminal too. Returns its state (enum
+ * client_quake_state), or a negative value on errors.
  */
 int wayl_quake(
     struct wayland *wayl, struct fdm *fdm, struct reaper *reaper,

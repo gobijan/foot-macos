@@ -157,29 +157,28 @@ frameworks.
 ## Quake terminal
 
 A drop-down terminal: it slides in from an edge of the screen, over
-other applications (full screen ones too), on every Space. It lives in
-foot's server; start the server once (e.g. at login), and bind a hotkey
-(skhd, Hammerspoon, Raycast, a window manager, …) to `footclient --quake`:
+other applications (full screen ones too), on every Space. Shell > Show
+Quake Terminal (also in the Dock icon's menu) shows it, starting its
+shell the first time, and hides it again. Toggled while it's shown, but
+not focused, it gets the focus. Its shell runs until it exits (or
+`Cmd+W`); the next time, a new one starts, in the home directory.
 
-```sh
-foot --server &
-footclient --quake          # toggles it: shows it (starting its shell the first time), or hides it
-footclient --quake=show     # or hide, or status
-```
+Its global hotkey is Option+\` (`macos-quake-hotkey=Mod1+grave` in
+`[main]`): the key below Esc. It works while foot runs as an
+application (started from the Finder, the Dock or at login, not from a
+shell), and needs no permissions. To change it, give the modifiers
+(`Shift`, `Control`, `Mod1` for Option, `Mod4` for Command) and an XKB
+key name (e.g. `grave`, `space`, `F12`: the key that types it without
+modifiers, in the current keyboard layout), or `none`; foot has to be
+started again. If another application uses the same keys (e.g. OmniWM's
+own quake terminal), give one of them other keys.
 
-Each prints its state afterwards, `visible` or `hidden`. `hide` starts it
-hidden if it isn't running yet (so that it's there right away when
-shown); `status` changes nothing. Toggled while it's shown, but not
-focused, it gets the focus. Its shell runs until it exits (or `Cmd+W`);
-the next `footclient --quake` starts a new one, with that footclient's
-command, working directory, `-E` and `-o`.
-
-These options in `[main]` control it. With `footclient --quake -o …`,
-they apply right away, for that call (options that aren't given are
-`foot.ini`'s); this is how a window manager can control it:
+These options in `[main]` control it; they're read each time it's
+shown or hidden:
 
 | Option | Default | |
 |---|---|---|
+| `macos-quake-hotkey` | `Mod1+grave` | The global hotkey (Option+\`), or `none` |
 | `macos-quake-position` | `top` | `top`, `bottom`, `left` or `right` (slides in from that edge), or `center` (fades in) |
 | `macos-quake-size` | `100x50` | Width and height, in percent of the screen (without the menu bar and the Dock) |
 | `macos-quake-alpha` | the color theme's | Background opacity, `0.0`-`1.0` |
@@ -187,10 +186,32 @@ they apply right away, for that call (options that aren't given are
 | `macos-quake-animation-duration` | `0.2` | In seconds; `0`: no animation. With Reduce Motion, it fades |
 | `macos-quake-area` | `screen` | `X,Y,WIDTH,HEIGHT`: the area it's placed in instead, in points, in AppKit's screen coordinates (origin at the bottom left of the main display) |
 
-It's shown on the screen with the keyboard focus. While the server has
-no other windows, foot isn't in the Dock (or the application switcher).
-Window managers can tell the quake terminal by its Accessibility
-subrole, `AXFloatingWindow`, and identifier, `io.github.gobijan.foot.quake`.
+It's shown on the screen with the keyboard focus.
+
+### Window managers, hotkey tools: footclient
+
+foot's server has a quake terminal too, controlled by `footclient`;
+e.g. from a window manager, or another hotkey tool (skhd, Hammerspoon,
+Raycast, …):
+
+```sh
+foot --server &
+footclient --quake          # toggles it
+footclient --quake=show     # or hide, or status
+```
+
+Each prints its state afterwards, `visible` or `hidden`. `hide` starts it
+hidden if it isn't running yet (so that it's there right away when
+shown); `status` changes nothing. A new quake terminal gets that
+footclient's command, working directory, `-E` and `-o`. With
+`footclient --quake -o …`, the `macos-quake-*` options apply right away,
+for that call (options that aren't given are those the server started
+with); this is how a window manager can control it.
+
+While the server has no other windows, foot isn't in the Dock (or the
+application switcher). Window managers can tell the quake terminal by
+its Accessibility subrole, `AXFloatingWindow`, and identifier,
+`io.github.gobijan.foot.quake`.
 
 ## Everything else
 
