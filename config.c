@@ -1210,20 +1210,43 @@ parse_section_main(struct context *ctx)
         return true;
     }
 
+    else if (streq(key, "macos-quake-dim")) {
+        float dim;
+        if (!value_to_float(ctx, &dim))
+            return false;
+
+        if (dim < 0. || dim > 1.) {
+            LOG_CONTEXTUAL_ERR("not in range 0.0-1.0");
+            return false;
+        }
+
+        conf->macos.quake.dim = dim;
+        return true;
+    }
+
     else if (streq(key, "macos-quake-auto-hide"))
         return value_to_bool(ctx, &conf->macos.quake.auto_hide);
 
     else if (streq(key, "macos-quake-animation-duration")) {
-        float duration;
-        if (!value_to_float(ctx, &duration))
+        /* IN,OUT: showing, and hiding; one value: both */
+        float in, out;
+        char end;
+        if (strchr(ctx->value, ',') == NULL) {
+            if (!value_to_float(ctx, &in))
+                return false;
+            out = in;
+        } else if (sscanf(ctx->value, "%f,%f%c", &in, &out, &end) != 2) {
+            LOG_CONTEXTUAL_ERR("must be DURATION, or IN,OUT, in seconds");
             return false;
+        }
 
-        if (duration < 0. || duration > 10.) {
+        if (!(in >= 0. && in <= 10. && out >= 0. && out <= 10.)) {
             LOG_CONTEXTUAL_ERR("not in range 0.0-10.0");
             return false;
         }
 
-        conf->macos.quake.animation_duration = duration;
+        conf->macos.quake.animation_in = in;
+        conf->macos.quake.animation_out = out;
         return true;
     }
 
@@ -3683,8 +3706,10 @@ config_load(struct config *conf, const char *conf_path,
                 .width = 0.,    /* Twice the height */
                 .height = 50.,
                 .alpha = -1.,
+                .dim = .6,
                 .auto_hide = true,
-                .animation_duration = .2,
+                .animation_in = .3,     /* As Omarchy's quake console */
+                .animation_out = .2,
                 .hotkey = {.sym = XKB_KEY_grave, .mods = MACOS_HOTKEY_OPTION},
             },
         },

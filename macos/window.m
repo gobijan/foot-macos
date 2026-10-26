@@ -803,6 +803,9 @@ wayl_win_ime_cursor_rect_changed(struct wl_window *win)
     keyboard_modifiers(seat, [NSEvent modifierFlags], app_option_as_alt(), &depressed, &locked);
     input_modifiers(seat, depressed, 0, locked, 0);
 
+    if (win->quake)
+        quake_window_became_key(win);
+
     app_run_hooks();
 }
 

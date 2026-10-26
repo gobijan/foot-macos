@@ -19,9 +19,10 @@
  * is at most one, in the server (foot --server). The first footclient
  * --quake starts it; it's then shown and hidden, until its shell exits.
  *
- * Its placement, opacity, auto-hide and animation are the macos-quake-*
- * options: the server's configuration, with each footclient's overrides
- * (-o). That's how a window manager can control them.
+ * Its placement, opacity, dimming, auto-hide and animation are the
+ * macos-quake-* options: the server's configuration, with each
+ * footclient's overrides (-o). That's how a window manager can control
+ * them.
  */
 
 enum quake_position {
@@ -48,6 +49,11 @@ static struct {
 
     /* Active before the terminal was shown; re-activated when it's hidden */
     NSRunningApplication *previous;
+
+    /* Darkens the rest of the screen (macos-quake-dim) */
+    NSWindow *dim;
+    CGFloat dim_alpha;      /* Darkened (or being darkened) this much */
+    uint64_t dim_generation;
 } quake;
 
 /*
@@ -222,7 +228,7 @@ offscreen_frame(NSRect frame, NSScreen *screen)
 static void
 animate(NSWindow *window, NSRect frame, CGFloat alpha, bool in, void (^done)(void))
 {
-    const double duration = quake.settings.animation_duration;
+    const double duration = in ? quake.settings.animation_in : quake.settings.animation_out;
 
     if (duration <= 0.) {
         [window setFrame:frame display:YES];
@@ -233,8 +239,11 @@ animate(NSWindow *window, NSRect frame, CGFloat alpha, bool in, void (^done)(voi
 
     [NSAnimationContext runAnimationGroup:^(NSAnimationContext *context) {
         context.duration = duration;
-        context.timingFunction = [CAMediaTimingFunction functionWithName:
-            in ? kCAMediaTimingFunctionEaseOut : kCAMediaTimingFunctionEaseIn];
+
+        /* Omarchy's quake console's: easeOutQuint in, easeInOutCubic out */
+        context.timingFunction = in
+            ? [CAMediaTimingFunction functionWithControlPoints:.23 :1. :.32 :1.]
+            : [CAMediaTimingFunction functionWithControlPoints:.65 :.05 :.36 :1.];
 
         [window.animator setFrame:frame display:YES];
         window.animator.alphaValue = alpha;
@@ -255,6 +264,76 @@ focus(NSWindow *window)
             [window makeKeyAndOrderFront:nil];
     });
     CFRunLoopWakeUp(CFRunLoopGetMain());
+}
+
+/*
+ * Dimming (macos-quake-dim): while the terminal has the keyboard focus,
+ * the rest of its screen is darkened, as Omarchy's quake console does.
+ * A black window, under the terminal and over other windows; clicks go
+ * through it.
+ */
+
+static NSWindow *
+dim_window(void)
+{
+    if (quake.dim != nil)
+        return quake.dim;
+
+    NSPanel *panel = [[NSPanel alloc]
+        initWithContentRect:NSZeroRect
+                  styleMask:NSWindowStyleMaskBorderless | NSWindowStyleMaskNonactivatingPanel
+                    backing:NSBackingStoreBuffered
+                      defer:YES];
+
+    panel.backgroundColor = NSColor.blackColor;
+    panel.opaque = NO;
+    panel.hasShadow = NO;
+    panel.ignoresMouseEvents = YES;
+    panel.level = NSFloatingWindowLevel - 1;
+    panel.collectionBehavior = NSWindowCollectionBehaviorCanJoinAllSpaces |
+                               NSWindowCollectionBehaviorTransient |
+                               NSWindowCollectionBehaviorFullScreenAuxiliary |
+                               NSWindowCollectionBehaviorIgnoresCycle;
+    panel.hidesOnDeactivate = NO;
+    panel.canHide = NO;
+    panel.releasedWhenClosed = NO;
+    panel.excludedFromWindowsMenu = YES;
+    panel.animationBehavior = NSWindowAnimationBehaviorNone;
+
+    /* Not a window, to window managers (Accessibility) */
+    [panel setAccessibilityElement:NO];
+
+    quake.dim = panel;
+    return panel;
+}
+
+/* Darkens the screen, or lightens it again; with the terminal's animation */
+static void
+dim(NSScreen *screen, bool on)
+{
+    const CGFloat alpha = on ? quake.settings.dim : 0.;
+    if (alpha == 0. && quake.dim == nil)
+        return;
+
+    NSWindow *window = dim_window();
+    if (screen != nil)
+        [window setFrame:screen.frame display:NO];
+
+    if (alpha == quake.dim_alpha)
+        return;
+
+    const uint64_t generation = ++quake.dim_generation;
+    quake.dim_alpha = alpha;
+
+    if (!window.isVisible) {
+        window.alphaValue = 0.;
+        [window orderFrontRegardless];
+    }
+
+    animate(window, window.frame, alpha, on, ^{
+        if (quake.dim_generation == generation && alpha == 0.)
+            [window orderOut:nil];
+    });
 }
 
 static void
@@ -280,6 +359,7 @@ show(void)
     /* Already shown: the (new) placement, and the keyboard focus */
     if (quake.visible && !quake.sliding_in) {
         [window setFrame:frame display:YES];
+        dim(screen, true);
         focus(window);
         return;
     }
@@ -300,6 +380,7 @@ show(void)
     [window setFrame:from display:NO];
     [window makeKeyAndOrderFront:nil];
 
+    dim(screen, true);
     animate(window, frame, 1., true, ^{
         if (quake.generation != generation)
             return;
@@ -349,6 +430,7 @@ hide(void)
 
     /* Before it's gone, or macOS activates another window of foot's */
     restore_previous(window);
+    dim(nil, false);
 
     NSScreen *screen = window.screen;
     if (!window.isVisible || screen == nil) {
@@ -448,16 +530,28 @@ quake_window_configured(struct wl_window *win)
 }
 
 void
+quake_window_became_key(struct wl_window *win)
+{
+    /* While it slides in, it's placed (and dims) its screen already */
+    if (win->term == quake.term && quake.visible && !quake.sliding_in)
+        dim(((__bridge NSWindow *)win->nswindow).screen, true);
+}
+
+void
 quake_window_resigned_key(struct wl_window *win)
 {
-    if (win->term != quake.term || !quake.visible || quake.sliding_in || !quake.settings.auto_hide)
+    if (win->term != quake.term || !quake.visible || quake.sliding_in)
         return;
 
     /* E.g. an alert */
     if (((__bridge NSWindow *)win->nswindow).attachedSheet != nil)
         return;
 
-    hide();
+    /* Without auto-hide, it stays, but not the dimming: the user works elsewhere */
+    if (quake.settings.auto_hide)
+        hide();
+    else
+        dim(nil, false);
 }
 
 static void
@@ -479,6 +573,7 @@ quake_window_destroyed(struct wl_window *win)
     if (quake.visible)
         restore_previous((__bridge NSWindow *)win->nswindow);
 
+    dim(nil, false);
     reset_state();
 }
 

@@ -255,8 +255,9 @@ struct config {
             int position;               /* top, bottom, left, right, center */
             float width, height;        /* Percent of the area; width 0: twice the height */
             float alpha;                /* < 0: the color theme's */
+            float dim;                  /* How much the rest of the screen is darkened */
             bool auto_hide;
-            float animation_duration;   /* Seconds */
+            float animation_in, animation_out;  /* Seconds: showing, hiding */
             struct { float x, y, width, height; } area;  /* width 0: the screen's */
 
             /* The global hotkey; sym 0 (XKB_KEY_NoSymbol): none */

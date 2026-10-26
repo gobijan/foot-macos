@@ -49,6 +49,7 @@ NSWindow *quake_window_create(NSRect content_rect);
 void quake_window_place(struct wl_window *win);
 void quake_window_configured(struct wl_window *win);
 
+void quake_window_became_key(struct wl_window *win);
 void quake_window_resigned_key(struct wl_window *win);
 void quake_window_destroyed(struct wl_window *win);
 

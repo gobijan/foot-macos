@@ -160,12 +160,13 @@ frameworks.
 
 A drop-down terminal: it slides in from an edge of the screen, over
 other applications (full screen ones too), on every Space. By default,
-it's half the screen high and twice as wide as high, centered at the
-top, as Omarchy's quake console. Shell > Show Quake Terminal (also in
-the Dock icon's menu) shows it, starting its shell the first time, and
-hides it again. Toggled while it's shown, but not focused, it gets the
-focus. Its shell runs until it exits (or `Cmd+W`); the next time, a new
-one starts, in the home directory.
+as Omarchy's quake console, it's half the screen high and twice as wide
+as high, centered at the top, and darkens the rest of the screen.
+Shell > Show Quake Terminal (also in the Dock icon's menu) shows it,
+starting its shell the first time, and hides it again. Toggled while
+it's shown, but not focused, it gets the focus. Its shell runs until it
+exits (or `Cmd+W`); the next time, a new one starts, in the home
+directory.
 
 Its global hotkey is Option+\` (`macos-quake-hotkey=Mod1+grave` in
 `[main]`): the key below Esc. It works while foot runs as an
@@ -186,8 +187,9 @@ shown or hidden:
 | `macos-quake-position` | `top` | `top`, `bottom`, `left` or `right` (slides in from that edge), or `center` (fades in) |
 | `macos-quake-size` | `50` | The height, or `WIDTHxHEIGHT`, in percent of the screen (without the menu bar and the Dock). Without a width, it's twice as wide as high (at most the screen's width); `100x50`: as wide as the screen |
 | `macos-quake-alpha` | the color theme's | Background opacity, `0.0`-`1.0` |
+| `macos-quake-dim` | `0.6` | How much the rest of the screen is darkened while it has the keyboard focus, `0.0`-`1.0`; `0`: not at all |
 | `macos-quake-auto-hide` | `yes` | Hides it when it loses the keyboard focus |
-| `macos-quake-animation-duration` | `0.2` | In seconds; `0`: no animation. With Reduce Motion, it fades |
+| `macos-quake-animation-duration` | `0.3,0.2` | In seconds, showing and hiding (one value: both); `0`: no animation. With Reduce Motion, it fades |
 | `macos-quake-area` | `screen` | `X,Y,WIDTH,HEIGHT`: the area it's placed in instead, in points, in AppKit's screen coordinates (origin at the bottom left of the main display) |
 
 It's shown on the screen with the keyboard focus.
