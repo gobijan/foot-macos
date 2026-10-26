@@ -253,7 +253,7 @@ struct config {
         /* The quake terminal (footclient --quake, macos/quake.m) */
         struct macos_quake {
             int position;               /* top, bottom, left, right, center */
-            float width, height;        /* Percent of the area */
+            float width, height;        /* Percent of the area; width 0: twice the height */
             float alpha;                /* < 0: the color theme's */
             bool auto_hide;
             float animation_duration;   /* Seconds */

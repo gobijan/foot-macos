@@ -1179,12 +1179,15 @@ parse_section_main(struct context *ctx)
     }
 
     else if (streq(key, "macos-quake-size")) {
-        float width, height;
+        /* HEIGHT (the width is twice the height: 0), or WIDTHxHEIGHT */
+        float width = 0., height = 0.;
         char end;
-        if (sscanf(ctx->value, "%fx%f%c", &width, &height, &end) != 2 ||
-            !(width > 0. && width <= 100. && height > 0. && height <= 100.))
-        {
-            LOG_CONTEXTUAL_ERR("must be WIDTHxHEIGHT, in percent (1-100)");
+        const bool valid = strchr(ctx->value, 'x') == NULL
+            ? sscanf(ctx->value, "%f%c", &height, &end) == 1
+            : sscanf(ctx->value, "%fx%f%c", &width, &height, &end) == 2 &&
+              width > 0. && width <= 100.;
+        if (!valid || !(height > 0. && height <= 100.)) {
+            LOG_CONTEXTUAL_ERR("must be HEIGHT or WIDTHxHEIGHT, in percent (1-100)");
             return false;
         }
 
@@ -3677,7 +3680,7 @@ config_load(struct config *conf, const char *conf_path,
             .font_smoothing_strength = 1.,
             .follow_appearance = true,
             .quake = {
-                .width = 100.,
+                .width = 0.,    /* Twice the height */
                 .height = 50.,
                 .alpha = -1.,
                 .auto_hide = true,

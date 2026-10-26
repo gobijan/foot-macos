@@ -167,8 +167,12 @@ static NSRect
 placement_frame(NSRect area)
 {
     const struct macos_quake *s = &quake.settings;
-    const CGFloat width = MAX(round(NSWidth(area) * s->width / 100.), 1.);
     const CGFloat height = MAX(round(NSHeight(area) * s->height / 100.), 1.);
+
+    /* Without a width, twice the height (as Omarchy's quake console), at most the area's */
+    const CGFloat width = s->width > 0.
+        ? MAX(round(NSWidth(area) * s->width / 100.), 1.)
+        : MIN(2. * height, NSWidth(area));
 
     NSRect frame = NSMakeRect(
         NSMinX(area) + round((NSWidth(area) - width) / 2.),

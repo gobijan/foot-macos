@@ -159,11 +159,13 @@ frameworks.
 ## Quake terminal
 
 A drop-down terminal: it slides in from an edge of the screen, over
-other applications (full screen ones too), on every Space. Shell > Show
-Quake Terminal (also in the Dock icon's menu) shows it, starting its
-shell the first time, and hides it again. Toggled while it's shown, but
-not focused, it gets the focus. Its shell runs until it exits (or
-`Cmd+W`); the next time, a new one starts, in the home directory.
+other applications (full screen ones too), on every Space. By default,
+it's half the screen high and twice as wide as high, centered at the
+top, as Omarchy's quake console. Shell > Show Quake Terminal (also in
+the Dock icon's menu) shows it, starting its shell the first time, and
+hides it again. Toggled while it's shown, but not focused, it gets the
+focus. Its shell runs until it exits (or `Cmd+W`); the next time, a new
+one starts, in the home directory.
 
 Its global hotkey is Option+\` (`macos-quake-hotkey=Mod1+grave` in
 `[main]`): the key below Esc. It works while foot runs as an
@@ -182,7 +184,7 @@ shown or hidden:
 |---|---|---|
 | `macos-quake-hotkey` | `Mod1+grave` | The global hotkey (Option+\`), or `none` |
 | `macos-quake-position` | `top` | `top`, `bottom`, `left` or `right` (slides in from that edge), or `center` (fades in) |
-| `macos-quake-size` | `100x50` | Width and height, in percent of the screen (without the menu bar and the Dock) |
+| `macos-quake-size` | `50` | The height, or `WIDTHxHEIGHT`, in percent of the screen (without the menu bar and the Dock). Without a width, it's twice as wide as high (at most the screen's width); `100x50`: as wide as the screen |
 | `macos-quake-alpha` | the color theme's | Background opacity, `0.0`-`1.0` |
 | `macos-quake-auto-hide` | `yes` | Hides it when it loses the keyboard focus |
 | `macos-quake-animation-duration` | `0.2` | In seconds; `0`: no animation. With Reduce Motion, it fades |
