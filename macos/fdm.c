@@ -29,7 +29,7 @@
  * combined event mask as with epoll.
  *
  * Signals are received with EVFILT_SIGNAL knotes, on the same queue,
- * so no signal handler (or signal mask juggling) is needed.
+ * so no signal mask juggling is needed (see fdm_signal_add()).
  *
  * Besides the classic blocking fdm_poll(), the FDM can be driven by a
  * native run loop: fdm_fd() is readable whenever events are pending,
@@ -350,6 +350,18 @@ default_action_is_ignore(int signo)
         signo == SIGCONT || signo == SIGINFO;
 }
 
+/*
+ * Keeps the default action (e.g. terminating foot) from happening; the
+ * signal itself is handled through kqueue. Unlike an ignored signal
+ * (SIG_IGN), a caught one isn't inherited by the processes foot starts
+ * (exec resets it to the default action): the shell, and its commands,
+ * would ignore e.g. SIGINT and SIGTERM.
+ */
+static void
+signal_caught(int signo)
+{
+}
+
 bool
 fdm_signal_add(struct fdm *fdm, int signo, fdm_signal_handler_t handler, void *data)
 {
@@ -366,9 +378,9 @@ fdm_signal_add(struct fdm *fdm, int signo, fdm_signal_handler_t handler, void *d
 
     /*
      * EVFILT_SIGNAL records every attempt to deliver the signal,
-     * even if it is ignored. Make sure the default action doesn't
+     * even if it is caught. Make sure the default action doesn't
      * terminate us. Signals that are discarded by default are left
-     * alone; SIG_IGN for SIGCHLD would e.g. enable auto-reaping.
+     * alone.
      */
     struct sigaction original;
     if (sigaction(signo, NULL, &original) < 0) {
@@ -378,10 +390,13 @@ fdm_signal_add(struct fdm *fdm, int signo, fdm_signal_handler_t handler, void *d
     }
 
     if (!default_action_is_ignore(signo)) {
-        struct sigaction action = {.sa_handler = SIG_IGN};
+        struct sigaction action = {
+            .sa_handler = &signal_caught,
+            .sa_flags = SA_RESTART,
+        };
         sigemptyset(&action.sa_mask);
         if (sigaction(signo, &action, NULL) < 0) {
-            LOG_ERRNO("failed to ignore signal %d (SIG%s)",
+            LOG_ERRNO("failed to catch signal %d (SIG%s)",
                       signo, signame(signo));
             return false;
         }
