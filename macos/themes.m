@@ -292,6 +292,9 @@ apply_settings(void)
         term_conf->initial_color_theme = conf.initial_color_theme;
         term_conf->macos.follow_appearance = conf.macos.follow_appearance;
 
+        if (term->window != NULL && term->window->quake)
+            quake_theme_changed();
+
         app_apply_color_theme(term, true);
     }
 

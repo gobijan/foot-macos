@@ -375,7 +375,9 @@ window_fit(struct wl_window *win)
     struct terminal *term = win->term;
     NSWindow *nswindow = nswindow_of(win);
 
-    if (!win->is_fullscreen && !win->is_maximized && !win->is_resizing) {
+    if (!win->is_fullscreen && !win->is_maximized && !win->is_tiled &&
+        !win->is_resizing)
+    {
         const NSRect old = nswindow.frame;
         NSRect frame = [nswindow frameRectForContentRect:NSMakeRect(
             0, 0, term->width / term->scale, term->height / term->scale)];
@@ -406,9 +408,24 @@ window_configure(struct wl_window *win)
     struct terminal *term = win->term;
     NSWindow *nswindow = nswindow_of(win);
 
+    /* The quake terminal's size (and screen) is its placement's */
+    if (win->quake)
+        quake_window_place(win);
+
     output_changed(win);
 
     win->is_configured = true;
+
+    if (win->quake) {
+        const NSSize size = view_of(win).bounds.size;
+        render_resize(term, (int)size.width, (int)size.height, RESIZE_BY_CELLS);
+        app_apply_color_theme(term, false);
+        quake_window_configured(win);
+
+        term_window_configured(term);
+        app_run_hooks();
+        return;
+    }
 
     /* Width/height 0: foot picks the size (from the configuration) */
     render_resize(term, 0, 0, RESIZE_BY_CELLS);
@@ -428,6 +445,7 @@ window_configure(struct wl_window *win)
     } else
         [nswindow center];
 
+    app_windows_changed();
     [nswindow makeKeyAndOrderFront:nil];
 
     term_window_configured(term);
@@ -454,18 +472,28 @@ wayl_win_init(struct terminal *term, const char *token)
     /* The real size is chosen in the initial configure */
     const NSRect rect = NSMakeRect(0, 0, 640, 400);
 
-    NSWindow *nswindow = [[NSWindow alloc]
-        initWithContentRect:rect
-                  styleMask:(NSWindowStyleMaskTitled |
-                             NSWindowStyleMaskClosable |
-                             NSWindowStyleMaskMiniaturizable |
-                             NSWindowStyleMaskResizable)
-                    backing:NSBackingStoreBuffered
-                      defer:NO];
+    /* The quake terminal's size is fixed, like a tiled window's */
+    win->quake = quake_owns_config(conf);
+    win->is_tiled = win->quake;
+
+    NSWindow *nswindow;
+    if (win->quake)
+        nswindow = quake_window_create(rect);
+    else {
+        nswindow = [[NSWindow alloc]
+            initWithContentRect:rect
+                      styleMask:(NSWindowStyleMaskTitled |
+                                 NSWindowStyleMaskClosable |
+                                 NSWindowStyleMaskMiniaturizable |
+                                 NSWindowStyleMaskResizable)
+                        backing:NSBackingStoreBuffered
+                          defer:NO];
+
+        nswindow.tabbingMode = NSWindowTabbingModeDisallowed;
+        nswindow.collectionBehavior |= NSWindowCollectionBehaviorFullScreenPrimary;
+    }
 
     nswindow.releasedWhenClosed = NO;
-    nswindow.tabbingMode = NSWindowTabbingModeDisallowed;
-    nswindow.collectionBehavior |= NSWindowCollectionBehaviorFullScreenPrimary;
     nswindow.title = @"foot";
     win->scale = nswindow.backingScaleFactor;
 
@@ -580,12 +608,19 @@ wayl_win_destroy(struct wl_window *win)
         delegate.win = NULL;
     }
 
+    if (win->quake)
+        quake_window_destroyed(win);
+
     if (win->nswindow != NULL) {
         NSWindow *nswindow = CFBridgingRelease(win->nswindow);
+        win->nswindow = NULL;
         nswindow.delegate = nil;
         [nswindow orderOut:nil];
         [nswindow close];
     }
+
+    if (!win->quake)
+        app_windows_changed();
 
     if (win->resize_timeout_fd >= 0)
         fdm_del(term->wl->fdm, win->resize_timeout_fd);
@@ -616,6 +651,9 @@ wayl_win_set_app_id(struct wl_window *win, const char *app_id)
 void
 wayl_win_set_fullscreen(struct wl_window *win, bool fullscreen)
 {
+    if (win->quake)
+        return;
+
     NSWindow *nswindow = nswindow_of(win);
     const bool is_fullscreen =
         (nswindow.styleMask & NSWindowStyleMaskFullScreen) != 0;
@@ -627,6 +665,9 @@ wayl_win_set_fullscreen(struct wl_window *win, bool fullscreen)
 void
 wayl_win_set_maximized(struct wl_window *win, bool maximized)
 {
+    if (win->quake)
+        return;
+
     NSWindow *nswindow = nswindow_of(win);
     if (maximized != nswindow.isZoomed)
         [nswindow zoom:nil];
@@ -635,7 +676,8 @@ wayl_win_set_maximized(struct wl_window *win, bool maximized)
 void
 wayl_win_minimize(struct wl_window *win)
 {
-    [nswindow_of(win) miniaturize:nil];
+    if (!win->quake)
+        [nswindow_of(win) miniaturize:nil];
 }
 
 void
@@ -647,7 +689,8 @@ wayl_win_close(struct wl_window *win)
 void
 wayl_win_set_content_size(struct wl_window *win, int width, int height)
 {
-    [nswindow_of(win) setContentSize:NSMakeSize(width, height)];
+    if (!win->quake)
+        [nswindow_of(win) setContentSize:NSMakeSize(width, height)];
 }
 
 void
@@ -779,6 +822,10 @@ wayl_win_ime_cursor_rect_changed(struct wl_window *win)
 
     win->is_activated = false;
     term_visual_focus_out(term);
+
+    if (win->quake)
+        quake_window_resigned_key(win);
+
     app_run_hooks();
 }
 

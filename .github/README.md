@@ -154,6 +154,44 @@ frameworks.
 * `TERM=foot`; the terminfo entry is bundled, and found through
   `$TERMINFO_DIRS`.
 
+## Quake terminal
+
+A drop-down terminal: it slides in from an edge of the screen, over
+other applications (full screen ones too), on every Space. It lives in
+foot's server; start the server once (e.g. at login), and bind a hotkey
+(skhd, Hammerspoon, Raycast, a window manager, …) to `footclient --quake`:
+
+```sh
+foot --server &
+footclient --quake          # toggles it: shows it (starting its shell the first time), or hides it
+footclient --quake=show     # or hide, or status
+```
+
+Each prints its state afterwards, `visible` or `hidden`. `hide` starts it
+hidden if it isn't running yet (so that it's there right away when
+shown); `status` changes nothing. Toggled while it's shown, but not
+focused, it gets the focus. Its shell runs until it exits (or `Cmd+W`);
+the next `footclient --quake` starts a new one, with that footclient's
+command, working directory, `-E` and `-o`.
+
+These options in `[main]` control it. With `footclient --quake -o …`,
+they apply right away, for that call (options that aren't given are
+`foot.ini`'s); this is how a window manager can control it:
+
+| Option | Default | |
+|---|---|---|
+| `macos-quake-position` | `top` | `top`, `bottom`, `left` or `right` (slides in from that edge), or `center` (fades in) |
+| `macos-quake-size` | `100x50` | Width and height, in percent of the screen (without the menu bar and the Dock) |
+| `macos-quake-alpha` | the color theme's | Background opacity, `0.0`-`1.0` |
+| `macos-quake-auto-hide` | `yes` | Hides it when it loses the keyboard focus |
+| `macos-quake-animation-duration` | `0.2` | In seconds; `0`: no animation. With Reduce Motion, it fades |
+| `macos-quake-area` | `screen` | `X,Y,WIDTH,HEIGHT`: the area it's placed in instead, in points, in AppKit's screen coordinates (origin at the bottom left of the main display) |
+
+It's shown on the screen with the keyboard focus. While the server has
+no other windows, foot isn't in the Dock (or the application switcher).
+Window managers can tell the quake terminal by its Accessibility
+subrole, `AXFloatingWindow`, and identifier, `io.github.gobijan.foot.quake`.
+
 ## Everything else
 
 The terminal itself works as in upstream foot: key bindings, scrollback

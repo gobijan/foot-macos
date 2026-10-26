@@ -52,6 +52,7 @@ static struct {
     volatile sig_atomic_t *aborted;
     bool keep_running;
     bool launched_as_app;  /* By launchd (Finder, Dock, open(1)), not a shell */
+    bool server;           /* foot --server */
     bool fdm_failed;
     bool running;
     bool terminating;
@@ -212,11 +213,15 @@ wayl_run(struct wayland *wayl, volatile sig_atomic_t *aborted, bool keep_running
     /* Like other Mac apps, keep running without windows; but from a
      * shell, exit with the last window, as upstream */
     app.keep_running = keep_running || app.launched_as_app;
+    app.server = keep_running;
 
     if (should_exit())
         return !app.fdm_failed;
 
-    if (@available(macOS 14.0, *))
+    /* A server starts in the background, without windows */
+    if (app.server)
+        app_windows_changed();
+    else if (@available(macOS 14.0, *))
         [NSApp activate];
 
     app.running = true;
@@ -241,6 +246,29 @@ wayl_set_settings_handler(struct wayland *wayl, bool (*handler)(void *data),
 {
     app.settings = handler;
     app.settings_data = data;
+}
+
+void
+app_windows_changed(void)
+{
+    if (!app.server)
+        return;
+
+    bool windows = false;
+    tll_foreach(app.wayl->terms, it) {
+        const struct wl_window *win = it->item->window;
+        if (win != NULL && win->nswindow != NULL && win->is_configured && !win->quake) {
+            windows = true;
+            break;
+        }
+    }
+
+    const NSApplicationActivationPolicy policy = windows
+        ? NSApplicationActivationPolicyRegular
+        : NSApplicationActivationPolicyAccessory;
+
+    if (NSApp.activationPolicy != policy)
+        [NSApp setActivationPolicy:policy];
 }
 
 static void

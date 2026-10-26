@@ -34,6 +34,27 @@ NSMenuItem *updates_menu_item(void);
 /* The monitor corresponding to 'screen' (may be NULL) */
 const struct monitor *app_monitor_for_screen(NSScreen *screen);
 
+/*
+ * A window (not the quake terminal's) was opened or closed: in server
+ * mode, foot is in the Dock (and the application switcher) only while
+ * there are windows.
+ */
+void app_windows_changed(void);
+
+/* quake.m: the quake terminal's window, a panel (see wayl_quake()) */
+bool quake_owns_config(const struct config *conf);
+NSWindow *quake_window_create(NSRect content_rect);
+
+/* The initial configure: its frame (before the terminal is sized), and shown */
+void quake_window_place(struct wl_window *win);
+void quake_window_configured(struct wl_window *win);
+
+void quake_window_resigned_key(struct wl_window *win);
+void quake_window_destroyed(struct wl_window *win);
+
+/* themes.m: the quake terminal's color themes were replaced */
+void quake_theme_changed(void);
+
 /* window.m */
 void window_update_outputs(struct wl_window *win);
 void window_resized(struct wl_window *win);

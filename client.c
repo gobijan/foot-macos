@@ -90,6 +90,7 @@ print_usage(const char *prog_name)
         "  -N,--no-wait                             detach the client process from the running terminal, exiting immediately\n"
         "  -o,--override=[section.]key=value        override configuration option\n"
         "  -E, --client-environment                 exec shell using footclient's environment, instead of the server's\n"
+        "     --quake[=toggle|show|hide|status]     the quake terminal: show, hide or toggle it, and print its state (toggle)\n"
         "  -d,--log-level={info|warning|error|none} log level (warning)\n"
         "  -l,--log-colorize=[{never|always|auto}]  enable/disable colorization of log output on stderr\n"
         "  -v,--version                             show the version number and quit\n"
@@ -142,6 +143,7 @@ send_string_list(int fd, const string_list_t *string_list)
 
 enum {
     TOPLEVEL_TAG_OPTION = CHAR_MAX + 1,
+    QUAKE_OPTION,
 };
 
 int
@@ -171,6 +173,7 @@ main(int argc, char *const *argv)
         {"no-wait",            no_argument,       NULL, 'N'},
         {"override",           required_argument, NULL, 'o'},
         {"client-environment", no_argument,       NULL, 'E'},
+        {"quake",              optional_argument, NULL, QUAKE_OPTION},
         {"log-level",          required_argument, NULL, 'd'},
         {"log-colorize",       optional_argument, NULL, 'l'},
         {"version",            no_argument,       NULL, 'v'},
@@ -184,6 +187,7 @@ main(int argc, char *const *argv)
     enum log_colorize log_colorize = LOG_COLORIZE_AUTO;
     bool hold = false;
     bool client_environment = false;
+    enum client_quake quake = CLIENT_QUAKE_NONE;
 
     /* Used to format overrides */
     bool no_wait = false;
@@ -327,6 +331,21 @@ main(int argc, char *const *argv)
 
         case 'E':
             client_environment = true;
+            break;
+
+        case QUAKE_OPTION:
+            if (optarg == NULL || streq(optarg, "toggle"))
+                quake = CLIENT_QUAKE_TOGGLE;
+            else if (streq(optarg, "show"))
+                quake = CLIENT_QUAKE_SHOW;
+            else if (streq(optarg, "hide"))
+                quake = CLIENT_QUAKE_HIDE;
+            else if (streq(optarg, "status"))
+                quake = CLIENT_QUAKE_STATUS;
+            else {
+                fprintf(stderr, "%s: argument must be one of 'toggle', 'show', 'hide' or 'status'\n", optarg);
+                goto err;
+            }
             break;
 
         case 'd': {
@@ -479,6 +498,7 @@ main(int argc, char *const *argv)
         .hold = hold,
         .no_wait = no_wait,
         .xdga_token = xdga_token,
+        .quake = quake,
         .token_len = token_len,
         .cwd_len = cwd_len,
         .override_count = override_count,
@@ -613,7 +633,10 @@ main(int argc, char *const *argv)
         xassert(aborted);
     else if (rcvd != sizeof(exit_code))
         LOG_ERRNO("failed to read server response");
-    else
+    else if (quake != CLIENT_QUAKE_NONE && exit_code >= 0) {
+        puts(exit_code == CLIENT_QUAKE_VISIBLE ? "visible" : "hidden");
+        ret = EXIT_SUCCESS;
+    } else
         ret = exit_code;
 
 err:

@@ -1171,6 +1171,78 @@ parse_section_main(struct context *ctx)
     else if (streq(key, "macos-follow-appearance"))
         return value_to_bool(ctx, &conf->macos.follow_appearance);
 
+    else if (streq(key, "macos-quake-position")) {
+        return value_to_enum(
+            ctx,
+            (const char *[]){"top", "bottom", "left", "right", "center", NULL},
+            &conf->macos.quake.position);
+    }
+
+    else if (streq(key, "macos-quake-size")) {
+        float width, height;
+        char end;
+        if (sscanf(ctx->value, "%fx%f%c", &width, &height, &end) != 2 ||
+            !(width > 0. && width <= 100. && height > 0. && height <= 100.))
+        {
+            LOG_CONTEXTUAL_ERR("must be WIDTHxHEIGHT, in percent (1-100)");
+            return false;
+        }
+
+        conf->macos.quake.width = width;
+        conf->macos.quake.height = height;
+        return true;
+    }
+
+    else if (streq(key, "macos-quake-alpha")) {
+        float alpha;
+        if (!value_to_float(ctx, &alpha))
+            return false;
+
+        if (alpha < 0. || alpha > 1.) {
+            LOG_CONTEXTUAL_ERR("not in range 0.0-1.0");
+            return false;
+        }
+
+        conf->macos.quake.alpha = alpha;
+        return true;
+    }
+
+    else if (streq(key, "macos-quake-auto-hide"))
+        return value_to_bool(ctx, &conf->macos.quake.auto_hide);
+
+    else if (streq(key, "macos-quake-animation-duration")) {
+        float duration;
+        if (!value_to_float(ctx, &duration))
+            return false;
+
+        if (duration < 0. || duration > 10.) {
+            LOG_CONTEXTUAL_ERR("not in range 0.0-10.0");
+            return false;
+        }
+
+        conf->macos.quake.animation_duration = duration;
+        return true;
+    }
+
+    else if (streq(key, "macos-quake-area")) {
+        float x, y, width, height;
+        char end;
+        if (streq(ctx->value, "screen"))
+            x = y = width = height = 0.;
+        else if (sscanf(ctx->value, "%f,%f,%f,%f%c", &x, &y, &width, &height, &end) != 4 ||
+                 !(width > 0. && height > 0.))
+        {
+            LOG_CONTEXTUAL_ERR("must be 'screen', or X,Y,WIDTH,HEIGHT");
+            return false;
+        }
+
+        conf->macos.quake.area.x = x;
+        conf->macos.quake.area.y = y;
+        conf->macos.quake.area.width = width;
+        conf->macos.quake.area.height = height;
+        return true;
+    }
+
     else if (streq(key, "selection-target")) {
         _Static_assert(sizeof(conf->selection_target) == sizeof(int),
                        "enum is not 32-bit");
@@ -3545,6 +3617,13 @@ config_load(struct config *conf, const char *conf_path,
             .font_smoothing = true,
             .font_smoothing_strength = 1.,
             .follow_appearance = true,
+            .quake = {
+                .width = 100.,
+                .height = 50.,
+                .alpha = -1.,
+                .auto_hide = true,
+                .animation_duration = .2,
+            },
         },
 
         /* macOS: the shell must set up the environment (e.g. $PATH) */

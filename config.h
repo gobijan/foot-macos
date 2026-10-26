@@ -241,6 +241,16 @@ struct config {
 
         /* Switch between colors-dark and colors-light with the system's appearance */
         bool follow_appearance;
+
+        /* The quake terminal (footclient --quake, macos/quake.m) */
+        struct macos_quake {
+            int position;               /* top, bottom, left, right, center */
+            float width, height;        /* Percent of the area */
+            float alpha;                /* < 0: the color theme's */
+            bool auto_hide;
+            float animation_duration;   /* Seconds */
+            struct { float x, y, width, height; } area;  /* width 0: the screen's */
+        } quake;
     } macos;
 
     char *term;

@@ -321,6 +321,9 @@ struct wl_window {
     void *delegate;  /* The NSWindow's delegate (retained) */
     void *view;      /* FootView, the window's content view */
 
+    /* The quake terminal's panel (macos/quake.m) */
+    bool quake;
+
     bool unmapped;
     float scale;
 
@@ -396,8 +399,9 @@ void wayl_destroy(struct wayland *wayl);
 
 /*
  * Runs the application's run loop until the last window closes. Or,
- * with 'keep_running', and when started as an application (Finder,
- * Dock, open(1)), until it quits (Cmd+Q), or '*aborted' is set.
+ * with 'keep_running' (server mode), and when started as an
+ * application (Finder, Dock, open(1)), until it quits (Cmd+Q), or
+ * '*aborted' is set.
  */
 bool wayl_run(struct wayland *wayl, volatile sig_atomic_t *aborted,
               bool keep_running);
@@ -429,6 +433,19 @@ struct reaper;
 void wayl_enable_new_windows(
     struct wayland *wayl, const struct config *conf, const char *conf_path,
     struct fdm *fdm, struct reaper *reaper);
+
+/*
+ * footclient --quake (macos/quake.m): shows, hides or toggles the
+ * quake terminal ('action': enum client_quake). If there's none, it's
+ * created first, as footclient's other terminals are ('cwd', 'argv',
+ * 'envp'), with 'conf' and 'overrides'. The overrides' macos-quake-*
+ * options also apply to an existing quake terminal. Returns its state
+ * (enum client_quake_state), or a negative value on errors.
+ */
+int wayl_quake(
+    struct wayland *wayl, struct fdm *fdm, struct reaper *reaper,
+    const struct config *conf, int action, config_override_t *overrides,
+    const char *cwd, int argc, char *const *argv, const char *const *envp);
 
 void wayl_flush(struct wayland *wayl);
 void wayl_roundtrip(struct wayland *wayl);

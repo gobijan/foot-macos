@@ -360,6 +360,15 @@ fdm_client(struct fdm *fdm, int fd, int events, void *data)
 #undef CHECK_BUF_AND_NULL
 #undef CHECK_BUF
 
+    /* footclient --quake: the quake terminal (macos/quake.m) */
+    if (cdata.quake != CLIENT_QUAKE_NONE) {
+        client_send_exit_code(client, wayl_quake(
+            server->wayl, server->fdm, server->reaper, server->conf,
+            cdata.quake, &overrides, cwd, cdata.argc, argv,
+            (const char *const *)envp));
+        goto shutdown;
+    }
+
     struct terminal_instance *instance = xmalloc(sizeof(struct terminal_instance));
 
     const bool need_to_clone_conf =

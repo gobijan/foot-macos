@@ -299,6 +299,7 @@ foot = executable(
   'clipboard.m',
   'selection-clipboard.c',
   'windows.c', 'windows.h',
+  'quake.m',
   'themes.m',
   'updates.m',
   'default-colors.c', 'default-colors.h',

@@ -13,7 +13,8 @@ struct client_data {
     bool hold:1;
     bool no_wait:1;
     bool xdga_token:1;
-    uint8_t reserved:5;
+    uint8_t quake:3;  /* enum client_quake (macOS) */
+    uint8_t reserved:2;
 
     uint8_t token_len;
     uint16_t cwd_len;
@@ -29,6 +30,24 @@ struct client_data {
 } __attribute__((packed));
 
 _Static_assert(sizeof(struct client_data) == 10, "protocol struct size error");
+
+/*
+ * footclient --quake (macOS): instead of a new terminal, the quake
+ * terminal is shown, hidden or toggled. The server replies with its
+ * state (enum client_quake_state), or a negative value on errors.
+ */
+enum client_quake {
+    CLIENT_QUAKE_NONE,
+    CLIENT_QUAKE_TOGGLE,
+    CLIENT_QUAKE_SHOW,
+    CLIENT_QUAKE_HIDE,
+    CLIENT_QUAKE_STATUS,
+};
+
+enum client_quake_state {
+    CLIENT_QUAKE_HIDDEN,
+    CLIENT_QUAKE_VISIBLE,
+};
 
 enum client_ipc_code {
     FOOT_IPC_SIGUSR,
