@@ -1286,9 +1286,7 @@ selection_update(struct terminal *term, int col, int row)
      * _into_ the multi-cell character. Again, because we do *not*
      * want the point to be inside the pad area.
      */
-    if (new_start.row < new_end.row ||
-        (new_start.row == new_end.row && new_start.col <= new_end.col))
-    {
+    if (term->selection.direction != SELECTION_LEFT) {
         while (new_start.col >= 1 &&
                row_start->cells[new_start.col].wc >= CELL_SPACER)
             new_start.col--;
