@@ -410,6 +410,11 @@ notify_notify(struct terminal *term, struct notification *notif)
                               notif->report_activated ||
                               notif->may_be_programatically_closed;
 
+#if defined(__APPLE__)
+    if (wayl_notify(term, notif, title, body, track_notification))
+        return true;
+#endif
+
     uint32_t replaces_id = 0;
     if (notif->id != NULL) {
         tll_foreach(term->active_notifications, it) {
@@ -640,6 +645,11 @@ notify_close(struct terminal *term, const char *id)
         if (notif->id == NULL || !streq(notif->id, id))
             continue;
 
+#if defined(__APPLE__)
+        if (wayl_notify_close(term, &it->item))
+            return;
+#endif
+
         if (term->conf->desktop_notifications.close.argv.args == NULL) {
             LOG_DBG(
                 "trying to close notification \"%s\" by sending SIGINT to %u",
@@ -792,3 +802,27 @@ notify_icon_free(struct notification_icon *icon)
     icon->tmp_file_name = NULL;
     icon->tmp_file_fd = -1;
 }
+
+#if defined(__APPLE__)
+void
+notify_native_done(struct terminal *term, pid_t id, bool activated,
+                   uint32_t button)
+{
+    tll_foreach(term->active_notifications, it) {
+        if (it->item.pid != id)
+            continue;
+
+        it->item.activated = activated;
+        it->item.activated_button = button;
+
+        /* wayl_activate() needs no token */
+        free(it->item.xdg_token);
+        it->item.xdg_token = xstrdup("");
+        break;
+    }
+
+    struct done_context *ctx = xmalloc(sizeof(*ctx));
+    *ctx = (struct done_context){.wayl = term->wl, .term = term};
+    notif_done(NULL, id, 0, ctx);
+}
+#endif

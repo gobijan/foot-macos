@@ -25,6 +25,9 @@ void app_run_hooks(void);
  */
 void app_apply_color_theme(struct terminal *term, bool reload);
 
+/* notifications.m: before the application has finished launching */
+void notifications_init(void);
+
 /* themes.m: View > Theme */
 NSMenuItem *themes_menu_item(void);
 

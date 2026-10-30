@@ -492,6 +492,15 @@ void wayl_win_destroy(struct wl_window *win);
 void wayl_win_scale(struct wl_window *win, const struct buffer *buf);
 void wayl_win_alpha_changed(struct wl_window *win);
 bool wayl_win_set_urgent(struct wl_window *win);
+
+/*
+ * Notification Center (macos/notifications.m). Returns false if it isn't
+ * used: notify.c runs desktop-notifications.command then.
+ */
+struct notification;
+bool wayl_notify(struct terminal *term, struct notification *notif,
+                 const char *title, const char *body, bool track);
+bool wayl_notify_close(struct terminal *term, struct notification *notif);
 bool wayl_win_ring_bell(const struct wl_window *win);
 
 /* Requests a frame callback, i.e. a call to render's frame handler

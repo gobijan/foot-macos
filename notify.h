@@ -93,3 +93,9 @@ void notify_icon_add(struct terminal *term, const char *id,
                      size_t data_sz);
 void notify_icon_del(struct terminal *term, const char *id);
 void notify_icon_free(struct notification_icon *icon);
+
+#if defined(__APPLE__)
+/* A notification in Notification Center is gone (macos/notifications.m) */
+void notify_native_done(struct terminal *term, pid_t id, bool activated,
+                        uint32_t button);
+#endif

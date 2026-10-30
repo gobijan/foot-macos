@@ -70,7 +70,8 @@ Upstream files are changed as little as possible, in one of three ways:
    | `client.c`, `client-protocol.h` | `footclient --quake[=ACTION]`: the action is in `client_data` (3 of its reserved bits), and the server's reply is the quake terminal's state, which is printed. |
    | `search.c` | `quirks.h` include removed. |
 | `url-mode.c`, `url-mode.h` | `quirks.h` include removed; `urls_activate()` exposes `activate_url()`, for Cmd+click (`macos/view.m`). |
-   | `box-drawing.c` | Rounded corners (`╭╮╯╰`) catch an out of range `sqrt()` with `isnan()` too: macOS' libm doesn't set `errno`. |
+   | `notify.c`, `notify.h` | `notify_notify()` and `notify_close()` hand over to `wayl_notify()` and `wayl_notify_close()` (`macos/notifications.m`), and `notify_native_done()` is the end of a notification there. |
+| `box-drawing.c` | Rounded corners (`╭╮╯╰`) catch an out of range `sqrt()` with `isnan()` too: macOS' libm doesn't set `errno`. |
    | `fdm.h`, `shm.h` | Additions for run loop integration, and IOSurface buffers (`macos/fdm.c`, `macos/shm.c`). |
    | `.gitignore` | The build directories (`/build/`, `/build-release/`, `/build-x86_64/`, and `-pgo` versions of the last two). |
 

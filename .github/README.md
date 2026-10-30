@@ -167,6 +167,10 @@ frameworks.
 * Closing a window, or quitting, asks first when something other than
   the shell is running in it (tmux and screen don't count: they keep
   running). `macos-confirm-close=no` in `[main]` turns that off.
+* Desktop notifications (OSC 9, 99 and 777, `bell=notify`) are foot's
+  own in Notification Center: macOS asks for the permission once, and
+  clicking one leads back to its terminal. A
+  `command=` in `[desktop-notifications]` replaces that.
 * The shell is started as a login shell, so that it sets up `$PATH`.
 * `TERM=foot`; the terminfo entry is bundled, and found through
   `$TERMINFO_DIRS`.

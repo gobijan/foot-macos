@@ -1002,6 +1002,7 @@ wayl_init(struct fdm *fdm, struct key_binding_manager *key_binding_manager,
         app.delegate = [[FootAppDelegate alloc] init];
         NSApp.delegate = app.delegate;
         create_menu();
+        notifications_init();
 
         [[NSNotificationCenter defaultCenter]
             addObserver:app.delegate
