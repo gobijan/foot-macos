@@ -83,6 +83,12 @@ static struct {
     [self.delegate windowShouldClose:self];
 }
 
+/* A borderless window has no close button, so AppKit disables Close Window */
+- (BOOL)validateMenuItem:(NSMenuItem *)item
+{
+    return item.action == @selector(performClose:) || [super validateMenuItem:item];
+}
+
 /* Neither full screen, nor zoomed, nor minimized */
 - (void)toggleFullScreen:(id)sender
 {
