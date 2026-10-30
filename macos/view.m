@@ -89,6 +89,8 @@ utf8_offset(NSString *str, NSUInteger idx)
     /* Cmd+click on a URL */
     BOOL _urlClicked;         /* Whose release must be ignored */
     BOOL _urlCursor;          /* Showing the hand */
+    int _urlCursorCol;        /* The cell it was determined for; -1: none */
+    int _urlCursorRow;
 }
 
 - (instancetype)initWithFrame:(NSRect)frame window:(struct wl_window *)win
@@ -112,6 +114,7 @@ utf8_offset(NSString *str, NSUInteger idx)
 
     _markedText = [[NSMutableAttributedString alloc] init];
     _consumedKeys = [NSMutableSet set];
+    _urlCursorCol = -1;
 
     [self registerForDraggedTypes:@[NSPasteboardTypeFileURL, NSPasteboardTypeString]];
 
@@ -589,7 +592,9 @@ url_under_mouse(struct seat *seat, struct terminal *term, bool activate)
             (row < end->row || (row == end->row && col <= end->col)))
         {
             found = true;
-            if (activate)
+
+            /* OSC-8 URLs can be anything: not an option for the launcher */
+            if (activate && it->item.url[0] != '-')
                 urls_activate(seat, term, &it->item, app_next_serial());
         }
 
@@ -609,8 +614,22 @@ url_under_mouse(struct seat *seat, struct terminal *term, bool activate)
     if (term == NULL || seat == NULL || seat->mouse_focus != term)
         return;
 
-    const BOOL over_url =
-        (flags & NSEventModifierFlagCommand) && url_under_mouse(seat, term, false);
+    if (!(flags & NSEventModifierFlagCommand)) {
+        if (_urlCursor)
+            [window_cursor() set];
+        _urlCursor = NO;
+        _urlCursorCol = -1;
+        return;
+    }
+
+    /* URL detection scans the whole view */
+    if (seat->mouse.col == _urlCursorCol && seat->mouse.row == _urlCursorRow)
+        return;
+
+    _urlCursorCol = seat->mouse.col;
+    _urlCursorRow = seat->mouse.row;
+
+    const BOOL over_url = url_under_mouse(seat, term, false);
 
     if (over_url)
         [[NSCursor pointingHandCursor] set];
@@ -665,6 +684,7 @@ url_under_mouse(struct seat *seat, struct terminal *term, bool activate)
 - (void)mouseDown:(NSEvent *)event
 {
     struct seat *seat = [self pointerFocus:event];
+    _urlClicked = NO;
 
     if (seat != NULL && (event.modifierFlags & NSEventModifierFlagCommand)) {
         const NSPoint p = [self locationOf:event];
