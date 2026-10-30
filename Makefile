@@ -13,6 +13,11 @@ MESON_OPTIONS := --native-file macos/native.ini -Dgrapheme-clustering=enabled
 DEBUG_DIR := build
 RELEASE_DIR := build-release
 RELEASE_OPTIONS := $(MESON_OPTIONS) --buildtype=release
+SANITIZE_DIR := build-sanitize
+# werror: sprintf() is only deprecated without _FORTIFY_SOURCE, which
+# sanitizers turn off
+SANITIZE_OPTIONS := $(MESON_OPTIONS) --buildtype=debug -Db_sanitize=address,undefined \
+	-Db_lundef=false -Dwerror=false
 APP := $(RELEASE_DIR)/macos/foot.app
 INSTALLED_APP := /Applications/foot.app
 LSREGISTER := /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
@@ -75,7 +80,7 @@ clean: ## Remove the compiled files, keep the configuration
 
 .PHONY: distclean
 distclean: ## Remove both build directories
-	rm -rf $(DEBUG_DIR) $(RELEASE_DIR) $(RELEASE_DIR)-pgo
+	rm -rf $(DEBUG_DIR) $(RELEASE_DIR) $(RELEASE_DIR)-pgo $(SANITIZE_DIR)
 
 ##@ Test
 
@@ -84,6 +89,16 @@ test: build ## Run foot's tests: the configuration, and the unit tests
 	$(MESON) test -C $(DEBUG_DIR) config --print-errorlogs
 	@# Debug builds run foot's unit tests at startup
 	./$(DEBUG_DIR)/macos/foot --version
+
+.PHONY: smoke
+smoke: build ## Run foot for real: output, footclient, the quake terminal (windows open)
+	macos/smoke-test.py $(DEBUG_DIR)/macos
+
+.PHONY: sanitize
+sanitize: $(SANITIZE_DIR)/build.ninja ## All of the above, with AddressSanitizer and UBSan, in build-sanitize/
+	$(NINJA) -C $(SANITIZE_DIR)
+	$(MESON) test -C $(SANITIZE_DIR) config --print-errorlogs
+	macos/smoke-test.py $(SANITIZE_DIR)/macos
 
 .PHONY: check-config
 check-config: build ## Check your foot.ini (or CONFIG=path)
@@ -203,6 +218,9 @@ help: ## List the commands
 # Configures a build directory the first time it's used.
 $(DEBUG_DIR)/build.ninja:
 	$(MESON) setup $(DEBUG_DIR) $(MESON_OPTIONS) --buildtype=debug
+
+$(SANITIZE_DIR)/build.ninja:
+	$(MESON) setup $(SANITIZE_DIR) $(SANITIZE_OPTIONS)
 
 $(RELEASE_DIR)/build.ninja:
 	$(MESON) setup $(RELEASE_DIR) $(RELEASE_OPTIONS) -Db_lto=true

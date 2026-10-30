@@ -1,0 +1,8 @@
+# What UBSan may report without failing the smoke test (macos/smoke-test.py):
+# third-party code, and known, harmless cases in upstream's. Not the port's.
+
+# Bit shifts into the sign bit
+shift-base:*/pixman/*
+
+# Array parameters of size 0 (no tracking points)
+vla-bound:grid.c

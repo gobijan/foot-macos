@@ -10,6 +10,8 @@ CoreText, kqueue) lives in `macos/`.
 make deps       # brew install meson ninja bison
 make build      # debug build in build/ (configures it the first time)
 make test
+make smoke      # foot in real windows (macos/smoke-test.py)
+make sanitize   # the tests and the smoke test, with ASan and UBSan
 make run        # ./build/macos/foot
 make release    # optimized build and foot.app in build-release/
 make pgo        # the same, with PGO like releases (macos/pgo.sh; a window opens)
@@ -42,6 +44,8 @@ Debug builds run foot's unit tests (`UNITTEST` blocks) at startup.
   while idle.
 - **Upstream syncs** are merges (`macos/sync-upstream.sh`), never
   rebases. Resolve conflicts as described in `macos/UPSTREAM.md`.
+- **Sanitizers:** `make sanitize` stays clean. `macos/ubsan.supp` is for
+  third-party and upstream code; fix what it finds in `macos/`.
 - **Testing input:** never send global keystrokes (e.g. with
   `osascript`/System Events); they end up in whatever application the
   user is working in. Post events to foot's PID only

@@ -29,8 +29,30 @@ jobs:
       - name: Test
         run: meson test -C build config --print-errorlogs
 
+      - name: Smoke test
+        run: macos/smoke-test.py build/macos
+
       # The Intel half of the universal foot.app (macos/dist.sh)
       - name: Build for Intel
         run: |
           meson setup build-x86_64 --native-file macos/native.ini --cross-file macos/x86_64.ini --buildtype=release
           ninja -C build-x86_64
+
+  # The unit tests only run in debug builds; the platform layer only in
+  # real windows
+  sanitizers:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: brew install meson ninja bison
+
+      - name: Cache subprojects
+        uses: actions/cache@v4
+        with:
+          path: subprojects/packagecache
+          key: subprojects-${{ hashFiles('subprojects/*.wrap') }}
+
+      - name: Build and test, with AddressSanitizer and UBSan
+        run: make sanitize

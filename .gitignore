@@ -1,6 +1,7 @@
 /build/
 /build-release/
 /build-release-pgo/
+/build-sanitize/
 /build-x86_64/
 /build-x86_64-pgo/
 /.cache/
