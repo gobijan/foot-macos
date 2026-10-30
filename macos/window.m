@@ -676,7 +676,8 @@ wayl_win_set_app_id(struct wl_window *win, const char *app_id)
 void
 wayl_win_set_fullscreen(struct wl_window *win, bool fullscreen)
 {
-    if (win->quake)
+    /* initial-window-mode: a new tab is what its window is */
+    if (win->quake || app_new_tab_parent() != nil)
         return;
 
     NSWindow *nswindow = nswindow_of(win);
@@ -690,7 +691,7 @@ wayl_win_set_fullscreen(struct wl_window *win, bool fullscreen)
 void
 wayl_win_set_maximized(struct wl_window *win, bool maximized)
 {
-    if (win->quake)
+    if (win->quake || app_new_tab_parent() != nil)
         return;
 
     NSWindow *nswindow = nswindow_of(win);

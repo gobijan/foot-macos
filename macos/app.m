@@ -1,4 +1,5 @@
 #import "app.h"
+#import "view.h"
 
 #import <Carbon/Carbon.h>
 #import <QuartzCore/QuartzCore.h>
@@ -357,8 +358,12 @@ new_tab(const char *cwd)
     NSWindow *window = NSApp.mainWindow != nil
         ? NSApp.mainWindow : NSApp.orderedWindows.firstObject;
 
-    if (window.tabbingMode != NSWindowTabbingModeDisallowed)
+    /* Not the quake terminal, nor e.g. Sparkle's window */
+    if ([window.contentView isKindOfClass:[FootView class]] &&
+        window.tabbingMode != NSWindowTabbingModeDisallowed)
+    {
         app.tab_parent = window;
+    }
 
     new_window(cwd);
     app.tab_parent = nil;
