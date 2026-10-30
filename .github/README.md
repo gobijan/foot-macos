@@ -156,6 +156,9 @@ frameworks.
   with dark colors only replaces Grok Night, one with light colors only
   Grok Day. For one theme in both modes, turn it off. Programs that ask
   for theme changes (mode 2031, e.g. Neovim) are notified.
+* Closing a window, or quitting, asks first when something other than
+  the shell is running in it (tmux and screen don't count: they keep
+  running). `macos-confirm-close=no` in `[main]` turns that off.
 * The shell is started as a login shell, so that it sets up `$PATH`.
 * `TERM=foot`; the terminfo entry is bundled, and found through
   `$TERMINFO_DIRS`.

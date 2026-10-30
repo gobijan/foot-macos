@@ -250,6 +250,9 @@ struct config {
         /* Switch between colors-dark and colors-light with the system's appearance */
         bool follow_appearance;
 
+        /* Ask before closing a window (or quitting) with something running in it */
+        bool confirm_close;
+
         /* The quake terminal (footclient --quake, macos/quake.m) */
         struct macos_quake {
             int position;               /* top, bottom, left, right, center */

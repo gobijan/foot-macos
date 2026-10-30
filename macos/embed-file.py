@@ -20,6 +20,7 @@ MACOS_DEFAULTS = [
      "# macos-font-smoothing=yes  (thickens glyphs, like macOS' own text rendering)\n"
      "# macos-font-smoothing-strength=1.0  (0.0 - 1.0)\n"
      "# macos-follow-appearance=yes  (switches between [colors-dark] and [colors-light] with the system's appearance)\n"
+     "# macos-confirm-close=yes  (asks before closing a window, or quitting, with something other than the shell running)\n"
      "# macos-quake-hotkey=Mod1+grave  (the quake terminal's hotkey: Option+`, the key below Esc; none: no hotkey)\n"
      "# macos-quake-position=top  (top, bottom, left, right or center)\n"
      "# macos-quake-size=50  (height, or WIDTHxHEIGHT, in percent of the screen; without a width: twice as wide as high)\n"

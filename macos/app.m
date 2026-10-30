@@ -887,6 +887,9 @@ create_menu(void)
     if (!app.running || tll_length(app.wayl->terms) == 0)
         return NSTerminateNow;
 
+    if (!app_confirm_quit())
+        return NSTerminateCancel;
+
     /* Shut down all terminals; the run loop exits when they're gone */
     app.terminating = true;
     app.keep_running = false;

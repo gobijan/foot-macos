@@ -304,6 +304,7 @@ foot = executable(
   'shm.c',
   'app.m', 'app.h',
   'window.m',
+  'close.m',
   'view.m', 'view.h',
   'keyboard.m', 'keyboard.h',
   'clipboard.m',

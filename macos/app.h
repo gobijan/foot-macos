@@ -69,6 +69,15 @@ void hotkey_layout_changed(void);
 /* Shows the hotkey in the menu */
 void hotkey_set_key_equivalent(NSMenuItem *item, uint32_t sym, unsigned mods);
 
+/*
+ * close.m: with something running in the terminal (macos-confirm-close),
+ * asks first. Shuts the window's terminal down, now or once confirmed.
+ */
+void window_close(struct wl_window *win);
+
+/* Whether to go ahead with quitting */
+bool app_confirm_quit(void);
+
 /* window.m */
 void window_update_outputs(struct wl_window *win);
 void window_resized(struct wl_window *win);

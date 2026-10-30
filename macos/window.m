@@ -615,6 +615,11 @@ wayl_win_destroy(struct wl_window *win)
         NSWindow *nswindow = CFBridgingRelease(win->nswindow);
         win->nswindow = NULL;
         nswindow.delegate = nil;
+
+        /* E.g. the shell exited, while asking whether to close the window */
+        if (nswindow.attachedSheet != nil)
+            [nswindow endSheet:nswindow.attachedSheet];
+
         [nswindow orderOut:nil];
         [nswindow close];
     }
@@ -777,8 +782,8 @@ wayl_win_ime_cursor_rect_changed(struct wl_window *win)
 - (BOOL)windowShouldClose:(NSWindow *)sender
 {
     /* The terminal shuts down, and then destroys the window */
-    if (_win != NULL)
-        term_shutdown(_win->term);
+    if (_win != NULL && sender.attachedSheet == nil)
+        window_close(_win);
     app_run_hooks();
     return NO;
 }

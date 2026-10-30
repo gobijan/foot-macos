@@ -1171,6 +1171,9 @@ parse_section_main(struct context *ctx)
     else if (streq(key, "macos-follow-appearance"))
         return value_to_bool(ctx, &conf->macos.follow_appearance);
 
+    else if (streq(key, "macos-confirm-close"))
+        return value_to_bool(ctx, &conf->macos.confirm_close);
+
     else if (streq(key, "macos-quake-position")) {
         return value_to_enum(
             ctx,
@@ -3702,6 +3705,7 @@ config_load(struct config *conf, const char *conf_path,
             .font_smoothing = true,
             .font_smoothing_strength = 1.,
             .follow_appearance = true,
+            .confirm_close = true,
             .quake = {
                 .width = 0.,    /* Twice the height */
                 .height = 50.,
