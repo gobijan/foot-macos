@@ -24,16 +24,20 @@
  * fallback for what can't use Notification Center: the foot binary
  * outside of foot.app, and builds macOS doesn't accept (not signed).
  *
- * There are no helper processes. Notifications that are tracked have an
- * ID instead, in place of the helper's PID, which notify.c uses to find
- * them. It's out of the range of real PIDs, as notify.c signals those.
+ * There are no helper processes. Those a program wants to hear about
+ * are tracked, with an ID in place of the helper's PID, which notify.c
+ * uses to find them. It's out of the range of real PIDs, as notify.c
+ * signals those. macOS doesn't tell when a banner has timed out, so the
+ * tracked ones are limited: they'd pile up otherwise.
  */
 
 #define FIRST_ID (1 << 24)
+#define MAX_TRACKED 64
 
 /* Keys of the notification's userInfo */
 static NSString *const key_term = @"term";
 static NSString *const key_id = @"id";
+static NSString *const key_focus = @"focus";
 
 /* Custom actions (OSC 99 buttons) are numbered, starting at 1 */
 static NSString *const action_prefix = @"button-";
@@ -66,9 +70,20 @@ command_is_default(const struct terminal *term)
     return false;
 }
 
+/* Completion handlers aren't called on the main thread */
+static void
+on_main_thread(void (^block)(void))
+{
+    CFRunLoopPerformBlock(CFRunLoopGetMain(), kCFRunLoopCommonModes, block);
+    CFRunLoopWakeUp(CFRunLoopGetMain());
+}
+
 static struct terminal *
 find_term(NSNumber *ptr)
 {
+    if (ptr == nil || app_wayland() == NULL)
+        return NULL;
+
     tll_foreach(app_wayland()->terms, it) {
         if ((uintptr_t)it->item == ptr.unsignedLongLongValue)
             return it->item;
@@ -102,17 +117,20 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
     const uint32_t button = [action hasPrefix:action_prefix]
         ? (uint32_t)[action substringFromIndex:action_prefix.length].integerValue : 0;
     const pid_t id = [info[key_id] intValue];
+    const bool focus = [info[key_focus] boolValue];
     NSNumber *ptr = info[key_term];
 
-    /* Not on the main thread's run loop, necessarily */
-    CFRunLoopPerformBlock(CFRunLoopGetMain(), kCFRunLoopCommonModes, ^{
-        struct terminal *term = ptr != nil && app_wayland() != NULL ? find_term(ptr) : NULL;
-        if (term != NULL) {
-            notify_native_done(term, id, activated, button);
-            app_run_hooks();
-        }
+    on_main_thread(^{
+        struct terminal *term = find_term(ptr);
+        if (term == NULL)
+            return;
+
+        if (activated && focus)
+            wayl_activate(term->wl, term->window, NULL);
+
+        notify_native_done(term, id, activated, button);
+        app_run_hooks();
     });
-    CFRunLoopWakeUp(CFRunLoopGetMain());
 
     handler();
 }
@@ -140,37 +158,84 @@ identifier_of(const struct terminal *term, const char *id, uint32_t unique)
         : [NSString stringWithFormat:@"%p-#%u", (const void *)term, unique];
 }
 
+/* It's gone, without anyone having seen it */
 static void
-deliver(UNNotificationRequest *request, UNNotificationCategory *category)
+forget(NSNumber *ptr, pid_t id)
 {
-    UNUserNotificationCenter *center = [UNUserNotificationCenter currentNotificationCenter];
+    struct terminal *term = find_term(ptr);
+    if (term != NULL) {
+        notify_native_done(term, id, false, 0);
+        app_run_hooks();
+    }
+}
 
-    [center getNotificationCategoriesWithCompletionHandler:^(NSSet<UNNotificationCategory *> *categories) {
-        [center setNotificationCategories:[categories setByAddingObject:category]];
-        [center addNotificationRequest:request withCompletionHandler:^(NSError *error) {
-            if (error != nil)
-                LOG_WARN("failed to deliver a notification: %s",
-                         error.localizedDescription.UTF8String);
-        }];
-    }];
+/* A category per set of buttons; dismissing is reported to the program (OSC 99) */
+static NSString *
+category_of(NSArray<NSString *> *labels)
+{
+    static NSMutableSet<UNNotificationCategory *> *categories;
+    static NSMutableSet<NSString *> *identifiers;
+
+    if (categories == nil) {
+        categories = [NSMutableSet set];
+        identifiers = [NSMutableSet set];
+    }
+
+    NSString *identifier = [@[@"foot", labels].description copy];
+    if ([identifiers containsObject:identifier])
+        return identifier;
+
+    NSMutableArray<UNNotificationAction *> *actions = [NSMutableArray array];
+    for (NSString *label in labels) {
+        NSString *action_id = [NSString stringWithFormat:@"%@%zu", action_prefix, actions.count + 1];
+        [actions addObject:[UNNotificationAction actionWithIdentifier:action_id
+                                                                title:label
+                                                              options:UNNotificationActionOptionForeground]];
+    }
+
+    [identifiers addObject:identifier];
+    [categories addObject:[UNNotificationCategory
+        categoryWithIdentifier:identifier
+                       actions:actions
+             intentIdentifiers:@[]
+                       options:UNNotificationCategoryOptionCustomDismissAction]];
+
+    [[UNUserNotificationCenter currentNotificationCenter] setNotificationCategories:categories];
+    return identifier;
 }
 
 bool
 wayl_notify(struct terminal *term, struct notification *notif, const char *title,
-            const char *body, bool track)
+            const char *body)
 {
     if (NSBundle.mainBundle.bundleIdentifier == nil || not_allowed ||
-        !command_is_default(term))
+        title == NULL || !command_is_default(term))
     {
         return false;
     }
 
+    /* Not all text is valid UTF-8 (OSC 99); that's for the command */
+    NSString *title_str = @(title);
+    NSString *body_str = body != NULL ? @(body) : @"";
+    NSMutableArray<NSString *> *labels = [NSMutableArray array];
+    tll_foreach(notif->actions, it) {
+        NSString *label = @(it->item);
+        if (label == nil)
+            return false;
+        [labels addObject:label];
+    }
+
+    if (title_str == nil || body_str == nil)
+        return false;
+
     const uint32_t id = next_id++;
+    NSNumber *ptr = @((uintptr_t)term);
 
     UNMutableNotificationContent *content = [[UNMutableNotificationContent alloc] init];
-    content.title = @(title);
-    content.body = body != NULL ? @(body) : @"";
-    content.userInfo = @{key_term: @((uintptr_t)term), key_id: @(id)};
+    content.title = title_str;
+    content.body = body_str;
+    content.categoryIdentifier = category_of(labels);
+    content.userInfo = @{key_term: ptr, key_id: @(id), key_focus: @(notif->focus)};
     if (!notif->muted)
         content.sound = [UNNotificationSound defaultSound];
 
@@ -186,45 +251,32 @@ wayl_notify(struct terminal *term, struct notification *notif, const char *title
         break;
     }
 
-    /* A category per set of buttons */
-    NSMutableArray<UNNotificationAction *> *actions = [NSMutableArray array];
-    NSMutableString *category_id = [NSMutableString stringWithString:@"foot"];
-    tll_foreach(notif->actions, it) {
-        NSString *label = @(it->item);
-        NSString *action_id = [NSString stringWithFormat:@"%@%zu", action_prefix, actions.count + 1];
-        [actions addObject:[UNNotificationAction actionWithIdentifier:action_id
-                                                                title:label
-                                                              options:UNNotificationActionOptionForeground]];
-        [category_id appendFormat:@"\n%@", label];
-    }
-
-    /* Dismissing it is reported to the program (OSC 99) */
-    UNNotificationCategory *category = [UNNotificationCategory
-        categoryWithIdentifier:category_id
-                       actions:actions
-             intentIdentifiers:@[]
-                       options:UNNotificationCategoryOptionCustomDismissAction];
-    content.categoryIdentifier = category_id;
-
     UNNotificationRequest *request = [UNNotificationRequest
         requestWithIdentifier:identifier_of(term, notif->id, id)
                       content:content
                       trigger:nil];
 
-    if (track) {
-        /* The one it replaces is gone; nothing will report back on it */
-        if (notif->id != NULL) {
-            tll_foreach(term->active_notifications, it) {
-                if (it->item.id != NULL && streq(it->item.id, notif->id)) {
-                    notify_free(term, &it->item);
-                    tll_remove(term->active_notifications, it);
-                }
+    const bool track = notif->report_activated || notif->report_closed ||
+                       notif->may_be_programatically_closed;
+
+    /* The one it replaces is gone; nothing will report back on it */
+    if (notif->id != NULL) {
+        tll_foreach(term->active_notifications, it) {
+            if (it->item.id != NULL && streq(it->item.id, notif->id)) {
+                notify_free(term, &it->item);
+                tll_remove(term->active_notifications, it);
             }
+        }
+    }
+
+    if (track) {
+        if (tll_length(term->active_notifications) >= MAX_TRACKED) {
+            notify_free(term, &tll_front(term->active_notifications));
+            tll_pop_front(term->active_notifications);
         }
 
         tll_push_back(term->active_notifications, ((struct notification){
             .id = notif->id != NULL ? xstrdup(notif->id) : NULL,
-            .focus = notif->focus,
             .may_be_programatically_closed = notif->may_be_programatically_closed,
             .report_activated = notif->report_activated,
             .report_closed = notif->report_closed,
@@ -239,33 +291,48 @@ wayl_notify(struct terminal *term, struct notification *notif, const char *title
     [center requestAuthorizationWithOptions:UNAuthorizationOptionAlert | UNAuthorizationOptionSound
                           completionHandler:^(BOOL granted, NSError *error) {
         if (granted) {
-            deliver(request, category);
+            [center addNotificationRequest:request withCompletionHandler:^(NSError *add_error) {
+                if (add_error == nil)
+                    return;
+
+                LOG_WARN("failed to deliver a notification: %s",
+                         add_error.localizedDescription.UTF8String);
+                on_main_thread(^{ forget(ptr, id); });
+            }];
             return;
         }
 
-        /* Without an error, it's the user's decision */
-        if (error == nil)
-            return;
+        on_main_thread(^{
+            forget(ptr, id);
 
-        LOG_WARN("notifications aren't allowed: %s", error.localizedDescription.UTF8String);
-        not_allowed = true;
+            /* Without an error, it's the user's decision */
+            if (error == nil)
+                return;
 
-        /* This one, and all others, use the command */
-        CFRunLoopPerformBlock(CFRunLoopGetMain(), kCFRunLoopCommonModes, ^{
-            struct terminal *t = app_wayland() != NULL ? find_term(content.userInfo[key_term]) : NULL;
+            LOG_WARN("notifications aren't allowed: %s", error.localizedDescription.UTF8String);
+            not_allowed = true;
+
+            /* This one, and all others, use the command */
+            struct terminal *t = find_term(ptr);
             if (t == NULL)
                 return;
 
-            notify_native_done(t, id, false, 0);
-            notify_notify(t, &(struct notification){
-                .title = xstrdup(content.title.UTF8String),
-                .body = xstrdup(content.body.UTF8String),
+            struct notification fallback = {
+                .title = xstrdup(title_str.UTF8String),
+                .body = xstrdup(body_str.UTF8String),
                 .expire_time = -1,
-            });
+            };
+            notify_notify(t, &fallback);
+            notify_free(t, &fallback);
             app_run_hooks();
         });
-        CFRunLoopWakeUp(CFRunLoopGetMain());
     }];
+
+    /* As notify_notify() does; not all callers free them */
+    free(notif->title);
+    free(notif->body);
+    notif->title = NULL;
+    notif->body = NULL;
 
     return true;
 }
@@ -273,12 +340,13 @@ wayl_notify(struct terminal *term, struct notification *notif, const char *title
 bool
 wayl_notify_close(struct terminal *term, struct notification *notif)
 {
-    if (notif->external_id < FIRST_ID)
+    if (notif->pid < FIRST_ID)
         return false;
 
+    UNUserNotificationCenter *center = [UNUserNotificationCenter currentNotificationCenter];
     NSString *identifier = identifier_of(term, notif->id, notif->external_id);
-    [[UNUserNotificationCenter currentNotificationCenter]
-        removeDeliveredNotificationsWithIdentifiers:@[identifier]];
+    [center removePendingNotificationRequestsWithIdentifiers:@[identifier]];
+    [center removeDeliveredNotificationsWithIdentifiers:@[identifier]];
 
     notify_native_done(term, notif->pid, false, 0);
     return true;

@@ -411,7 +411,7 @@ notify_notify(struct terminal *term, struct notification *notif)
                               notif->may_be_programatically_closed;
 
 #if defined(__APPLE__)
-    if (wayl_notify(term, notif, title, body, track_notification))
+    if (wayl_notify(term, notif, title, body))
         return true;
 #endif
 
@@ -655,7 +655,7 @@ notify_close(struct terminal *term, const char *id)
                 "trying to close notification \"%s\" by sending SIGINT to %u",
                 id, notif->pid);
 
-            if (notif->pid == 0) {
+            if (notif->pid <= 0) {
                 LOG_WARN(
                     "cannot close notification \"%s\": no helper process running",
                     id);
@@ -814,10 +814,6 @@ notify_native_done(struct terminal *term, pid_t id, bool activated,
 
         it->item.activated = activated;
         it->item.activated_button = button;
-
-        /* wayl_activate() needs no token */
-        free(it->item.xdg_token);
-        it->item.xdg_token = xstrdup("");
         break;
     }
 

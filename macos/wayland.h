@@ -507,7 +507,7 @@ void wayl_set_run_script_handler(
  */
 struct notification;
 bool wayl_notify(struct terminal *term, struct notification *notif,
-                 const char *title, const char *body, bool track);
+                 const char *title, const char *body);
 bool wayl_notify_close(struct terminal *term, struct notification *notif);
 bool wayl_win_ring_bell(const struct wl_window *win);
 
