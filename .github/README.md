@@ -171,6 +171,11 @@ frameworks.
   own in Notification Center: macOS asks for the permission once, and
   clicking one leads back to its terminal. A
   `command=` in `[desktop-notifications]` replaces that.
+* Drop a folder on the Dock icon, or use Open With in the Finder, to
+  open a window in it; a script opened that way runs in a window that
+  stays until it's closed. The Finder's context menu has New foot Window
+  Here and New foot Tab Here (Services, or Quick Actions, once enabled
+  in System Settings > Keyboard > Keyboard Shortcuts > Services).
 * The shell is started as a login shell, so that it sets up `$PATH`.
 * `TERM=foot`; the terminfo entry is bundled, and found through
   `$TERMINFO_DIRS`.

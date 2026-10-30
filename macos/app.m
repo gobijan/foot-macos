@@ -61,6 +61,13 @@ static struct {
     void *new_window_data;
     NSWindow *tab_parent;
 
+    bool (*run_script)(void *data, const char *path);
+    void *run_script_data;
+
+    /* The first window of the application, and when it was started */
+    struct terminal *initial_term;
+    CFAbsoluteTime started;
+
     bool (*settings)(void *data);
     void *settings_data;
 
@@ -257,6 +264,11 @@ wayl_run(struct wayland *wayl, volatile sig_atomic_t *aborted, bool keep_running
     if (should_exit())
         return !app.fdm_failed;
 
+    if (app.launched_as_app && !app.server && tll_length(wayl->terms) == 1) {
+        app.initial_term = tll_front(wayl->terms);
+        app.started = CFAbsoluteTimeGetCurrent();
+    }
+
     /* A server starts in the background, without windows */
     if (app.server)
         app_windows_changed();
@@ -285,6 +297,15 @@ wayl_set_new_window_handler(struct wayland *wayl,
 {
     app.new_window = handler;
     app.new_window_data = data;
+}
+
+void
+wayl_set_run_script_handler(struct wayland *wayl,
+                            bool (*handler)(void *data, const char *path),
+                            void *data)
+{
+    app.run_script = handler;
+    app.run_script_data = data;
 }
 
 void
@@ -326,6 +347,20 @@ new_window(const char *cwd)
 
     if (!app.new_window(app.new_window_data, cwd))
         LOG_ERR("failed to open a new window");
+}
+
+static void
+new_tab(const char *cwd)
+{
+    /* While another application is active, there's no main window */
+    NSWindow *window = NSApp.mainWindow != nil
+        ? NSApp.mainWindow : NSApp.orderedWindows.firstObject;
+
+    if (window.tabbingMode != NSWindowTabbingModeDisallowed)
+        app.tab_parent = window;
+
+    new_window(cwd);
+    app.tab_parent = nil;
 }
 
 NSWindow *
@@ -875,14 +910,7 @@ create_menu(void)
 - (void)newWindowForTab:(id)sender
 {
     char cwd[PATH_MAX];
-    const bool have_cwd = main_window_cwd(cwd);
-
-    NSWindow *main = NSApp.mainWindow;
-    if (main.tabbingMode != NSWindowTabbingModeDisallowed)
-        app.tab_parent = main;
-
-    new_window(have_cwd ? cwd : NULL);
-    app.tab_parent = nil;
+    new_tab(main_window_cwd(cwd) ? cwd : NULL);
 }
 
 - (void)menuNeedsUpdate:(NSMenu *)menu
@@ -951,6 +979,60 @@ create_menu(void)
     return YES;
 }
 
+/* Open With, and files dropped on the Dock icon */
+- (void)application:(NSApplication *)sender openURLs:(NSArray<NSURL *> *)urls
+{
+    /* foot was started for this: the window it started with isn't wanted */
+    if (app.initial_term != NULL && CFAbsoluteTimeGetCurrent() - app.started < 1. &&
+        tll_length(app.wayl->terms) == 1 && tll_front(app.wayl->terms) == app.initial_term)
+    {
+        term_shutdown(app.initial_term);
+    }
+    app.initial_term = NULL;
+
+    for (NSURL *url in urls) {
+        BOOL is_dir = NO;
+        const char *path = url.fileSystemRepresentation;
+
+        if (!url.isFileURL ||
+            ![[NSFileManager defaultManager] fileExistsAtPath:url.path isDirectory:&is_dir])
+        {
+            LOG_WARN("%s: can't open", url.absoluteString.UTF8String);
+        } else if (is_dir)
+            new_window(path);
+        else if (app.run_script != NULL && !app.run_script(app.run_script_data, path))
+            LOG_ERR("%s: failed to run", path);
+    }
+
+    app_run_hooks();
+}
+
+/* Services: New foot Window Here, New foot Tab Here */
+- (void)openFolders:(NSPasteboard *)pasteboard tabs:(bool)tabs
+{
+    NSArray<NSURL *> *urls = [pasteboard readObjectsForClasses:@[[NSURL class]]
+                                                       options:@{NSPasteboardURLReadingFileURLsOnlyKey: @YES}];
+    for (NSURL *url in urls) {
+        if (tabs)
+            new_tab(url.fileSystemRepresentation);
+        else
+            new_window(url.fileSystemRepresentation);
+    }
+
+    [NSApp activate];
+    app_run_hooks();
+}
+
+- (void)openWindow:(NSPasteboard *)pasteboard userData:(NSString *)data error:(NSString **)error
+{
+    [self openFolders:pasteboard tabs:false];
+}
+
+- (void)openTab:(NSPasteboard *)pasteboard userData:(NSString *)data error:(NSString **)error
+{
+    [self openFolders:pasteboard tabs:true];
+}
+
 - (BOOL)applicationSupportsSecureRestorableState:(NSApplication *)sender
 {
     return YES;
@@ -1003,6 +1085,7 @@ wayl_init(struct fdm *fdm, struct key_binding_manager *key_binding_manager,
         NSApp.delegate = app.delegate;
         create_menu();
         notifications_init();
+        NSApp.servicesProvider = app.delegate;
 
         [[NSNotificationCenter defaultCenter]
             addObserver:app.delegate

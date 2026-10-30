@@ -1,7 +1,8 @@
 /*
- * Additional terminal windows in this process (Cmd+N, the Dock),
- * opening the configuration in an editor (Cmd+,), and the quake
- * terminal (Shell > Show Quake Terminal, the Dock, the hotkey).
+ * Additional terminal windows in this process (Cmd+N, the Dock), also
+ * running a script (Open With), opening the configuration in an editor
+ * (Cmd+,), and the quake terminal (Shell > Show Quake Terminal, the
+ * Dock, the hotkey).
  */
 
 #include <errno.h>
@@ -67,7 +68,7 @@ window_config_free(void *data, int exit_code)
  */
 static bool
 new_terminal(struct new_window_context *ctx, const char *cwd,
-             int argc, char *const *argv)
+             int argc, char *const *argv, bool hold)
 {
     if (cwd == NULL)
         cwd = getenv("HOME");
@@ -81,6 +82,8 @@ new_terminal(struct new_window_context *ctx, const char *cwd,
         free(conf);
         conf = config_clone(ctx->conf);
     }
+
+    conf->hold_at_exit = conf->hold_at_exit || hold;
 
     /* The terminal destroys itself when done; then we free its config */
     if (term_init(conf, ctx->fdm, ctx->reaper, ctx->wayl, "foot", cwd, NULL,
@@ -96,7 +99,7 @@ new_terminal(struct new_window_context *ctx, const char *cwd,
 static bool
 new_window(void *data, const char *cwd)
 {
-    return new_terminal(data, cwd, 0, NULL);
+    return new_terminal(data, cwd, 0, NULL, false);
 }
 
 /*
@@ -225,6 +228,39 @@ get_editor(const char *shell)
                    editor_buf[0] != '\0' ? editor_buf : "vi");
 }
 
+/* In the user's login shell (e.g. for $PATH), as Terminal.app */
+static bool
+run_script(void *data, const char *path)
+{
+    struct new_window_context *ctx = data;
+
+    if (strchr(path, '\'') != NULL) {
+        LOG_ERR("%s: unsupported path", path);
+        return false;
+    }
+
+    char **shell_argv = NULL;
+    if (!tokenize_cmdline(ctx->conf->shell, &shell_argv) || shell_argv[0] == NULL) {
+        free(shell_argv);
+        return false;
+    }
+
+    char *cmd = xasprintf("'%s'", path);
+    char *argv[] = {shell_argv[0], "-l", "-c", cmd, NULL};
+
+    char *dir = xstrdup(path);
+    *strrchr(dir, '/') = '\0';
+
+    bool ret = new_terminal(ctx, dir[0] != '\0' ? dir : "/", 4, argv, true);
+
+    free(dir);
+    free(cmd);
+    for (char **a = shell_argv; *a != NULL; a++)
+        free(*a);
+    free(shell_argv);
+    return ret;
+}
+
 /* Opens the configuration in $EDITOR, in a new window */
 static bool
 open_settings(void *data)
@@ -259,7 +295,7 @@ open_settings(void *data)
     *strrchr(dir, '/') = '\0';
 
     LOG_INFO("opening settings: %s", cmd);
-    bool ret = new_terminal(ctx, dir, 4, argv);
+    bool ret = new_terminal(ctx, dir, 4, argv, false);
 
     free(dir);
     free(cmd);
@@ -285,6 +321,7 @@ wayl_enable_new_windows(struct wayland *wayl, const struct config *conf,
     };
 
     wayl_set_new_window_handler(wayl, &new_window, &context);
+    wayl_set_run_script_handler(wayl, &run_script, &context);
     wayl_set_settings_handler(wayl, &open_settings, &context);
     wayl_set_quake_handler(wayl, &toggle_quake, &context,
                            conf->macos.quake.hotkey.sym,

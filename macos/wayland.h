@@ -494,6 +494,14 @@ void wayl_win_alpha_changed(struct wl_window *win);
 bool wayl_win_set_urgent(struct wl_window *win);
 
 /*
+ * Runs a script (Open With), in a new window that stays when it's done
+ * (macos/windows.c).
+ */
+void wayl_set_run_script_handler(
+    struct wayland *wayl, bool (*handler)(void *data, const char *path),
+    void *data);
+
+/*
  * Notification Center (macos/notifications.m). Returns false if it isn't
  * used: notify.c runs desktop-notifications.command then.
  */
