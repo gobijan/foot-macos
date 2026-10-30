@@ -31,6 +31,9 @@ NSMenuItem *themes_menu_item(void);
 /* updates.m: foot > Check for Updates… (nil without Sparkle.framework) */
 NSMenuItem *updates_menu_item(void);
 
+/* While a new tab's window is created: the window it joins (else nil) */
+NSWindow *app_new_tab_parent(void);
+
 /* The monitor corresponding to 'screen' (may be NULL) */
 const struct monitor *app_monitor_for_screen(NSScreen *screen);
 

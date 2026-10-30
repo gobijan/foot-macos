@@ -316,6 +316,24 @@ keymap_produces(const struct seat *seat, uint32_t key, NSString *text)
     [self updateModifiers:event.modifierFlags];
 }
 
+/* Cmd+1-8 select that tab, Cmd+9 the last one, as in web browsers */
+- (BOOL)selectTab:(NSEvent *)event
+{
+    NSString *chars = event.charactersIgnoringModifiers;
+    NSArray<NSWindow *> *tabs = self.window.tabbedWindows;
+    if (tabs == nil || chars.length != 1)
+        return NO;
+
+    const unichar c = [chars characterAtIndex:0];
+    if (c < '1' || c > '9')
+        return NO;
+
+    const NSUInteger index = c == '9' ? tabs.count - 1 : c - '1';
+    if (index < tabs.count)
+        self.window.tabGroup.selectedWindow = tabs[index];
+    return YES;
+}
+
 - (BOOL)performKeyEquivalent:(NSEvent *)event
 {
     /*
@@ -330,6 +348,9 @@ keymap_produces(const struct seat *seat, uint32_t key, NSString *text)
             [self keyDown:event];
             return YES;
         }
+
+        if (flags == NSEventModifierFlagCommand && [self selectTab:event])
+            return YES;
     }
 
     return [super performKeyEquivalent:event];

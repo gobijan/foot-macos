@@ -38,7 +38,7 @@
  * every epoll_wait() on Linux.
  */
 
-@interface FootAppDelegate : NSObject <NSApplicationDelegate>
+@interface FootAppDelegate : NSObject <NSApplicationDelegate, NSMenuDelegate>
 @end
 
 static struct {
@@ -59,6 +59,7 @@ static struct {
 
     bool (*new_window)(void *data, const char *cwd);
     void *new_window_data;
+    NSWindow *tab_parent;
 
     bool (*settings)(void *data);
     void *settings_data;
@@ -69,6 +70,8 @@ static struct {
     uint32_t hotkey_sym;
     unsigned hotkey_mods;
     NSMenuItem *quake_item;
+
+    NSMenuItem *close_item;
 
     FootAppDelegate *delegate;
 } app;
@@ -323,6 +326,12 @@ new_window(const char *cwd)
 
     if (!app.new_window(app.new_window_data, cwd))
         LOG_ERR("failed to open a new window");
+}
+
+NSWindow *
+app_new_tab_parent(void)
+{
+    return app.tab_parent;
 }
 
 /*
@@ -781,11 +790,14 @@ create_menu(void)
         NSMenu *menu = [[NSMenu alloc] initWithTitle:@"Shell"];
 
         [menu addItem:menu_item(@"New Window", @selector(newWindow:), @"n", cmd)];
+        [menu addItem:menu_item(@"New Tab", @selector(newWindowForTab:), @"t", cmd)];
         app.quake_item = menu_item(quake_item_title(), @selector(toggleQuakeTerminal:), @"", 0);
         [menu addItem:app.quake_item];
         [menu addItem:[NSMenuItem separatorItem]];
-        [menu addItem:menu_item(@"Close Window", @selector(performClose:), @"w", cmd)];
+        app.close_item = menu_item(@"Close Window", @selector(performClose:), @"w", cmd);
+        [menu addItem:app.close_item];
 
+        menu.delegate = app.delegate;
         item.submenu = menu;
         [bar addItem:item];
     }
@@ -837,6 +849,9 @@ create_menu(void)
         [menu addItem:menu_item(@"Minimize", @selector(performMiniaturize:), @"m", cmd)];
         [menu addItem:menu_item(@"Zoom", @selector(performZoom:), @"", 0)];
         [menu addItem:[NSMenuItem separatorItem]];
+        [menu addItem:menu_item(@"Show Previous Tab", @selector(selectPreviousTab:), @"{", cmd)];
+        [menu addItem:menu_item(@"Show Next Tab", @selector(selectNextTab:), @"}", cmd)];
+        [menu addItem:[NSMenuItem separatorItem]];
         [menu addItem:menu_item(@"Bring All to Front", @selector(arrangeInFront:), @"", 0)];
 
         item.submenu = menu;
@@ -854,6 +869,26 @@ create_menu(void)
 {
     char cwd[PATH_MAX];
     new_window(main_window_cwd(cwd) ? cwd : NULL);
+}
+
+/* The tab bar's + button too. Each tab is a window of its own */
+- (void)newWindowForTab:(id)sender
+{
+    char cwd[PATH_MAX];
+    const bool have_cwd = main_window_cwd(cwd);
+
+    NSWindow *main = NSApp.mainWindow;
+    if (main.tabbingMode != NSWindowTabbingModeDisallowed)
+        app.tab_parent = main;
+
+    new_window(have_cwd ? cwd : NULL);
+    app.tab_parent = nil;
+}
+
+- (void)menuNeedsUpdate:(NSMenu *)menu
+{
+    app.close_item.title = NSApp.keyWindow.tabbedWindows.count > 1
+        ? @"Close Tab" : @"Close Window";
 }
 
 /* The Dock's menu isn't a window's: in the home directory */

@@ -120,6 +120,7 @@ quake_window_create(NSRect content_rect)
                       defer:NO];
 
     panel.level = NSFloatingWindowLevel;
+    panel.tabbingMode = NSWindowTabbingModeDisallowed;
     panel.collectionBehavior = NSWindowCollectionBehaviorCanJoinAllSpaces |
                                NSWindowCollectionBehaviorFullScreenAuxiliary |
                                NSWindowCollectionBehaviorIgnoresCycle;

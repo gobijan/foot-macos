@@ -355,6 +355,14 @@ window_resized(struct wl_window *win)
     const NSSize size = view_of(win).bounds.size;
 
     NSWindow *nswindow = nswindow_of(win);
+
+    /* A new tab of a full screen window is one, without entering it */
+    const bool fullscreen = (nswindow.styleMask & NSWindowStyleMaskFullScreen) != 0;
+    if (fullscreen != win->is_fullscreen) {
+        win->is_fullscreen = fullscreen;
+        wayl_win_alpha_changed(win);
+    }
+
     win->is_maximized = nswindow.isZoomed && !win->is_fullscreen;
 
     render_resize(term, (int)size.width, (int)size.height, RESIZE_BY_CELLS);
@@ -375,8 +383,9 @@ window_fit(struct wl_window *win)
     struct terminal *term = win->term;
     NSWindow *nswindow = nswindow_of(win);
 
+    /* Tabs share their window's size */
     if (!win->is_fullscreen && !win->is_maximized && !win->is_tiled &&
-        !win->is_resizing)
+        !win->is_resizing && nswindow.tabbedWindows.count <= 1)
     {
         const NSRect old = nswindow.frame;
         NSRect frame = [nswindow frameRectForContentRect:NSMakeRect(
@@ -401,9 +410,12 @@ window_fit(struct wl_window *win)
     window_resized(win);
 }
 
-/* The initial configure; picks the window size, and shows the window */
+/*
+ * The initial configure; picks the window size, and shows the window.
+ * As a tab of 'tab_parent', if any: its size, not the configuration's.
+ */
 static void
-window_configure(struct wl_window *win)
+window_configure(struct wl_window *win, NSWindow *tab_parent)
 {
     struct terminal *term = win->term;
     NSWindow *nswindow = nswindow_of(win);
@@ -433,12 +445,18 @@ window_configure(struct wl_window *win)
     /* The color theme, before the first frame */
     app_apply_color_theme(term, false);
 
+    /* Before it's shown: as a tab of a full screen window, that resizes it */
+    term_window_configured(term);
+
     const NSSize size = NSMakeSize(term->width / term->scale, term->height / term->scale);
     [nswindow setContentSize:size];
 
     /* Cascade from the key window, if any */
     NSWindow *key = NSApp.keyWindow;
-    if (key != nil && key != nswindow) {
+    if (tab_parent != nil) {
+        [nswindow setFrame:tab_parent.frame display:NO];
+        [tab_parent addTabbedWindow:nswindow ordered:NSWindowAbove];
+    } else if (key != nil && key != nswindow) {
         NSPoint top_left = NSMakePoint(NSMinX(key.frame), NSMaxY(key.frame));
         [nswindow cascadeTopLeftFromPoint:top_left];
         [nswindow cascadeTopLeftFromPoint:[nswindow cascadeTopLeftFromPoint:top_left]];
@@ -448,7 +466,6 @@ window_configure(struct wl_window *win)
     app_windows_changed();
     [nswindow makeKeyAndOrderFront:nil];
 
-    term_window_configured(term);
     app_run_hooks();
 }
 
@@ -489,7 +506,6 @@ wayl_win_init(struct terminal *term, const char *token)
                         backing:NSBackingStoreBuffered
                           defer:NO];
 
-        nswindow.tabbingMode = NSWindowTabbingModeDisallowed;
         nswindow.collectionBehavior |= NSWindowCollectionBehaviorFullScreenPrimary;
     }
 
@@ -540,11 +556,12 @@ wayl_win_init(struct terminal *term, const char *token)
      * common modes, like FDM events (see wayl_init()).
      */
     __weak NSWindow *weak_window = nswindow;
+    __weak NSWindow *weak_parent = app_new_tab_parent();
     CFRunLoopPerformBlock(CFRunLoopGetMain(), kCFRunLoopCommonModes, ^{
         NSWindow *w = weak_window;
         FootWindowDelegate *d = w != nil ? w.delegate : nil;
         if (d != nil && d.win != NULL && !d.win->is_configured)
-            window_configure(d.win);
+            window_configure(d.win, weak_parent);
     });
     CFRunLoopWakeUp(CFRunLoopGetMain());
 
@@ -619,6 +636,9 @@ wayl_win_destroy(struct wl_window *win)
         /* E.g. the shell exited, while asking whether to close the window */
         if (nswindow.attachedSheet != nil)
             [nswindow endSheet:nswindow.attachedSheet];
+
+        /* Ordering out a tab hides all of them */
+        [nswindow.tabGroup removeWindow:nswindow];
 
         [nswindow orderOut:nil];
         [nswindow close];
