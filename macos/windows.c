@@ -228,16 +228,14 @@ get_editor(const char *shell)
                    editor_buf[0] != '\0' ? editor_buf : "vi");
 }
 
-/* In the user's login shell (e.g. for $PATH), as Terminal.app */
+/*
+ * In the user's login shell (e.g. for $PATH), as Terminal.app; without
+ * it, if it wouldn't take the quoted path for a command to run.
+ */
 static bool
 run_script(void *data, const char *path)
 {
     struct new_window_context *ctx = data;
-
-    if (strchr(path, '\'') != NULL) {
-        LOG_ERR("%s: unsupported path", path);
-        return false;
-    }
 
     char **shell_argv = NULL;
     if (!tokenize_cmdline(ctx->conf->shell, &shell_argv) || shell_argv[0] == NULL) {
@@ -245,13 +243,24 @@ run_script(void *data, const char *path)
         return false;
     }
 
+    const char *shell = strrchr(shell_argv[0], '/');
+    shell = shell != NULL ? shell + 1 : shell_argv[0];
+
+    const bool use_shell =
+        strpbrk(path, "'\\") == NULL &&
+        strcmp(shell, "nu") != 0 && strcmp(shell, "pwsh") != 0 &&
+        strcmp(shell, "elvish") != 0 && strcmp(shell, "xonsh") != 0;
+
     char *cmd = xasprintf("'%s'", path);
-    char *argv[] = {shell_argv[0], "-l", "-c", cmd, NULL};
+    char *shell_cmd[] = {shell_argv[0], "-l", "-c", cmd, NULL};
+    char *direct_cmd[] = {(char *)path, NULL};
 
     char *dir = xstrdup(path);
     *strrchr(dir, '/') = '\0';
 
-    bool ret = new_terminal(ctx, dir[0] != '\0' ? dir : "/", 4, argv, true);
+    bool ret = new_terminal(
+        ctx, dir[0] != '\0' ? dir : "/", use_shell ? 4 : 1,
+        use_shell ? shell_cmd : direct_cmd, true);
 
     free(dir);
     free(cmd);
