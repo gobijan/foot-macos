@@ -1,5 +1,6 @@
 #import "app.h"
 
+#import <Carbon/Carbon.h>
 #import <QuartzCore/QuartzCore.h>
 
 #include <crt_externs.h>
@@ -767,6 +768,31 @@ wayl_theme_switch_all(bool dark)
 }
 
 /*
+ * Secure Keyboard Entry: other processes can't see what's typed, while
+ * foot is the active application; e.g. passwords. Like in Terminal.app,
+ * it's the user's choice, and stays on.
+ */
+
+static NSString *const secure_input_key = @"SecureKeyboardEntry";
+static bool secure_input_enabled;
+
+static void
+update_secure_input(void)
+{
+    const bool enable = NSApp.isActive &&
+        [NSUserDefaults.standardUserDefaults boolForKey:secure_input_key];
+
+    if (enable == secure_input_enabled)
+        return;
+
+    secure_input_enabled = enable;
+    if (enable)
+        EnableSecureEventInput();
+    else
+        DisableSecureEventInput();
+}
+
+/*
  * Menu
  *
  * Key equivalents are macOS' usual ones (Cmd+C, Cmd+F, Ctrl+Cmd+F) or,
@@ -799,6 +825,7 @@ create_menu(void)
             [menu addItem:updates];
         [menu addItem:[NSMenuItem separatorItem]];
         [menu addItem:menu_item(@"Settings…", @selector(openSettings:), @",", cmd)];
+        [menu addItem:menu_item(@"Secure Keyboard Entry", @selector(toggleSecureInput:), @"", 0)];
         [menu addItem:[NSMenuItem separatorItem]];
 
         NSMenuItem *services = menu_item(@"Services", nil, @"", 0);
@@ -930,8 +957,31 @@ create_menu(void)
     toggle_quake();
 }
 
+- (void)toggleSecureInput:(id)sender
+{
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    [defaults setBool:![defaults boolForKey:secure_input_key] forKey:secure_input_key];
+    update_secure_input();
+}
+
+- (void)applicationDidBecomeActive:(NSNotification *)notification
+{
+    update_secure_input();
+}
+
+- (void)applicationDidResignActive:(NSNotification *)notification
+{
+    update_secure_input();
+}
+
 - (BOOL)validateMenuItem:(NSMenuItem *)item
 {
+    if (item.action == @selector(toggleSecureInput:)) {
+        item.state = [NSUserDefaults.standardUserDefaults boolForKey:secure_input_key]
+            ? NSControlStateValueOn : NSControlStateValueOff;
+        return YES;
+    }
+
     if (item.action == @selector(toggleQuakeTerminal:)) {
         item.title = quake_item_title();
         return app.quake != NULL;

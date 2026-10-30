@@ -176,6 +176,10 @@ frameworks.
   stays until it's closed. The Finder's context menu has New foot Window
   Here and New foot Tab Here (Services, or Quick Actions, once enabled
   in System Settings > Keyboard > Keyboard Shortcuts > Services).
+* foot > Secure Keyboard Entry keeps other processes from seeing what's
+  typed in foot, e.g. passwords. Like in Terminal.app, it's off by
+  default, and stays on until it's turned off; meanwhile, tools that
+  watch the keyboard don't work while foot is active.
 * The shell is started as a login shell, so that it sets up `$PATH`.
 * `TERM=foot`; the terminfo entry is bundled, and found through
   `$TERMINFO_DIRS`.
