@@ -35,6 +35,19 @@
 
 - (void)invalidate;
 
+/* NULL when the window is destroyed */
+- (struct terminal *)term;
+
+/* accessibility.m */
+@property (nonatomic) id accessibilityText;     /* FootScreenText */
+@property (nonatomic) BOOL accessibilityPending;
+
+@end
+
+/* Accessibility: VoiceOver (accessibility.m) */
+@interface FootView (Accessibility)
+- (void)accessibilityFrameRendered;
+- (void)accessibilityInvalidate;
 @end
 
 /* A layer that never animates */

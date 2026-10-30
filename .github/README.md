@@ -180,6 +180,9 @@ frameworks.
   typed in foot, e.g. passwords. Like in Terminal.app, it's off by
   default, and stays on until it's turned off; meanwhile, tools that
   watch the keyboard don't work while foot is active.
+* VoiceOver and other assistive technologies see the visible part of
+  the terminal as a text area, line by line, with the cursor as its
+  insertion point.
 * The shell is started as a login shell, so that it sets up `$PATH`.
 * `TERM=foot`; the terminfo entry is bundled, and found through
   `$TERMINFO_DIRS`.

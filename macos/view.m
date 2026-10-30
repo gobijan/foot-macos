@@ -124,6 +124,7 @@ utf8_offset(NSString *str, NSUInteger idx)
 
 - (void)invalidate
 {
+    [self accessibilityInvalidate];
     [_displayLink invalidate];
     _displayLink = nil;
     _win = NULL;
@@ -167,6 +168,7 @@ utf8_offset(NSString *str, NSUInteger idx)
     shm_chain_poll_releases(term->render.chains.grid);
 
     render_frame_callback(term);
+    [self accessibilityFrameRendered];
 }
 
 - (void)requestFrame
