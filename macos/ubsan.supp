@@ -4,6 +4,10 @@
 # Bit shifts into the sign bit
 shift-base:*/pixman/*
 
+# Zero added to a null pointer, e.g. the end of an empty array. It's allowed
+# since C2y; only older compilers report it
+pointer-overflow:*
+
 # Arrays of size 0 (no tracking points; no text in the scrollback indicator)
 vla-bound:grid.c
 vla-bound:render.c

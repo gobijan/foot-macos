@@ -18,6 +18,8 @@ SANITIZE_DIR := build-sanitize
 # sanitizers turn off
 SANITIZE_OPTIONS := $(MESON_OPTIONS) --buildtype=debug -Db_sanitize=address,undefined \
 	-Db_lundef=false -Dwerror=false
+# As in macos/smoke-test.py; meson test has its own default otherwise
+SANITIZE_UBSAN := halt_on_error=1:print_stacktrace=1:suppressions=$(CURDIR)/macos/ubsan.supp
 APP := $(RELEASE_DIR)/macos/foot.app
 INSTALLED_APP := /Applications/foot.app
 LSREGISTER := /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
@@ -97,7 +99,7 @@ smoke: build ## Run foot for real: output, footclient, the quake terminal (windo
 .PHONY: sanitize
 sanitize: $(SANITIZE_DIR)/build.ninja ## All of the above, with AddressSanitizer and UBSan, in build-sanitize/
 	$(NINJA) -C $(SANITIZE_DIR)
-	$(MESON) test -C $(SANITIZE_DIR) config --print-errorlogs
+	UBSAN_OPTIONS=$(SANITIZE_UBSAN) $(MESON) test -C $(SANITIZE_DIR) config --print-errorlogs
 	macos/smoke-test.py $(SANITIZE_DIR)/macos
 
 .PHONY: check-config
