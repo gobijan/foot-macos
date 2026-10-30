@@ -22,7 +22,12 @@
  *
  * Only with desktop-notifications.command at its default, which is the
  * fallback for what can't use Notification Center: the foot binary
- * outside of foot.app, and builds macOS doesn't accept (not signed).
+ * outside of foot.app, and when it fails. Being turned off isn't a
+ * failure: then there are none, as the command would only send them
+ * from Script Editor instead. macOS also turns them off when foot exits
+ * while it asks for the permission, and doesn't ask again. This is
+ * checked for each one, so turning them on in System Settings doesn't
+ * take a restart.
  *
  * There are no helper processes. Those a program wants to hear about
  * are tracked, with an ID in place of the helper's PID, which notify.c
@@ -44,8 +49,11 @@ static NSString *const action_prefix = @"button-";
 
 static uint32_t next_id = FIRST_ID;
 
-/* macOS doesn't allow foot to use it at all (e.g. no real signature) */
-static bool not_allowed;
+/* It failed, for another reason than being turned off */
+static bool failed;
+
+/* Notifications can be frequent; this is worth saying only once */
+static bool warned_turned_off;
 
 /* The default of desktop-notifications.command, in config.c */
 static bool
@@ -208,7 +216,7 @@ bool
 wayl_notify(struct terminal *term, struct notification *notif, const char *title,
             const char *body)
 {
-    if (NSBundle.mainBundle.bundleIdentifier == nil || not_allowed ||
+    if (NSBundle.mainBundle.bundleIdentifier == nil || failed ||
         title == NULL || !command_is_default(term))
     {
         return false;
@@ -302,30 +310,45 @@ wayl_notify(struct terminal *term, struct notification *notif, const char *title
             return;
         }
 
-        on_main_thread(^{
-            forget(ptr, id);
+        on_main_thread(^{ forget(ptr, id); });
 
-            /* Without an error, it's the user's decision */
-            if (error == nil)
-                return;
+        /* Without an error, it's the user's decision */
+        if (error == nil)
+            return;
 
-            LOG_WARN("notifications aren't allowed: %s", error.localizedDescription.UTF8String);
-            not_allowed = true;
+        /* It's also what a later request gets, the same as a failure would */
+        [center getNotificationSettingsWithCompletionHandler:^(UNNotificationSettings *settings) {
+            const bool turned_off = settings.authorizationStatus == UNAuthorizationStatusDenied;
 
-            /* This one, and all others, use the command */
-            struct terminal *t = find_term(ptr);
-            if (t == NULL)
-                return;
+            on_main_thread(^{
+                if (turned_off) {
+                    if (!warned_turned_off) {
+                        LOG_WARN("notifications are turned off: "
+                                 "System Settings > Notifications > foot");
+                        warned_turned_off = true;
+                    }
+                    return;
+                }
 
-            struct notification fallback = {
-                .title = xstrdup(title_str.UTF8String),
-                .body = xstrdup(body_str.UTF8String),
-                .expire_time = -1,
-            };
-            notify_notify(t, &fallback);
-            notify_free(t, &fallback);
-            app_run_hooks();
-        });
+                LOG_WARN("can't use Notification Center: %s",
+                         error.localizedDescription.UTF8String);
+                failed = true;
+
+                /* This one, and all others, use the command */
+                struct terminal *t = find_term(ptr);
+                if (t == NULL)
+                    return;
+
+                struct notification fallback = {
+                    .title = xstrdup(title_str.UTF8String),
+                    .body = xstrdup(body_str.UTF8String),
+                    .expire_time = -1,
+                };
+                notify_notify(t, &fallback);
+                notify_free(t, &fallback);
+                app_run_hooks();
+            });
+        }];
     }];
 
     /* As notify_notify() does; not all callers free them */

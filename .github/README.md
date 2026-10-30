@@ -170,7 +170,11 @@ frameworks.
 * Desktop notifications (OSC 9, 99 and 777, `bell=notify`) are foot's
   own in Notification Center: macOS asks for the permission once, and
   clicking one leads back to its terminal. A
-  `command=` in `[desktop-notifications]` replaces that.
+  `command=` in `[desktop-notifications]` replaces that. None appear
+  while foot's window has the focus (`inhibit-when-focused`). If there
+  are none otherwise, turn them on in System Settings > Notifications >
+  foot: macOS doesn't ask again after a no, or when foot exited while
+  it was asking.
 * Drop a folder on the Dock icon, or use Open With in the Finder, to
   open a window in it; a script opened that way runs in a window that
   stays until it's closed. The Finder's context menu has New foot Window
