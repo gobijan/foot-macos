@@ -1501,10 +1501,14 @@ fcft_rasterize_grapheme_utf32(struct fcft_font *_font,
 
 struct fcft_text_run *
 fcft_rasterize_text_run_utf32(struct fcft_font *_font, size_t len,
-                              const uint32_t text[static len],
+                              const uint32_t *text,
                               enum fcft_subpixel subpixel)
 {
     struct font_priv *font = (struct font_priv *)_font;
+
+    /* E.g. the scrollback indicator, at the bottom */
+    if (len == 0)
+        return NULL;
 
     CTLineRef line = create_line(font, len, text);
     if (line == NULL)
