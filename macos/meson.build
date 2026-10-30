@@ -24,6 +24,13 @@ add_global_arguments('-mmacosx-version-min=@0@'.format(macos_min_version),
 add_global_link_arguments('-mmacosx-version-min=@0@'.format(macos_min_version),
                           language: ['c', 'objc'])
 
+# The profile (macos/pgo.sh) may be older than the sources, and it has
+# the main() of one executable only
+if get_option('b_pgo') == 'use'
+  add_global_arguments('-Wno-backend-plugin', '-Wno-profile-instr-out-of-date',
+                       language: ['c', 'objc'])
+endif
+
 # Headers Apple's libc lacks (C11 threads/uchar), plus the handful of
 # Linux constants foot uses as its own vocabulary. See macos/compat/.
 compat_dir = meson.current_source_dir() / 'compat'
@@ -38,6 +45,9 @@ add_project_arguments(
   (is_debug_build
     ? ['-D_DEBUG']
     : [cc.get_supported_arguments('-fno-asynchronous-unwind-tables')]) +
+  (get_option('b_pgo') == 'use'
+    ? ['-DFOOT_PGO_ENABLED=1']
+    : []) +
   (get_option('ime')
     ? ['-DFOOT_IME_ENABLED=1']
     : []) +

@@ -1,8 +1,10 @@
 #!/bin/bash
 #
 # Builds foot.app for distribution: universal (Apple silicon and Intel),
-# with Sparkle (foot > Check for Updates…), signed with a Developer ID
-# and the hardened runtime, notarized and stapled; and zipped.
+# optimized with a profile of each (macos/pgo.sh; windows open, and the
+# Intel one needs Rosetta), with Sparkle (foot > Check for Updates…),
+# signed with a Developer ID and the hardened runtime, notarized and
+# stapled; and zipped.
 #
 # Usage: dist.sh <version>  (e.g. 1.28.0-macos.1)
 #        dist.sh --fetch-sparkle  (only fetches Sparkle, and its tools)
@@ -73,13 +75,10 @@ fi
 meson_options=(--native-file macos/native.ini -Dgrapheme-clustering=enabled --buildtype=release)
 
 echo "==> Building (Apple silicon)"
-[[ -f build-release/build.ninja ]] || meson setup build-release "${meson_options[@]}"
-ninja -C build-release
+macos/pgo.sh build-release "${meson_options[@]}"
 
 echo "==> Building (Intel)"
-[[ -f build-x86_64/build.ninja ]] ||
-    meson setup build-x86_64 "${meson_options[@]}" --cross-file macos/x86_64.ini
-ninja -C build-x86_64
+macos/pgo.sh build-x86_64 "${meson_options[@]}" --cross-file macos/x86_64.ini
 
 fetch_sparkle
 

@@ -1,6 +1,8 @@
 /build/
 /build-release/
+/build-release-pgo/
 /build-x86_64/
+/build-x86_64-pgo/
 /.cache/
 /bld/
 /pkg/

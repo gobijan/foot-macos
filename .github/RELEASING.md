@@ -60,7 +60,9 @@ It asks for everything, and publishes nothing before the last question.
 4. asks whether to publish, then tags `HEAD`,
 5. builds the universal `foot.app` with Sparkle, signs it with the
    hardened runtime, notarizes and staples it, and zips it
-   (`macos/dist.sh`, also `make dist` for a build without releasing),
+   (`macos/dist.sh`, also `make dist` for a build without releasing);
+   it's optimized with a profile (`macos/pgo.sh`): windows open for a
+   few seconds, and the Intel build needs Rosetta,
 6. signs the zip for Sparkle, and writes the appcast,
 7. pushes the tag, and creates the GitHub release with both,
 8. updates the cask in gobijan/homebrew-tap (the first release creates

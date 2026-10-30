@@ -93,6 +93,10 @@ Requirements: Xcode (or the command line tools), and
 make install    # builds foot.app, and installs it to /Applications
 ```
 
+Releases are built with profile guided optimization, and are faster
+than that: `make pgo` before `make install` does the same (a window
+opens for a few seconds, processing the benchmark's workloads).
+
 `make` lists all commands: building and running the debug and release
 builds, tests, upstream syncs, CI. The Makefile is only a frontend for
 meson; without it:

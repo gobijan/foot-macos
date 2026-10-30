@@ -12,6 +12,7 @@ MESON_OPTIONS := --native-file macos/native.ini -Dgrapheme-clustering=enabled
 
 DEBUG_DIR := build
 RELEASE_DIR := build-release
+RELEASE_OPTIONS := $(MESON_OPTIONS) --buildtype=release
 APP := $(RELEASE_DIR)/macos/foot.app
 INSTALLED_APP := /Applications/foot.app
 LSREGISTER := /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
@@ -57,10 +58,14 @@ build: $(DEBUG_DIR)/build.ninja ## Build the debug version into build/
 release: $(RELEASE_DIR)/build.ninja ## Build the optimized version and foot.app into build-release/
 	$(NINJA) -C $(RELEASE_DIR)
 
+.PHONY: pgo
+pgo: ## Like release, with profile guided optimization, as in releases (a window opens)
+	macos/pgo.sh $(RELEASE_DIR) $(RELEASE_OPTIONS)
+
 .PHONY: setup
 setup: ## Configure both builds again (after changing meson options)
 	$(MESON) setup --reconfigure $(DEBUG_DIR) $(MESON_OPTIONS) --buildtype=debug
-	$(MESON) setup --reconfigure $(RELEASE_DIR) $(MESON_OPTIONS) --buildtype=release
+	$(MESON) setup --reconfigure $(RELEASE_DIR) $(RELEASE_OPTIONS) -Db_lto=true
 
 .PHONY: clean
 clean: ## Remove the compiled files, keep the configuration
@@ -70,7 +75,7 @@ clean: ## Remove the compiled files, keep the configuration
 
 .PHONY: distclean
 distclean: ## Remove both build directories
-	rm -rf $(DEBUG_DIR) $(RELEASE_DIR)
+	rm -rf $(DEBUG_DIR) $(RELEASE_DIR) $(RELEASE_DIR)-pgo
 
 ##@ Test
 
@@ -86,7 +91,7 @@ check-config: build ## Check your foot.ini (or CONFIG=path)
 	@echo 'The configuration is valid.'
 
 .PHONY: bench
-bench: release ## Benchmark foot against kitty and Ghostty (macos/bench; ~10 minutes, windows open)
+bench: pgo ## Benchmark foot against kitty and Ghostty (macos/bench; ~10 minutes, windows open)
 	macos/bench/bench.py $(ARGS)
 
 .PHONY: crash
@@ -200,4 +205,4 @@ $(DEBUG_DIR)/build.ninja:
 	$(MESON) setup $(DEBUG_DIR) $(MESON_OPTIONS) --buildtype=debug
 
 $(RELEASE_DIR)/build.ninja:
-	$(MESON) setup $(RELEASE_DIR) $(MESON_OPTIONS) --buildtype=release
+	$(MESON) setup $(RELEASE_DIR) $(RELEASE_OPTIONS) -Db_lto=true
