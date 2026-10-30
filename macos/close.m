@@ -5,6 +5,7 @@
 #include <unistd.h>
 
 #include <sys/param.h>
+#include <sys/sysctl.h>
 
 #include <tllist.h>
 
@@ -32,6 +33,21 @@ in_list(const char *name, const char *const *list, size_t count)
     return false;
 }
 
+/* Unlike proc_name(), this works with other users' processes too (e.g. sudo) */
+static bool
+process_name(pid_t pid, char name[static MAXCOMLEN + 1])
+{
+    int mib[] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, pid};
+    struct kinfo_proc info;
+    size_t size = sizeof(info);
+
+    if (sysctl(mib, ALEN(mib), &info, &size, NULL, 0) < 0 || size == 0)
+        return false;
+
+    strlcpy(name, info.kp_proc.p_comm, MAXCOMLEN + 1);
+    return name[0] != '\0';
+}
+
 /* The name of what's running in the terminal, or nil if there's nothing to lose */
 static NSString *
 running_process(const struct terminal *term)
@@ -47,10 +63,21 @@ running_process(const struct terminal *term)
     if (!term->conf->macos.confirm_close || term->shutdown.in_progress || term->ptmx < 0)
         return nil;
 
-    char name[2 * MAXCOMLEN + 1];
     const pid_t pgrp = tcgetpgrp(term->ptmx);
-    if (pgrp <= 0 || proc_name(pgrp, name, sizeof(name)) <= 0)
+    if (pgrp <= 0)
         return nil;
+
+    pid_t pids[16];
+    const int count = proc_listpgrppids(pgrp, pids, sizeof(pids));
+
+    /* The group's leader may be gone, e.g. the first process of a pipeline */
+    char name[MAXCOMLEN + 1];
+    bool named = process_name(pgrp, name);
+    for (int i = 0; !named && i < MIN(count, (int)ALEN(pids)); i++)
+        named = process_name(pids[i], name);
+
+    if (!named)
+        return count > 0 ? @"A process" : nil;
 
     if (in_list(name, multiplexers, ALEN(multiplexers)))
         return nil;
@@ -59,12 +86,8 @@ running_process(const struct terminal *term)
      * A shell waiting for a command is the terminal's own, and has its
      * process group for itself. Any other is e.g. running a script.
      */
-    pid_t pids[2];
-    if (pgrp == term->slave && in_list(name, shells, ALEN(shells)) &&
-        proc_listpgrppids(pgrp, pids, sizeof(pids)) == 1)
-    {
+    if (pgrp == term->slave && count == 1 && in_list(name, shells, ALEN(shells)))
         return nil;
-    }
 
     return @(name);
 }
@@ -94,6 +117,9 @@ window_close(struct wl_window *win)
     }
 
     NSAlert *alert = create_alert(@"Close this window?", process, @"Close");
+
+    /* A sheet on a tab that isn't selected wouldn't be seen */
+    nswindow.tabGroup.selectedWindow = nswindow;
 
     [alert beginSheetModalForWindow:nswindow completionHandler:^(NSModalResponse response) {
         /* The delegate is gone with the terminal (see wayl_win_destroy()) */

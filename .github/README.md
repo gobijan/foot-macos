@@ -165,7 +165,7 @@ frameworks.
   Grok Day. For one theme in both modes, turn it off. Programs that ask
   for theme changes (mode 2031, e.g. Neovim) are notified.
 * Closing a window, or quitting, asks first when something other than
-  the shell is running in it (tmux and screen don't count: they keep
+  the shell is running in it (tmux, screen and zellij don't count: they keep
   running). `macos-confirm-close=no` in `[main]` turns that off.
 * Desktop notifications (OSC 9, 99 and 777, `bell=notify`) are foot's
   own in Notification Center: macOS asks for the permission once, and
