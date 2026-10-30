@@ -128,6 +128,9 @@ frameworks.
   Show All Tabs work as in other Mac apps. `Cmd+1` to `Cmd+8` select a
   tab, `Cmd+9` the last one, `Cmd+Shift+[` and `Cmd+Shift+]` the
   previous and the next one.
+* `Cmd`+click opens a URL or a hyperlink (OSC 8), with `[url]`'s
+  `launch`; the mouse pointer shows which text is one while `Cmd` is
+  down.
 * Like other Mac apps, foot keeps running when its last window is
   closed, until `Cmd+Q`; the Dock icon opens a new window. Started from
   a shell, foot exits with its last window, as on Linux.

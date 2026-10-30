@@ -3,6 +3,7 @@
 #import <Carbon/Carbon.h>
 
 #include <linux/input-event-codes.h>
+#include <tllist.h>
 #include <xkbcommon/xkbcommon.h>
 
 #define LOG_MODULE "view"
@@ -84,6 +85,10 @@ utf8_offset(NSString *str, NSUInteger idx)
 
     /* Mouse wheels may report fractional steps */
     double _wheelSteps[2];
+
+    /* Cmd+click on a URL */
+    BOOL _urlClicked;         /* Whose release must be ignored */
+    BOOL _urlCursor;          /* Showing the hand */
 }
 
 - (instancetype)initWithFrame:(NSRect)frame window:(struct wl_window *)win
@@ -314,6 +319,7 @@ keymap_produces(const struct seat *seat, uint32_t key, NSString *text)
     }
 
     [self updateModifiers:event.modifierFlags];
+    [self updateURLCursor:event.modifierFlags];
 }
 
 /* Cmd+1-8 select that tab, Cmd+9 the last one, as in web browsers */
@@ -554,6 +560,64 @@ keymap_produces(const struct seat *seat, uint32_t key, NSString *text)
         input_pointer_leave(seat);
 }
 
+/*
+ * Cmd+click opens the URL under the mouse: URL mode's URLs (url.regex,
+ * OSC-8) and launcher (url.launch), without its labels. Returns whether
+ * there is one.
+ */
+static bool
+url_under_mouse(struct seat *seat, struct terminal *term, bool activate)
+{
+    if (urls_mode_is_active(term) || seat->mouse.col < 0 || seat->mouse.row < 0)
+        return false;
+
+    const int col = seat->mouse.col;
+    const int row = term->grid->view + seat->mouse.row;
+    bool found = false;
+
+    url_list_t urls = tll_init();
+    urls_collect(term, URL_ACTION_LAUNCH, &term->conf->url.preg, true, &urls);
+
+    tll_foreach(urls, it) {
+        const struct coord *start = &it->item.range.start;
+        const struct coord *end = &it->item.range.end;
+
+        if (!found &&
+            (row > start->row || (row == start->row && col >= start->col)) &&
+            (row < end->row || (row == end->row && col <= end->col)))
+        {
+            found = true;
+            if (activate)
+                urls_activate(seat, term, &it->item, app_next_serial());
+        }
+
+        free(it->item.url);
+        free(it->item.key);
+        tll_remove(urls, it);
+    }
+
+    return found;
+}
+
+/* While Command is down, URLs get the hand */
+- (void)updateURLCursor:(NSEventModifierFlags)flags
+{
+    struct terminal *term = self.term;
+    struct seat *seat = app_seat();
+    if (term == NULL || seat == NULL || seat->mouse_focus != term)
+        return;
+
+    const BOOL over_url =
+        (flags & NSEventModifierFlagCommand) && url_under_mouse(seat, term, false);
+
+    if (over_url)
+        [[NSCursor pointingHandCursor] set];
+    else if (_urlCursor)
+        [window_cursor() set];
+
+    _urlCursor = over_url;
+}
+
 - (void)motion:(NSEvent *)event
 {
     struct seat *seat = [self pointerFocus:event];
@@ -562,6 +626,7 @@ keymap_produces(const struct seat *seat, uint32_t key, NSString *text)
 
     const NSPoint p = [self locationOf:event];
     input_pointer_motion(seat, p.x, p.y);
+    [self updateURLCursor:event.modifierFlags];
 }
 
 - (void)mouseMoved:(NSEvent *)event         { [self motion:event]; }
@@ -595,8 +660,31 @@ keymap_produces(const struct seat *seat, uint32_t key, NSString *text)
         input_pointer_leave(seat);
 }
 
-- (void)mouseDown:(NSEvent *)event        { [self button:event pressed:YES]; }
-- (void)mouseUp:(NSEvent *)event          { [self button:event pressed:NO]; }
+- (void)mouseDown:(NSEvent *)event
+{
+    struct seat *seat = [self pointerFocus:event];
+
+    if (seat != NULL && (event.modifierFlags & NSEventModifierFlagCommand)) {
+        const NSPoint p = [self locationOf:event];
+        input_pointer_motion(seat, p.x, p.y);
+
+        if (url_under_mouse(seat, self.term, true)) {
+            _urlClicked = YES;
+            return;
+        }
+    }
+
+    [self button:event pressed:YES];
+}
+
+- (void)mouseUp:(NSEvent *)event
+{
+    if (_urlClicked)
+        _urlClicked = NO;
+    else
+        [self button:event pressed:NO];
+}
+
 - (void)rightMouseDown:(NSEvent *)event   { [self button:event pressed:YES]; }
 - (void)rightMouseUp:(NSEvent *)event     { [self button:event pressed:NO]; }
 - (void)otherMouseDown:(NSEvent *)event   { [self button:event pressed:YES]; }

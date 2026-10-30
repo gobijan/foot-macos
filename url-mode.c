@@ -830,3 +830,14 @@ urls_reset(struct terminal *term)
 
     render_refresh(term);
 }
+
+#if defined(__APPLE__)
+void
+urls_activate(struct seat *seat, struct terminal *term, const struct url *url,
+              uint32_t serial)
+{
+    term->url.launch = &term->conf->url.launch;
+    activate_url(seat, term, url, serial, false);
+    term->url.launch = NULL;
+}
+#endif
