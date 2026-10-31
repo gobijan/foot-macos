@@ -8,6 +8,8 @@
 #define LOG_MODULE "keyboard"
 #define LOG_ENABLE_DBG 0
 #include "log.h"
+#include "debug.h"
+#include "macros.h"
 #include "wayland.h"
 
 /* IOKit's device dependent modifier masks (NX_DEVICE*KEYMASK) */
@@ -120,6 +122,39 @@ static const struct {
     {0x00af, XKB_KEY_dead_macron},      /* ¯ */
 };
 
+/* What OPTION_AS_ALT_AUTO means with the active layout */
+static enum option_as_alt auto_option_as_alt = OPTION_AS_ALT_NONE;
+
+/*
+ * These layouts need Option for no ASCII character, which leaves the
+ * left one free to be Alt, while the right one still produces the
+ * others (e.g. Option+u, a: ä). All others need it for e.g. @ or #,
+ * even ones with a similar name, such as ABC - QWERTZ.
+ */
+static enum option_as_alt
+option_as_alt_for_layout(NSString *layout_id)
+{
+    NSArray<NSString *> *const ascii_without_option = @[
+        @"com.apple.keylayout.US",
+        @"com.apple.keylayout.ABC",
+        @"com.apple.keylayout.USInternational-PC",
+    ];
+
+    return layout_id != nil && [ascii_without_option containsObject:layout_id]
+        ? OPTION_AS_ALT_LEFT : OPTION_AS_ALT_NONE;
+}
+
+UNITTEST
+{
+    xassert(option_as_alt_for_layout(@"com.apple.keylayout.US") == OPTION_AS_ALT_LEFT);
+    xassert(option_as_alt_for_layout(@"com.apple.keylayout.ABC") == OPTION_AS_ALT_LEFT);
+    xassert(option_as_alt_for_layout(@"com.apple.keylayout.USInternational-PC") == OPTION_AS_ALT_LEFT);
+    xassert(option_as_alt_for_layout(@"com.apple.keylayout.German") == OPTION_AS_ALT_NONE);
+    xassert(option_as_alt_for_layout(@"com.apple.keylayout.British") == OPTION_AS_ALT_NONE);
+    xassert(option_as_alt_for_layout(@"com.apple.keylayout.ABC-QWERTZ") == OPTION_AS_ALT_NONE);
+    xassert(option_as_alt_for_layout(nil) == OPTION_AS_ALT_NONE);
+}
+
 static const UCKeyboardLayout *
 current_layout(CFStringRef *name, TISInputSourceRef *source)
 {
@@ -226,6 +261,11 @@ keyboard_keymap_create(size_t *len)
     CFStringRef layout_name = NULL;
     TISInputSourceRef source = NULL;
     const UCKeyboardLayout *layout = current_layout(&layout_name, &source);
+
+    auto_option_as_alt = source != NULL
+        ? option_as_alt_for_layout((__bridge NSString *)TISGetInputSourceProperty(
+              source, kTISPropertyInputSourceID))
+        : OPTION_AS_ALT_NONE;
 
     size_t size = 32 * 1024;
     char *buf = malloc(size);
@@ -405,6 +445,29 @@ keyboard_observe_layout_changes(void (*cb)(void *data), void *data)
         CFNotificationSuspensionBehaviorDeliverImmediately);
 }
 
+enum option_as_alt
+keyboard_option_as_alt(enum option_as_alt configured)
+{
+    return configured == OPTION_AS_ALT_AUTO ? auto_option_as_alt : configured;
+}
+
+enum option_as_alt
+keyboard_option_as_alt_for_key(const struct seat *seat, uint16_t keycode,
+                               enum option_as_alt option_as_alt)
+{
+    /* The keys from the layout may produce text */
+    if (seat->kbd.xkb_keymap == NULL || special_key_name(keycode) == NULL)
+        return option_as_alt;
+
+    /* The rest don't (arrows, Return, F1...), except for the keypad */
+    const xkb_keysym_t *syms;
+    const int count = xkb_keymap_key_get_syms_by_level(
+        seat->kbd.xkb_keymap, keyboard_xkb_keycode(keycode), 0, 0, &syms);
+    const uint32_t cp = count == 1 ? xkb_keysym_to_utf32(syms[0]) : 0;
+
+    return cp >= 0x20 && cp != 0x7f ? option_as_alt : OPTION_AS_ALT_BOTH;
+}
+
 bool
 keyboard_option_is_alt(uint64_t ns_flags, enum option_as_alt option_as_alt)
 {
@@ -412,6 +475,7 @@ keyboard_option_is_alt(uint64_t ns_flags, enum option_as_alt option_as_alt)
     const bool right = (ns_flags & DEVICE_RALT) != 0;
 
     switch (option_as_alt) {
+    case OPTION_AS_ALT_AUTO:  return false;  /* See keyboard_option_as_alt() */
     case OPTION_AS_ALT_NONE:  return false;
     case OPTION_AS_ALT_LEFT:  return left;
     case OPTION_AS_ALT_RIGHT: return right;

@@ -240,7 +240,7 @@ struct config {
 
     /* macOS specific options */
     struct {
-        /* Option key acts as Alt: none, left, right, both (enum option_as_alt) */
+        /* Option key acts as Alt: auto, none, left, right, both (enum option_as_alt) */
         int option_as_alt;
 
         /* Font smoothing (thickening), like the system's own text */

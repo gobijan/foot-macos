@@ -11,15 +11,16 @@
  * keyboard protocols) is built on an XKB keymap and state. We feed
  * it a keymap generated from the active macOS keyboard layout, with
  * four levels per key: none, Shift, Option and Shift+Option. Option
- * selects the third level (like AltGr), unless configured to act as
- * Alt.
+ * selects the third level (like AltGr), unless it acts as Alt.
  *
  * XKB keycodes are macOS virtual keycodes + 8.
  */
 
 struct seat;
 
+/* The order is that of macos-option-as-alt's values in config.c */
 enum option_as_alt {
+    OPTION_AS_ALT_AUTO,  /* The default: depends on the layout */
     OPTION_AS_ALT_NONE,
     OPTION_AS_ALT_LEFT,
     OPTION_AS_ALT_RIGHT,
@@ -37,6 +38,14 @@ keyboard_xkb_keycode(uint16_t macos_keycode)
 {
     return (uint32_t)macos_keycode + 8;
 }
+
+/* What the configured value means with the active layout; never AUTO */
+enum option_as_alt keyboard_option_as_alt(enum option_as_alt configured);
+
+/* The same for one key: on keys without text, Option always is Alt */
+enum option_as_alt keyboard_option_as_alt_for_key(
+    const struct seat *seat, uint16_t macos_keycode,
+    enum option_as_alt option_as_alt);
 
 /* Is the Option key (left/right, as indicated by 'ns_flags') acting as Alt? */
 bool keyboard_option_is_alt(uint64_t ns_flags, enum option_as_alt option_as_alt);

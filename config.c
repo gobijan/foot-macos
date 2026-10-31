@@ -1147,7 +1147,7 @@ parse_section_main(struct context *ctx)
     else if (streq(key, "macos-option-as-alt")) {
         return value_to_enum(
             ctx,
-            (const char *[]){"none", "left", "right", "both", NULL},
+            (const char *[]){"auto", "none", "left", "right", "both", NULL},
             &conf->macos.option_as_alt);
     }
 

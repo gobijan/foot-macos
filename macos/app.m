@@ -108,11 +108,13 @@ app_next_serial(void)
 enum option_as_alt
 app_option_as_alt(void)
 {
-    if (tll_length(app.wayl->terms) == 0)
+    /* Windows differ, as new ones re-read the configuration */
+    const struct seat *seat = app_seat();
+    if (seat == NULL || seat->kbd_focus == NULL)
         return OPTION_AS_ALT_NONE;
 
-    const struct terminal *term = tll_front(app.wayl->terms);
-    return (enum option_as_alt)term->conf->macos.option_as_alt;
+    return keyboard_option_as_alt(
+        (enum option_as_alt)seat->kbd_focus->conf->macos.option_as_alt);
 }
 
 /*

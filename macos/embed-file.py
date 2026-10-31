@@ -16,7 +16,7 @@ MACOS_DEFAULTS = [
     ('# font=monospace:size=8\n', '# font=monospace:size=13\n'),
     ("# shell=$SHELL (if set, otherwise user's default shell from /etc/passwd)\n",
      "# shell=$SHELL (if set, otherwise user's default shell from /etc/passwd)\n"
-     "# macos-option-as-alt=none  (none, left, right or both)\n"
+     "# macos-option-as-alt=auto  (left on U.S., U.S. International and ABC layouts, none on others; or none, left, right or both)\n"
      "# macos-font-smoothing=yes  (thickens glyphs, like macOS' own text rendering)\n"
      "# macos-font-smoothing-strength=1.0  (0.0 - 1.0)\n"
      "# macos-follow-appearance=yes  (switches between [colors-dark] and [colors-light] with the system's appearance)\n"
