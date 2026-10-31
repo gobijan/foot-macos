@@ -16,7 +16,7 @@ import tempfile
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-TIMEOUT = 60  # Seconds, for each step
+TIMEOUT = 180  # Seconds, for each step (the sanitizers on CI take a minute)
 
 # Sanitizer findings fail the test, not just print something
 ENV = dict(
