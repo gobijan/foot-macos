@@ -882,6 +882,10 @@ create_menu(void)
                                 cmd | NSEventModifierFlagShift)];
         [menu addItem:[NSMenuItem separatorItem]];
         [menu addItem:menu_item(@"Find…", @selector(performFindPanelAction:), @"f", cmd)];
+        [menu addItem:[NSMenuItem separatorItem]];
+        [menu addItem:menu_item(@"Clear to Start", @selector(clearToStart:), @"k", cmd)];
+        [menu addItem:menu_item(@"Clear Scrollback", @selector(clearScrollback:), @"k",
+                                cmd | NSEventModifierFlagOption)];
 
         item.submenu = menu;
         [bar addItem:item];

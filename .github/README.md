@@ -123,6 +123,10 @@ frameworks.
   change the font size, `Cmd+Shift+O` shows URLs (like foot's
   `Ctrl+Shift+O`), `Ctrl+Cmd+F` toggles fullscreen. foot's own key
   bindings (e.g. `Ctrl+Shift+C`) still work.
+* `Cmd+K` clears the scrollback and everything above the prompt, which
+  moves to the top, also while a command is running. What's been typed
+  stays. With shell integration (OSC 133), a prompt of several rows
+  stays whole. `Cmd+Option+K` clears only the scrollback.
 * `Cmd+T` opens a tab, in the current window's working directory:
   native tabs, so the tab bar, dragging tabs between windows and View >
   Show All Tabs work as in other Mac apps. `Cmd+1` to `Cmd+8` select a

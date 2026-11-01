@@ -10,6 +10,7 @@
 #define LOG_ENABLE_DBG 0
 #include "log.h"
 #import "app.h"
+#include "clear.h"
 #include "ime.h"
 #include "input.h"
 #include "render.h"
@@ -824,6 +825,20 @@ url_under_mouse(struct seat *seat, struct terminal *term, bool activate)
     struct terminal *term = self.term;
     if (term != NULL && !urls_mode_is_active(term))
         [self action:BIND_ACTION_SHOW_URLS_LAUNCH];
+}
+
+- (void)clearToStart:(id)sender
+{
+    struct terminal *term = self.term;
+    if (term != NULL)
+        clear_to_start(term);
+}
+
+- (void)clearScrollback:(id)sender
+{
+    struct terminal *term = self.term;
+    if (term != NULL)
+        clear_scrollback(term);
 }
 
 - (BOOL)validateMenuItem:(NSMenuItem *)item

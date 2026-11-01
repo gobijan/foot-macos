@@ -311,6 +311,7 @@ foot = executable(
   'keyboard.m', 'keyboard.h',
   'clipboard.m',
   'selection-clipboard.c',
+  'clear.c', 'clear.h',
   'windows.c', 'windows.h',
   'quake.m',
   'hotkey.m',
