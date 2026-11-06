@@ -10,6 +10,7 @@
 #define LOG_ENABLE_DBG 0
 #include "log.h"
 #import "app.h"
+#import "split-view.h"
 #include "clear.h"
 #include "ime.h"
 #include "input.h"
@@ -77,6 +78,21 @@ utf8_offset(NSString *str, NSUInteger idx)
     NSTrackingArea *_trackingArea;
     unsigned _buttonsDown;
 
+    /* Splits: over the terminal, while the pane doesn't have the focus */
+    CALayer *_dimLayer;
+
+    /* The click that focused the pane isn't the terminal's */
+    NSInteger _focusClickEvent;   /* Its event number; -1: none */
+    unsigned _focusClickButtons;  /* Whose release must be ignored */
+
+    /* The mouse is over a divider (macos/split-view.m) */
+    BOOL _overDivider;
+
+    /* The colors the root layer etc have; updated when the terminal's change */
+    uint32_t _bg;
+    uint32_t _fg;
+    BOOL _haveColors;
+
     /* Input method */
     NSMutableAttributedString *_markedText;
     BOOL _inKeyDown;
@@ -113,6 +129,12 @@ utf8_offset(NSString *str, NSUInteger idx)
     _gridLayer = view_create_layer();
     [_rootLayer addSublayer:_gridLayer];
 
+    /* Above the sub surfaces too, which are added later */
+    _dimLayer = view_create_layer();
+    _dimLayer.zPosition = 1000;
+    [_rootLayer addSublayer:_dimLayer];
+    _focusClickEvent = -1;
+
     _markedText = [[NSMutableAttributedString alloc] init];
     _consumedKeys = [NSMutableSet set];
     _urlCursorCol = -1;
@@ -137,6 +159,46 @@ utf8_offset(NSString *str, NSUInteger idx)
 - (struct terminal *)term
 {
     return _win != NULL ? _win->term : NULL;
+}
+
+- (FootSplitView *)splits
+{
+    return _win != NULL ? (__bridge FootSplitView *)_win->splits : nil;
+}
+
+- (void)setDimColor:(CGColorRef)color
+{
+    if (color == NULL) {
+        _dimLayer.hidden = YES;
+        return;
+    }
+
+    _dimLayer.backgroundColor = color;
+    _dimLayer.bounds = self.bounds;
+    _dimLayer.hidden = NO;
+}
+
+/* The pane gets the focus (the keyboard, while its window is key) */
+- (BOOL)becomeFirstResponder
+{
+    if (![super becomeFirstResponder])
+        return NO;
+
+    FootSplitView *splits = self.splits;
+    if (splits == nil)
+        return YES;
+
+    /* AppKit makes the view that's clicked the first responder */
+    NSEvent *event = NSApp.currentEvent;
+    if (splits.focused != _win && event.window == self.window &&
+        (event.type == NSEventTypeLeftMouseDown || event.type == NSEventTypeRightMouseDown ||
+         event.type == NSEventTypeOtherMouseDown))
+    {
+        _focusClickEvent = event.eventNumber;
+    }
+
+    [splits paneBecameFirstResponder:_win];
+    return YES;
 }
 
 - (BOOL)isFlipped
@@ -168,6 +230,14 @@ utf8_offset(NSString *str, NSUInteger idx)
 
     struct terminal *term = win->term;
 
+    /* E.g. OSC 11: the background around the grid, the dimming, the dividers */
+    if (!_haveColors || term->colors.bg != _bg || term->colors.fg != _fg) {
+        _haveColors = YES;
+        _bg = term->colors.bg;
+        _fg = term->colors.fg;
+        window_colors_changed(win);
+    }
+
     /* Buffers the window server is done with can be re-used */
     shm_chain_poll_releases(term->render.chains.grid);
 
@@ -198,6 +268,7 @@ utf8_offset(NSString *str, NSUInteger idx)
 - (void)setFrameSize:(NSSize)size
 {
     [super setFrameSize:size];
+    _dimLayer.bounds = CGRectMake(0, 0, size.width, size.height);
     if (_win != NULL)
         window_resized(_win);
 }
@@ -527,9 +598,30 @@ keymap_produces(const struct seat *seat, uint32_t key, NSString *text)
     [super updateTrackingAreas];
 }
 
+/*
+ * Over a divider, the mouse is the divider's (its own tracking area);
+ * the pane's cursor is set again once it's back.
+ */
+- (BOOL)overDivider:(NSEvent *)event
+{
+    FootSplitView *splits = self.splits;
+    const BOOL over = _buttonsDown == 0 && splits != nil && [splits isDividerAt:event.locationInWindow];
+
+    if (over && !_overDivider) {
+        struct seat *seat = app_seat();
+        if (seat != NULL && seat->mouse_focus == self.term)
+            input_pointer_leave(seat);
+    } else if (!over && _overDivider)
+        [window_cursor() set];
+
+    _overDivider = over;
+    return over;
+}
+
 - (void)cursorUpdate:(NSEvent *)event
 {
-    [window_cursor() set];
+    if (![self overDivider:event])
+        [window_cursor() set];
 }
 
 - (NSPoint)locationOf:(NSEvent *)event
@@ -558,7 +650,8 @@ keymap_produces(const struct seat *seat, uint32_t key, NSString *text)
 
 - (void)mouseEntered:(NSEvent *)event
 {
-    [self pointerFocus:event];
+    if (![self overDivider:event])
+        [self pointerFocus:event];
 }
 
 - (void)mouseExited:(NSEvent *)event
@@ -648,6 +741,9 @@ url_under_mouse(struct seat *seat, struct terminal *term, bool activate)
 
 - (void)motion:(NSEvent *)event
 {
+    if ([self overDivider:event])
+        return;
+
     struct seat *seat = [self pointerFocus:event];
     if (seat == NULL)
         return;
@@ -688,8 +784,44 @@ url_under_mouse(struct seat *seat, struct terminal *term, bool activate)
         input_pointer_leave(seat);
 }
 
+/*
+ * A click in a pane without the focus focuses it, and isn't sent on
+ * (as a click in a window that isn't active)
+ */
+- (BOOL)focusClick:(NSEvent *)event
+{
+    FootSplitView *splits = self.splits;
+    const BOOL focused = splits == nil || splits.focused == _win;
+    const BOOL focusing = _focusClickEvent == event.eventNumber;
+
+    if (focused && !focusing) {
+        _focusClickEvent = -1;
+        return NO;
+    }
+
+    if (!focused)
+        [splits focusPane:_win];
+
+    _focusClickEvent = -1;
+    _focusClickButtons |= 1u << MIN(event.buttonNumber, 31);
+    return YES;
+}
+
+- (BOOL)focusClickReleased:(NSEvent *)event
+{
+    const unsigned bit = 1u << MIN(event.buttonNumber, 31);
+    if (!(_focusClickButtons & bit))
+        return NO;
+
+    _focusClickButtons &= ~bit;
+    return YES;
+}
+
 - (void)mouseDown:(NSEvent *)event
 {
+    if ([self focusClick:event])
+        return;
+
     struct seat *seat = [self pointerFocus:event];
     _urlClicked = NO;
 
@@ -708,16 +840,26 @@ url_under_mouse(struct seat *seat, struct terminal *term, bool activate)
 
 - (void)mouseUp:(NSEvent *)event
 {
+    if ([self focusClickReleased:event])
+        return;
+
     if (_urlClicked)
         _urlClicked = NO;
     else
         [self button:event pressed:NO];
 }
 
-- (void)rightMouseDown:(NSEvent *)event   { [self button:event pressed:YES]; }
-- (void)rightMouseUp:(NSEvent *)event     { [self button:event pressed:NO]; }
-- (void)otherMouseDown:(NSEvent *)event   { [self button:event pressed:YES]; }
-- (void)otherMouseUp:(NSEvent *)event     { [self button:event pressed:NO]; }
+- (void)rightOrOtherButton:(NSEvent *)event pressed:(BOOL)pressed
+{
+    if (pressed ? [self focusClick:event] : [self focusClickReleased:event])
+        return;
+    [self button:event pressed:pressed];
+}
+
+- (void)rightMouseDown:(NSEvent *)event   { [self rightOrOtherButton:event pressed:YES]; }
+- (void)rightMouseUp:(NSEvent *)event     { [self rightOrOtherButton:event pressed:NO]; }
+- (void)otherMouseDown:(NSEvent *)event   { [self rightOrOtherButton:event pressed:YES]; }
+- (void)otherMouseUp:(NSEvent *)event     { [self rightOrOtherButton:event pressed:NO]; }
 
 - (void)scrollWheel:(NSEvent *)event
 {

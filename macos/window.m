@@ -1,4 +1,5 @@
 #import "app.h"
+#import "split-view.h"
 #import "view.h"
 
 #import <QuartzCore/QuartzCore.h>
@@ -22,15 +23,17 @@
 #include "xmalloc.h"
 
 /*
- * A terminal window: an NSWindow, with a FootView as its content view.
+ * A terminal window: an NSWindow, whose content view (FootSplitView)
+ * holds its panes, a FootView each. A struct wl_window is a pane: what
+ * foot's terminal knows as its window. Most windows have one.
  *
- * Like a Wayland toplevel, the window is "configured" by the platform:
+ * Like a Wayland toplevel, a pane is "configured" by the platform:
  * once at startup (choosing the initial size), and then whenever its
  * size, scale, focus or state (fullscreen etc) changes.
  */
 
 @interface FootWindowDelegate : NSObject <NSWindowDelegate>
-@property (nonatomic) struct wl_window *win;
+@property (nonatomic, weak) FootSplitView *splits;
 @end
 
 static FootView *
@@ -43,6 +46,12 @@ static NSWindow *
 nswindow_of(const struct wl_window *win)
 {
     return (__bridge NSWindow *)win->nswindow;
+}
+
+static FootSplitView *
+splits_of(const struct wl_window *win)
+{
+    return (__bridge FootSplitView *)win->splits;
 }
 
 static CALayer *
@@ -274,19 +283,38 @@ update_root_background(struct wl_window *win)
     CGColorRelease(color);
 }
 
+static bool
+is_transparent(const struct wl_window *win)
+{
+    return win->term->colors.alpha < 0xffff && !win->is_fullscreen;
+}
+
 void
 wayl_win_alpha_changed(struct wl_window *win)
 {
     NSWindow *nswindow = nswindow_of(win);
-    const bool transparent =
-        win->term->colors.alpha < 0xffff && !win->is_fullscreen;
+    const bool transparent = is_transparent(win);
 
-    nswindow.opaque = !transparent;
-    nswindow.backgroundColor = transparent
+    /* The window is opaque while all its panes are */
+    bool any_transparent = transparent;
+    for (FootView *view in splits_of(win).panes) {
+        if (view.win != NULL && view.win != win)
+            any_transparent = any_transparent || is_transparent(view.win);
+    }
+
+    nswindow.opaque = !any_transparent;
+    nswindow.backgroundColor = any_transparent
         ? [NSColor clearColor] : [NSColor windowBackgroundColor];
 
     wayl_surface_set_opaque(&win->surface, !transparent);
+    window_colors_changed(win);
+}
+
+void
+window_colors_changed(struct wl_window *win)
+{
     update_root_background(win);
+    [splits_of(win) paneColorsChanged:win];
 }
 
 void
@@ -413,12 +441,34 @@ window_fit(struct wl_window *win)
 /*
  * The initial configure; picks the window size, and shows the window.
  * As a tab of 'tab_parent', if any: its size, not the configuration's.
+ * A new pane of a 'split' takes the size it gets, in a window that's
+ * already shown.
  */
 static void
-window_configure(struct wl_window *win, NSWindow *tab_parent)
+window_configure(struct wl_window *win, NSWindow *tab_parent, bool split)
 {
     struct terminal *term = win->term;
     NSWindow *nswindow = nswindow_of(win);
+
+    if (split) {
+        output_changed(win);
+
+        /* The pane that was split makes room for this one */
+        FootSplitView *splits = splits_of(win);
+        [splits relayout];
+
+        win->is_configured = true;
+
+        const NSSize size = view_of(win).bounds.size;
+        render_resize(term, (int)size.width, (int)size.height, RESIZE_BY_CELLS);
+        app_apply_color_theme(term, false);
+        term_window_configured(term);
+
+        [splits focusPane:win];
+        app_windows_changed();
+        app_run_hooks();
+        return;
+    }
 
     /* The quake terminal's size (and screen) is its placement's */
     if (win->quake)
@@ -493,37 +543,58 @@ wayl_win_init(struct terminal *term, const char *token)
     win->quake = quake_owns_config(conf);
     win->is_tiled = win->quake;
 
-    NSWindow *nswindow;
-    if (win->quake)
-        nswindow = quake_window_create(rect);
-    else {
-        nswindow = [[NSWindow alloc]
-            initWithContentRect:rect
-                      styleMask:(NSWindowStyleMaskTitled |
-                                 NSWindowStyleMaskClosable |
-                                 NSWindowStyleMaskMiniaturizable |
-                                 NSWindowStyleMaskResizable)
-                        backing:NSBackingStoreBuffered
-                          defer:NO];
+    /* A new pane, of the window being split (never the quake terminal's) */
+    enum split_dir split_dir;
+    struct wl_window *split_parent = app_new_split_parent(&split_dir);
+    if (split_parent != NULL && (win->quake || split_parent->quake || split_parent->splits == NULL))
+        split_parent = NULL;
 
-        nswindow.collectionBehavior |= NSWindowCollectionBehaviorFullScreenPrimary;
+    FootView *view;
+
+    if (split_parent != NULL) {
+        NSWindow *nswindow = nswindow_of(split_parent);
+        win->scale = nswindow.backingScaleFactor;
+
+        view = [[FootView alloc] initWithFrame:NSZeroRect window:win];
+        win->nswindow = (void *)CFBridgingRetain(nswindow);
+        win->view = (__bridge void *)view;
+
+        [splits_of(split_parent) insertPane:win next:split_parent direction:split_dir];
+    } else {
+        NSWindow *nswindow;
+        if (win->quake)
+            nswindow = quake_window_create(rect);
+        else {
+            nswindow = [[NSWindow alloc]
+                initWithContentRect:rect
+                          styleMask:(NSWindowStyleMaskTitled |
+                                     NSWindowStyleMaskClosable |
+                                     NSWindowStyleMaskMiniaturizable |
+                                     NSWindowStyleMaskResizable)
+                            backing:NSBackingStoreBuffered
+                              defer:NO];
+
+            nswindow.collectionBehavior |= NSWindowCollectionBehaviorFullScreenPrimary;
+        }
+
+        nswindow.releasedWhenClosed = NO;
+        nswindow.title = @"foot";
+        win->scale = nswindow.backingScaleFactor;
+
+        view = [[FootView alloc] initWithFrame:rect window:win];
+        win->view = (__bridge void *)view;
+
+        FootSplitView *splits = [[FootSplitView alloc] initWithPane:win];
+        nswindow.contentView = splits;
+        [nswindow makeFirstResponder:view];
+
+        FootWindowDelegate *delegate = [[FootWindowDelegate alloc] init];
+        delegate.splits = splits;
+        splits.windowDelegate = delegate;
+        nswindow.delegate = delegate;
+
+        win->nswindow = (void *)CFBridgingRetain(nswindow);
     }
-
-    nswindow.releasedWhenClosed = NO;
-    nswindow.title = @"foot";
-    win->scale = nswindow.backingScaleFactor;
-
-    FootView *view = [[FootView alloc] initWithFrame:rect window:win];
-    nswindow.contentView = view;
-    [nswindow makeFirstResponder:view];
-
-    FootWindowDelegate *delegate = [[FootWindowDelegate alloc] init];
-    delegate.win = win;
-    nswindow.delegate = delegate;
-
-    win->nswindow = (void *)CFBridgingRetain(nswindow);
-    win->delegate = (void *)CFBridgingRetain(delegate);
-    win->view = (__bridge void *)view;
 
     surface_init(win, &win->surface, view.gridLayer);
     wayl_win_alpha_changed(win);
@@ -555,13 +626,13 @@ wayl_win_init(struct terminal *term, const char *token)
      * Wayland compositor's first configure event. In the run loop's
      * common modes, like FDM events (see wayl_init()).
      */
-    __weak NSWindow *weak_window = nswindow;
+    __weak FootView *weak_view = view;
     __weak NSWindow *weak_parent = app_new_tab_parent();
+    const bool split = split_parent != NULL;
     CFRunLoopPerformBlock(CFRunLoopGetMain(), kCFRunLoopCommonModes, ^{
-        NSWindow *w = weak_window;
-        FootWindowDelegate *d = w != nil ? w.delegate : nil;
-        if (d != nil && d.win != NULL && !d.win->is_configured)
-            window_configure(d.win, weak_parent);
+        FootView *v = weak_view;
+        if (v != nil && v.win != NULL && !v.win->is_configured)
+            window_configure(v.win, weak_parent, split);
     });
     CFRunLoopWakeUp(CFRunLoopGetMain());
 
@@ -616,14 +687,16 @@ wayl_win_destroy(struct wl_window *win)
     shm_purge(term->render.chains.csd);
 
     tll_free(win->on_outputs);
+    free(win->title);
 
     if (win->view != NULL)
         [view_of(win) invalidate];
 
-    if (win->delegate != NULL) {
-        FootWindowDelegate *delegate = CFBridgingRelease(win->delegate);
-        delegate.win = NULL;
-    }
+    /* The window closes with its last pane */
+    FootSplitView *splits = splits_of(win);
+    const bool last = splits == nil || splits.count <= 1;
+    const bool own_sheet = splits != nil && splits.sheetPane == win;
+    [splits removePane:win];
 
     if (win->quake)
         quake_window_destroyed(win);
@@ -631,17 +704,20 @@ wayl_win_destroy(struct wl_window *win)
     if (win->nswindow != NULL) {
         NSWindow *nswindow = CFBridgingRelease(win->nswindow);
         win->nswindow = NULL;
-        nswindow.delegate = nil;
 
         /* E.g. the shell exited, while asking whether to close the window */
-        if (nswindow.attachedSheet != nil)
+        if (nswindow.attachedSheet != nil && (last || own_sheet))
             [nswindow endSheet:nswindow.attachedSheet];
 
-        /* Ordering out a tab hides all of them */
-        [nswindow.tabGroup removeWindow:nswindow];
+        if (last) {
+            nswindow.delegate = nil;
 
-        [nswindow orderOut:nil];
-        [nswindow close];
+            /* Ordering out a tab hides all of them */
+            [nswindow.tabGroup removeWindow:nswindow];
+
+            [nswindow orderOut:nil];
+            [nswindow close];
+        }
     }
 
     if (!win->quake)
@@ -663,6 +739,14 @@ wayl_win_request_frame(struct wl_window *win)
 void
 wayl_win_set_title(struct wl_window *win, const char *title)
 {
+    free(win->title);
+    win->title = xstrdup(title);
+
+    /* The window's title is its focused pane's */
+    FootSplitView *splits = splits_of(win);
+    if (splits != nil && splits.focused != win)
+        return;
+
     NSString *str = [NSString stringWithUTF8String:title];
     nswindow_of(win).title = str != nil ? str : @"foot";
 }
@@ -676,8 +760,8 @@ wayl_win_set_app_id(struct wl_window *win, const char *app_id)
 void
 wayl_win_set_fullscreen(struct wl_window *win, bool fullscreen)
 {
-    /* initial-window-mode: a new tab is what its window is */
-    if (win->quake || app_new_tab_parent() != nil)
+    /* initial-window-mode: a new tab (or pane) is what its window is */
+    if (win->quake || app_new_tab_parent() != nil || app_new_split_parent(NULL) != NULL)
         return;
 
     NSWindow *nswindow = nswindow_of(win);
@@ -691,7 +775,7 @@ wayl_win_set_fullscreen(struct wl_window *win, bool fullscreen)
 void
 wayl_win_set_maximized(struct wl_window *win, bool maximized)
 {
-    if (win->quake || app_new_tab_parent() != nil)
+    if (win->quake || app_new_tab_parent() != nil || app_new_split_parent(NULL) != NULL)
         return;
 
     NSWindow *nswindow = nswindow_of(win);
@@ -715,7 +799,8 @@ wayl_win_close(struct wl_window *win)
 void
 wayl_win_set_content_size(struct wl_window *win, int width, int height)
 {
-    if (!win->quake)
+    /* Not a pane's size: its window's */
+    if (!win->quake && splits_of(win).count <= 1)
         [nswindow_of(win) setContentSize:NSMakeSize(width, height)];
 }
 
@@ -728,9 +813,16 @@ wayl_win_set_resize_increments(struct wl_window *win, int cell_width, int cell_h
     /* Not contentResizeIncrements: AppKit applies those to tiled
      * windows too, rounding up (overlapping the neighbor). See
      * windowWillResize:toSize: instead */
-    nswindow.contentMinSize = NSMakeSize(
+    const NSSize min = NSMakeSize(
         cell_width + conf->pad_left + conf->pad_right,
         cell_height + conf->pad_top + conf->pad_bottom);
+
+    /* The window's: large enough for all of its panes */
+    FootSplitView *splits = splits_of(win);
+    if (splits != nil)
+        [splits setMinimumSize:min ofPane:win];
+    else
+        nswindow.contentMinSize = min;
 
     /* A new cell size; not the initial one (see window_configure()) */
     const struct terminal *term = win->term;
@@ -745,12 +837,11 @@ wayl_win_set_resize_increments(struct wl_window *win, int cell_width, int cell_h
         return;
 
     /* We're in render_resize(); fit once back in the run loop */
-    __weak NSWindow *weak_window = nswindow;
+    __weak FootView *weak_view = view_of(win);
     CFRunLoopPerformBlock(CFRunLoopGetMain(), kCFRunLoopCommonModes, ^{
-        NSWindow *w = weak_window;
-        FootWindowDelegate *d = w != nil ? w.delegate : nil;
-        if (d != nil && d.win != NULL)
-            window_fit(d.win);
+        FootView *v = weak_view;
+        if (v != nil && v.win != NULL)
+            window_fit(v.win);
     });
     CFRunLoopWakeUp(CFRunLoopGetMain());
 }
@@ -795,25 +886,14 @@ wayl_win_ime_cursor_rect_changed(struct wl_window *win)
 }
 
 /*
- * Window events
+ * Focus: the pane that's focused in a key window has the keyboard
  */
 
-@implementation FootWindowDelegate
-
-- (BOOL)windowShouldClose:(NSWindow *)sender
+void
+window_focus_in(struct wl_window *win)
 {
-    /* The terminal shuts down, and then destroys the window */
-    if (_win != NULL && sender.attachedSheet == nil)
-        window_close(_win);
-    app_run_hooks();
-    return NO;
-}
-
-- (void)windowDidBecomeKey:(NSNotification *)notification
-{
-    struct wl_window *win = _win;
     struct seat *seat = app_seat();
-    if (win == NULL || seat == NULL)
+    if (seat == NULL)
         return;
 
     struct terminal *term = win->term;
@@ -828,18 +908,13 @@ wayl_win_ime_cursor_rect_changed(struct wl_window *win)
     uint32_t depressed, locked;
     keyboard_modifiers(seat, [NSEvent modifierFlags], app_option_as_alt(), &depressed, &locked);
     input_modifiers(seat, depressed, 0, locked, 0);
-
-    if (win->quake)
-        quake_window_became_key(win);
-
-    app_run_hooks();
 }
 
-- (void)windowDidResignKey:(NSNotification *)notification
+void
+window_focus_out(struct wl_window *win)
 {
-    struct wl_window *win = _win;
     struct seat *seat = app_seat();
-    if (win == NULL || seat == NULL)
+    if (seat == NULL)
         return;
 
     struct terminal *term = win->term;
@@ -851,6 +926,66 @@ wayl_win_ime_cursor_rect_changed(struct wl_window *win)
 
     win->is_activated = false;
     term_visual_focus_out(term);
+}
+
+void
+window_live_resize_ended(struct wl_window *win)
+{
+    win->is_resizing = false;
+
+    /* Send the final size to the client right away */
+    const NSSize size = view_of(win).bounds.size;
+    render_resize(win->term, (int)size.width, (int)size.height,
+                  RESIZE_BY_CELLS | RESIZE_FORCE);
+}
+
+/*
+ * Window events: for all of its panes (or the focused one)
+ */
+
+@implementation FootWindowDelegate
+
+/* The panes that still have a terminal */
+- (NSArray<FootView *> *)panes
+{
+    NSMutableArray<FootView *> *panes = [NSMutableArray array];
+    for (FootView *view in _splits.panes) {
+        if (view.win != NULL)
+            [panes addObject:view];
+    }
+    return panes;
+}
+
+/* The close button (window, tab), and Close with a single pane: all panes */
+- (BOOL)windowShouldClose:(NSWindow *)sender
+{
+    if (_splits != nil && sender.attachedSheet == nil)
+        window_close_all(sender, @[sender]);
+    app_run_hooks();
+    return NO;
+}
+
+- (void)windowDidBecomeKey:(NSNotification *)notification
+{
+    struct wl_window *win = _splits.focused;
+    if (win == NULL)
+        return;
+
+    window_focus_in(win);
+
+    if (win->quake)
+        quake_window_became_key(win);
+
+    app_run_hooks();
+}
+
+- (void)windowDidResignKey:(NSNotification *)notification
+{
+    struct wl_window *win = _splits.focused;
+    if (win == NULL)
+        return;
+
+    window_focus_out(win);
 
     if (win->quake)
         quake_window_resigned_key(win);
@@ -861,12 +996,13 @@ wayl_win_ime_cursor_rect_changed(struct wl_window *win)
 /*
  * resize-by-cells: the user resizes the window in whole cells. Only
  * while resizing it with the mouse; tiled, zoomed etc windows get the
- * exact size they're given. Never larger than proposed.
+ * exact size they're given. Never larger than proposed. Not with
+ * several panes: they get the size they're given, too.
  */
 - (NSSize)windowWillResize:(NSWindow *)sender toSize:(NSSize)size
 {
-    struct wl_window *win = _win;
-    if (win == NULL || !sender.inLiveResize)
+    struct wl_window *win = _splits.focused;
+    if (win == NULL || _splits.count != 1 || !sender.inLiveResize)
         return size;
 
     const struct terminal *term = win->term;
@@ -897,89 +1033,74 @@ wayl_win_ime_cursor_rect_changed(struct wl_window *win)
 
 - (void)windowWillStartLiveResize:(NSNotification *)notification
 {
-    if (_win != NULL)
-        _win->is_resizing = true;
+    for (FootView *view in [self panes])
+        view.win->is_resizing = true;
 }
 
 - (void)windowDidEndLiveResize:(NSNotification *)notification
 {
-    struct wl_window *win = _win;
-    if (win == NULL)
-        return;
-
-    win->is_resizing = false;
-
-    /* Send the final size to the client right away */
-    const NSSize size = view_of(win).bounds.size;
-    render_resize(win->term, (int)size.width, (int)size.height,
-                  RESIZE_BY_CELLS | RESIZE_FORCE);
+    for (FootView *view in [self panes])
+        window_live_resize_ended(view.win);
     app_run_hooks();
 }
 
 - (void)windowDidChangeScreen:(NSNotification *)notification
 {
-    if (_win != NULL && _win->is_configured) {
-        output_changed(_win);
-        app_run_hooks();
+    for (FootView *view in [self panes]) {
+        if (view.win->is_configured)
+            output_changed(view.win);
     }
+    app_run_hooks();
 }
 
 - (void)windowWillEnterFullScreen:(NSNotification *)notification
 {
-    struct wl_window *win = _win;
-    if (win == NULL)
-        return;
-
-    win->is_fullscreen = true;
-    wayl_win_alpha_changed(win);
-    render_refresh(win->term);
+    for (FootView *view in [self panes]) {
+        struct wl_window *win = view.win;
+        win->is_fullscreen = true;
+        wayl_win_alpha_changed(win);
+        render_refresh(win->term);
+    }
 }
 
 - (void)windowDidExitFullScreen:(NSNotification *)notification
 {
-    struct wl_window *win = _win;
-    if (win == NULL)
-        return;
-
-    win->is_fullscreen = false;
-    wayl_win_alpha_changed(win);
-    window_resized(win);
-    render_refresh(win->term);
+    for (FootView *view in [self panes]) {
+        struct wl_window *win = view.win;
+        win->is_fullscreen = false;
+        wayl_win_alpha_changed(win);
+        window_resized(win);
+        render_refresh(win->term);
+    }
     app_run_hooks();
 }
 
 - (void)windowDidMiniaturize:(NSNotification *)notification
 {
-    struct wl_window *win = _win;
-    if (win == NULL)
-        return;
-
-    win->is_suspended = true;
-    if (win->term->visibility_reports)
-        term_send_visibility_report(win->term);
+    for (FootView *view in [self panes]) {
+        struct wl_window *win = view.win;
+        win->is_suspended = true;
+        if (win->term->visibility_reports)
+            term_send_visibility_report(win->term);
+    }
 }
 
 - (void)windowDidDeminiaturize:(NSNotification *)notification
 {
-    struct wl_window *win = _win;
-    if (win == NULL)
-        return;
-
-    win->is_suspended = false;
-    if (win->term->visibility_reports)
-        term_send_visibility_report(win->term);
+    for (FootView *view in [self panes]) {
+        struct wl_window *win = view.win;
+        win->is_suspended = false;
+        if (win->term->visibility_reports)
+            term_send_visibility_report(win->term);
+    }
 }
 
 - (void)windowDidChangeOcclusionState:(NSNotification *)notification
 {
-    struct wl_window *win = _win;
-    if (win == NULL)
-        return;
-
     /* Hidden windows don't get frame callbacks (and don't render) */
     NSWindow *nswindow = notification.object;
     const BOOL visible = (nswindow.occlusionState & NSWindowOcclusionStateVisible) != 0;
-    [view_of(win) setOccluded:!visible];
+    [_splits setWindowOccluded:!visible];
 }
 
 @end

@@ -1,4 +1,6 @@
 #import "app.h"
+#import "split-view.h"
+#import "view.h"
 
 #include <libproc.h>
 #include <string.h>
@@ -104,30 +106,76 @@ create_alert(NSString *message, NSString *processes, NSString *button)
     return alert;
 }
 
-void
-window_close(struct wl_window *win)
+/*
+ * Shuts the panes' terminals down, now, or once confirmed (in a sheet
+ * on 'nswindow'). The panes may be gone by then: their view's
+ * terminal is NULL.
+ */
+static void
+close_panes(NSArray<FootView *> *panes, NSWindow *nswindow, NSString *message,
+            struct wl_window *sheet_pane)
 {
-    struct terminal *term = win->term;
-    NSWindow *nswindow = (__bridge NSWindow *)win->nswindow;
+    NSMutableOrderedSet<NSString *> *processes = [NSMutableOrderedSet orderedSet];
+    for (FootView *view in panes) {
+        NSString *process = view.term != NULL ? running_process(view.term) : nil;
+        if (process != nil)
+            [processes addObject:process];
+    }
 
-    NSString *process = running_process(term);
-    if (process == nil) {
-        term_shutdown(term);
+    if (processes.count == 0) {
+        for (FootView *view in panes) {
+            if (view.term != NULL)
+                term_shutdown(view.term);
+        }
         return;
     }
 
-    NSAlert *alert = create_alert(@"Close this window?", process, @"Close");
+    NSString *list = [NSListFormatter localizedStringByJoiningStrings:processes.array];
+    NSAlert *alert = create_alert(message, list, @"Close");
 
     /* A sheet on a tab that isn't selected wouldn't be seen */
     nswindow.tabGroup.selectedWindow = nswindow;
 
+    FootSplitView *splits = [nswindow.contentView isKindOfClass:[FootSplitView class]]
+        ? nswindow.contentView : nil;
+    splits.sheetPane = sheet_pane;
+
     [alert beginSheetModalForWindow:nswindow completionHandler:^(NSModalResponse response) {
-        /* The delegate is gone with the terminal (see wayl_win_destroy()) */
-        if (response == NSAlertFirstButtonReturn && nswindow.delegate != nil) {
-            term_shutdown(term);
-            app_run_hooks();
+        if (splits.sheetPane == sheet_pane)
+            splits.sheetPane = NULL;
+
+        if (response != NSAlertFirstButtonReturn)
+            return;
+
+        for (FootView *view in panes) {
+            if (view.term != NULL)
+                term_shutdown(view.term);
         }
+        app_run_hooks();
     }];
+}
+
+void
+window_close(struct wl_window *win)
+{
+    FootSplitView *splits = (__bridge FootSplitView *)win->splits;
+    NSString *message = splits.count > 1 ? @"Close this split?" : @"Close this window?";
+
+    close_panes(@[(__bridge FootView *)win->view], (__bridge NSWindow *)win->nswindow,
+                message, win);
+}
+
+void
+window_close_all(NSWindow *window, NSArray<NSWindow *> *windows)
+{
+    NSMutableArray<FootView *> *panes = [NSMutableArray array];
+    for (NSWindow *w in windows) {
+        if ([w.contentView isKindOfClass:[FootSplitView class]])
+            [panes addObjectsFromArray:((FootSplitView *)w.contentView).panes];
+    }
+
+    if (panes.count > 0)
+        close_panes(panes, window, @"Close this window?", NULL);
 }
 
 bool

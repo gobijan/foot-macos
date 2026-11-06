@@ -33,6 +33,9 @@
 /* Discards any input method composition in progress */
 - (void)resetInputMethod;
 
+/* Dims the pane (it doesn't have the focus) with 'color'; NULL: doesn't */
+- (void)setDimColor:(CGColorRef)color;
+
 - (void)invalidate;
 
 /* NULL when the window is destroyed */

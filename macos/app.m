@@ -1,4 +1,5 @@
 #import "app.h"
+#import "split-view.h"
 #import "view.h"
 
 #import <Carbon/Carbon.h>
@@ -62,6 +63,8 @@ static struct {
     bool (*new_window)(void *data, const char *cwd);
     void *new_window_data;
     NSWindow *tab_parent;
+    struct wl_window *split_parent;
+    enum split_dir split_dir;
 
     bool (*run_script)(void *data, const char *path);
     void *run_script_data;
@@ -361,7 +364,7 @@ new_tab(const char *cwd)
         ? NSApp.mainWindow : NSApp.orderedWindows.firstObject;
 
     /* Not the quake terminal, nor e.g. Sparkle's window */
-    if ([window.contentView isKindOfClass:[FootView class]] &&
+    if ([window.contentView isKindOfClass:[FootSplitView class]] &&
         window.tabbingMode != NSWindowTabbingModeDisallowed)
     {
         app.tab_parent = window;
@@ -378,40 +381,61 @@ app_new_tab_parent(void)
 }
 
 /*
- * The working directory of the main window's terminal, for a new
- * window to start in: the foreground process' (e.g. a sub shell), or
- * else the shell's. Asked from the processes, so that it works with
- * any shell (no OSC 7 needed).
+ * The terminal's working directory, for a new window (or tab, or pane)
+ * to start in: the foreground process' (e.g. a sub shell), or else the
+ * shell's. Asked from the processes, so that it works with any shell
+ * (no OSC 7 needed).
  */
+static bool
+term_cwd(const struct terminal *term, char cwd[static PATH_MAX])
+{
+    const pid_t pids[] = {tcgetpgrp(term->ptmx), term->slave};
+    for (size_t i = 0; i < ALEN(pids); i++) {
+        struct proc_vnodepathinfo info;
+        if (pids[i] <= 0 ||
+            proc_pidinfo(pids[i], PROC_PIDVNODEPATHINFO, 0, &info, sizeof(info)) != sizeof(info))
+        {
+            continue;
+        }
+
+        /* The shell fails to start in a removed directory */
+        strlcpy(cwd, info.pvi_cdir.vip_path, PATH_MAX);
+        if (cwd[0] == '/' && access(cwd, X_OK) == 0)
+            return true;
+    }
+    return false;
+}
+
+/* The main window's focused pane's */
 static bool
 main_window_cwd(char cwd[static PATH_MAX])
 {
     NSWindow *main = NSApp.mainWindow;
-    if (main == nil)
+    if (![main.contentView isKindOfClass:[FootSplitView class]])
         return false;
 
-    tll_foreach(app.wayl->terms, it) {
-        const struct terminal *term = it->item;
-        if (term->window == NULL || (__bridge NSWindow *)term->window->nswindow != main)
-            continue;
+    const struct wl_window *win = ((FootSplitView *)main.contentView).focused;
+    return win != NULL && term_cwd(win->term, cwd);
+}
 
-        const pid_t pids[] = {tcgetpgrp(term->ptmx), term->slave};
-        for (size_t i = 0; i < ALEN(pids); i++) {
-            struct proc_vnodepathinfo info;
-            if (pids[i] <= 0 ||
-                proc_pidinfo(pids[i], PROC_PIDVNODEPATHINFO, 0, &info, sizeof(info)) != sizeof(info))
-            {
-                continue;
-            }
+void
+app_new_split(struct wl_window *win, enum split_dir dir)
+{
+    char cwd[PATH_MAX];
+    const bool have_cwd = term_cwd(win->term, cwd);
 
-            /* The shell fails to start in a removed directory */
-            strlcpy(cwd, info.pvi_cdir.vip_path, PATH_MAX);
-            if (cwd[0] == '/' && access(cwd, X_OK) == 0)
-                return true;
-        }
-        return false;
-    }
-    return false;
+    app.split_parent = win;
+    app.split_dir = dir;
+    new_window(have_cwd ? cwd : NULL);
+    app.split_parent = NULL;
+}
+
+struct wl_window *
+app_new_split_parent(enum split_dir *dir)
+{
+    if (dir != NULL)
+        *dir = app.split_dir;
+    return app.split_parent;
 }
 
 void
@@ -815,6 +839,34 @@ menu_item(NSString *title, SEL action, NSString *key, NSEventModifierFlags mods)
     return item;
 }
 
+/* Window > Select Split, Resize Split: one item for each direction */
+struct split_item {
+    const char *title;
+    SEL action;
+    unichar key;
+};
+
+static NSMenuItem *
+splits_submenu(NSString *title, const struct split_item items[static 4],
+               NSEventModifierFlags mods, NSMenuItem *first)
+{
+    NSMenuItem *item = menu_item(title, nil, @"", 0);
+    NSMenu *menu = [[NSMenu alloc] initWithTitle:title];
+
+    if (first != nil) {
+        [menu addItem:first];
+        [menu addItem:[NSMenuItem separatorItem]];
+    }
+
+    for (size_t i = 0; i < 4; i++) {
+        NSString *key = [NSString stringWithCharacters:&items[i].key length:1];
+        [menu addItem:menu_item(@(items[i].title), items[i].action, key, mods)];
+    }
+
+    item.submenu = menu;
+    return item;
+}
+
 static void
 create_menu(void)
 {
@@ -863,8 +915,15 @@ create_menu(void)
         app.quake_item = menu_item(quake_item_title(), @selector(toggleQuakeTerminal:), @"", 0);
         [menu addItem:app.quake_item];
         [menu addItem:[NSMenuItem separatorItem]];
-        app.close_item = menu_item(@"Close Window", @selector(performClose:), @"w", cmd);
+        [menu addItem:menu_item(@"Split Right", @selector(splitRight:), @"d", cmd)];
+        [menu addItem:menu_item(@"Split Down", @selector(splitDown:), @"D", cmd | NSEventModifierFlagShift)];
+        [menu addItem:menu_item(@"Split Left", @selector(splitLeft:), @"", 0)];
+        [menu addItem:menu_item(@"Split Up", @selector(splitUp:), @"", 0)];
+        [menu addItem:[NSMenuItem separatorItem]];
+        app.close_item = menu_item(@"Close", @selector(performClose:), @"w", cmd);
         [menu addItem:app.close_item];
+        [menu addItem:menu_item(@"Close Window", @selector(performCloseWindow:), @"W",
+                                cmd | NSEventModifierFlagShift)];
 
         menu.delegate = app.delegate;
         item.submenu = menu;
@@ -925,6 +984,25 @@ create_menu(void)
         [menu addItem:menu_item(@"Show Previous Tab", @selector(selectPreviousTab:), @"{", cmd)];
         [menu addItem:menu_item(@"Show Next Tab", @selector(selectNextTab:), @"}", cmd)];
         [menu addItem:[NSMenuItem separatorItem]];
+        [menu addItem:menu_item(@"Zoom Split", @selector(toggleSplitZoom:), @"\r",
+                                cmd | NSEventModifierFlagShift)];
+        [menu addItem:menu_item(@"Select Previous Split", @selector(selectPreviousSplit:), @"[", cmd)];
+        [menu addItem:menu_item(@"Select Next Split", @selector(selectNextSplit:), @"]", cmd)];
+        [menu addItem:splits_submenu(@"Select Split", (const struct split_item[]){
+            {"Select Split Above", @selector(selectSplitAbove:), NSUpArrowFunctionKey},
+            {"Select Split Below", @selector(selectSplitBelow:), NSDownArrowFunctionKey},
+            {"Select Split Left", @selector(selectSplitLeft:), NSLeftArrowFunctionKey},
+            {"Select Split Right", @selector(selectSplitRight:), NSRightArrowFunctionKey},
+        }, cmd | NSEventModifierFlagOption, nil)];
+        [menu addItem:splits_submenu(@"Resize Split", (const struct split_item[]){
+            {"Move Divider Up", @selector(moveDividerUp:), NSUpArrowFunctionKey},
+            {"Move Divider Down", @selector(moveDividerDown:), NSDownArrowFunctionKey},
+            {"Move Divider Left", @selector(moveDividerLeft:), NSLeftArrowFunctionKey},
+            {"Move Divider Right", @selector(moveDividerRight:), NSRightArrowFunctionKey},
+        }, cmd | NSEventModifierFlagControl,
+           menu_item(@"Equalize Splits", @selector(equalizeSplits:), @"=",
+                     cmd | NSEventModifierFlagControl))];
+        [menu addItem:[NSMenuItem separatorItem]];
         [menu addItem:menu_item(@"Bring All to Front", @selector(arrangeInFront:), @"", 0)];
 
         item.submenu = menu;
@@ -951,10 +1029,11 @@ create_menu(void)
     new_tab(main_window_cwd(cwd) ? cwd : NULL);
 }
 
+/* Close (Cmd+W): a split (see FootSplitView), a tab, or else the window */
 - (void)menuNeedsUpdate:(NSMenu *)menu
 {
     app.close_item.title = NSApp.keyWindow.tabbedWindows.count > 1
-        ? @"Close Tab" : @"Close Window";
+        ? @"Close Tab" : @"Close";
 }
 
 /* The Dock's menu isn't a window's: in the home directory */
@@ -1288,6 +1367,9 @@ wayl_activate(struct wayland *wayl, struct wl_window *win, const char *token)
     NSWindow *nswindow = (__bridge NSWindow *)win->nswindow;
     [NSApp activateIgnoringOtherApps:YES];
     [nswindow makeKeyAndOrderFront:nil];
+
+    /* The pane, e.g. of a notification, even if another one is zoomed */
+    [(__bridge FootSplitView *)win->splits focusPane:win];
 }
 
 /*

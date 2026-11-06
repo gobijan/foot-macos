@@ -12,7 +12,8 @@
  * implemented natively with AppKit and Core Animation, in macos/.
  *
  *   - struct wayland: the application (NSApplication)
- *   - struct wl_window: a terminal window (NSWindow + FootView)
+ *   - struct wl_window: a terminal: a pane (FootView) of a window
+ *     (NSWindow), whose content view holds its panes (FootSplitView)
  *   - struct wayl_surface: a CALayer. The main surface is the view's
  *     grid layer; sub-surfaces are sublayers of it.
  *   - struct seat: the keyboard and mouse
@@ -317,9 +318,11 @@ struct wl_window {
     struct terminal *term;
     struct wayl_surface surface;
 
-    void *nswindow;  /* NSWindow (retained) */
-    void *delegate;  /* The NSWindow's delegate (retained) */
-    void *view;      /* FootView, the window's content view */
+    void *nswindow;  /* NSWindow (retained), shared by its panes */
+    void *splits;    /* FootSplitView, the window's content view */
+    void *view;      /* FootView, this pane */
+
+    char *title;     /* The window title, while the pane has the focus */
 
     /* The quake terminal's panel (macos/quake.m) */
     bool quake;

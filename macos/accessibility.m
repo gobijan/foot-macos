@@ -181,9 +181,13 @@ screen_text_create(struct terminal *term)
     return @"terminal";
 }
 
+/* The pane's title: the window's is the focused pane's */
 - (NSString *)accessibilityLabel
 {
-    return self.window.title;
+    const struct wl_window *win = self.win;
+    NSString *title = win != NULL && win->title != NULL
+        ? [NSString stringWithUTF8String:win->title] : nil;
+    return title != nil ? title : self.window.title;
 }
 
 - (id)accessibilityValue

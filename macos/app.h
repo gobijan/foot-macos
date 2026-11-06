@@ -7,6 +7,7 @@
 #import <AppKit/AppKit.h>
 
 #include "keyboard.h"
+#include "splits.h"
 #include "wayland.h"
 
 /* app.m */
@@ -36,6 +37,14 @@ NSMenuItem *updates_menu_item(void);
 
 /* While a new tab's window is created: the window it joins (else nil) */
 NSWindow *app_new_tab_parent(void);
+
+/*
+ * Splits 'win': a new terminal, in its working directory, goes in 'dir'
+ * (macos/split-view.m). While it's created, app_new_split_parent()
+ * returns 'win' (else NULL), and the direction in '*dir' (may be NULL).
+ */
+void app_new_split(struct wl_window *win, enum split_dir dir);
+struct wl_window *app_new_split_parent(enum split_dir *dir);
 
 /* The monitor corresponding to 'screen' (may be NULL) */
 const struct monitor *app_monitor_for_screen(NSScreen *screen);
@@ -77,9 +86,12 @@ void hotkey_set_key_equivalent(NSMenuItem *item, uint32_t sym, unsigned mods);
 
 /*
  * close.m: with something running in the terminal (macos-confirm-close),
- * asks first. Shuts the window's terminal down, now or once confirmed.
+ * asks first. Shuts the pane's terminal down, now or once confirmed.
  */
 void window_close(struct wl_window *win);
+
+/* As above, for all panes of 'windows' (e.g. tabs), asking (once) in 'window' */
+void window_close_all(NSWindow *window, NSArray<NSWindow *> *windows);
 
 /* Whether to go ahead with quitting */
 bool app_confirm_quit(void);
@@ -88,6 +100,16 @@ bool app_confirm_quit(void);
 void window_update_outputs(struct wl_window *win);
 void window_resized(struct wl_window *win);
 void window_backing_changed(struct wl_window *win);
+
+/* The pane gets, or loses, the keyboard focus (its window is key) */
+void window_focus_in(struct wl_window *win);
+void window_focus_out(struct wl_window *win);
+
+/* The window (or a divider) is no longer being resized: the final size */
+void window_live_resize_ended(struct wl_window *win);
+
+/* The terminal's background color changed (e.g. OSC 11, a color theme) */
+void window_colors_changed(struct wl_window *win);
 
 /* The current mouse cursor (app.m) */
 NSCursor *window_cursor(void);

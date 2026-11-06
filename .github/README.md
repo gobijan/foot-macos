@@ -132,6 +132,16 @@ frameworks.
   Show All Tabs work as in other Mac apps. `Cmd+1` to `Cmd+8` select a
   tab, `Cmd+9` the last one, `Cmd+Shift+[` and `Cmd+Shift+]` the
   previous and the next one.
+* Splits, like Ghostty's: `Cmd+D` splits the focused terminal into two,
+  side by side, `Cmd+Shift+D` stacked (Shell > Split Left and Split Up
+  too), with the new one in the same working directory. A click, or
+  `Cmd+Option+arrow`, focuses another one; `Cmd+[` and `Cmd+]` the
+  previous and the next one. The others are dimmed. The dividers can be
+  dragged, or moved with `Cmd+Ctrl+arrow`; `Cmd+Ctrl+=` makes all the
+  same size. `Cmd+Shift+Return` zooms the focused one to the whole
+  window, and back. `Cmd+W` closes it, `Cmd+Shift+W` the whole window,
+  with all tabs and splits. Each split is a terminal of its own (e.g.
+  its font size).
 * `Cmd`+click opens a URL or a hyperlink (OSC 8), with `[url]`'s
   `launch`; the mouse pointer shows which text is one while `Cmd` is
   down.
