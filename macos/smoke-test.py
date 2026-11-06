@@ -105,6 +105,12 @@ class Tests:
             stty size > {out}.tmp
             printf '\\033]0;a title\\007\\033[1;31mred\\033[0m\\033]8;;https://example.com\\033\\\\link\\033]8;;\\033\\\\\\n'
             printf '\\033[?1049h\\033[2J\\033[?1049l'
+            # Restoring the cursor restores the underline's style too, and deleted
+            # characters take theirs with them (foot's own bugs, fixed in the fork:
+            # macos/UPSTREAM.md); drawn before foot exits
+            printf '\\033[4;58:2::255:0:0m\\033[s\\033[24m\\033[uunderlined\\033[0m\\n'
+            printf '\\033[58;5;3mA\\033[4mU\\033[0m\\r\\033[P\\n'
+            sleep .5
             mv {out}.tmp {out}
         """
         run(*self.foot_args('--window-size-chars=100x30', 'sh', '-c', script))

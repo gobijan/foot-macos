@@ -1018,6 +1018,9 @@ grid_resize_and_reflow(
                 width = (old + 1)->wc - CELL_SPACER + 1;
             }
 
+            /* Cut off at the row's end (without auto-wrap, or composed there) */
+            width = min(width, old_cols - c);
+
             /*
              * Check if character fits, if not, emit spacers, and push
                the character to the next row */
@@ -1599,6 +1602,42 @@ grid_row_underline_range_erase(struct row *row, int start, int end)
 {
     xassert(row->extra != NULL);
     grid_row_range_erase(&row->extra->underline_ranges, ROW_RANGE_UNDERLINE, start, end);
+}
+
+static void
+grid_row_ranges_move_type(struct row_ranges *ranges, enum row_range_type type,
+                          int start, int amount, int cols)
+{
+    /* Deleted cells: their ranges are gone (split up, when across them) */
+    if (amount < 0)
+        grid_row_range_erase(ranges, type, start, start - amount - 1);
+
+    for (int i = ranges->count - 1; i >= 0; i--) {
+        struct row_range *r = &ranges->v[i];
+        if (r->end < start)
+            break;
+
+        /* Across 'start', it grows: the inserted cells are erased, or printed, next */
+        if (r->start >= start)
+            r->start += amount;
+        r->end += amount;
+
+        /* Moved past the row's end */
+        if (r->start >= cols)
+            range_delete(ranges, type, i);
+        else if (r->end >= cols)
+            r->end = cols - 1;
+    }
+}
+
+void
+grid_row_ranges_move(struct row *row, int start, int amount, int cols)
+{
+    if (likely(row->extra == NULL))
+        return;
+
+    grid_row_ranges_move_type(&row->extra->uri_ranges, ROW_RANGE_URI, start, amount, cols);
+    grid_row_ranges_move_type(&row->extra->underline_ranges, ROW_RANGE_UNDERLINE, start, amount, cols);
 }
 
 UNITTEST

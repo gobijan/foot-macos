@@ -151,6 +151,13 @@ attrs_equal(struct attributes a, struct attributes b)
         a.bg_src == b.bg_src && (a.bg_src == COLOR_DEFAULT || a.bg == b.bg);
 }
 
+static bool
+underline_equal(const struct underline_range_data *a, const struct underline_range_data *b)
+{
+    return a->style == b->style && a->color_src == b->color_src &&
+        (a->color_src == COLOR_DEFAULT || a->color == b->color);
+}
+
 static const struct row_range *
 range_at(const struct row *row, bool uri, int col)
 {
@@ -239,8 +246,9 @@ compare_rows(struct diff *d, const char *where,
         }
 
         /*
-         * Inserting and deleting characters shifts cells, but not their
-         * links (rows' URI ranges): links on erased cells are never seen
+         * Links on cells without a character (e.g. the padding where a
+         * wide character didn't fit) are never seen, and a snapshot
+         * can't put them there
          */
         const bool empty = ca->wc == 0 || ca->wc >= CELL_SPACER;
         const struct row_range *ua = !empty ? range_at(a, true, col) : NULL;
@@ -269,14 +277,11 @@ compare_rows(struct diff *d, const char *where,
         struct underline_range_data da = la != NULL ? la->underline : none;
         struct underline_range_data db = lb != NULL ? lb->underline : none;
 
-        /*
-         * With the attribute, no style is a single underline (DECRC can
-         * leave them like that; foot's renderer can't draw it, BUG()).
-         */
-        if (da.style == UNDERLINE_NONE)
-            da.style = UNDERLINE_SINGLE;
-        if (db.style == UNDERLINE_NONE)
-            db.style = UNDERLINE_SINGLE;
+        /* foot's renderer can't draw that (BUG()) */
+        if ((la != NULL && da.style == UNDERLINE_NONE) || (lb != NULL && db.style == UNDERLINE_NONE)) {
+            differs(d, "%s, column %d: an underline without a style", where, col);
+            return;
+        }
 
         if (da.style != db.style || da.color_src != db.color_src ||
             (da.color_src != COLOR_DEFAULT && da.color != db.color))
@@ -481,15 +486,21 @@ compare(const struct terminal *a, const struct terminal *b)
         cursor_a.lcf = b->grid->cursor.lcf;
     compare_cursor(&d, "cursor", a->grid, cursor_a, b->grid->cursor);
     compare_cursor(&d, "normal screen's saved cursor", na, na->saved_cursor, nb->saved_cursor);
-    if (!attrs_equal(na->saved_attrs, nb->saved_attrs))
+    if (!attrs_equal(na->saved_attrs, nb->saved_attrs) ||
+        !underline_equal(&na->saved_underline, &nb->saved_underline))
+    {
         differs(&d, "normal screen's saved attributes differ");
+    }
     compare_kitty(&d, "normal screen", na, nb);
 
     if (a->grid == &a->alt) {
         compare_cursor(&d, "alternate screen's saved cursor", &a->alt,
                        a->alt.saved_cursor, b->alt.saved_cursor);
-        if (!attrs_equal(a->alt.saved_attrs, b->alt.saved_attrs))
+        if (!attrs_equal(a->alt.saved_attrs, b->alt.saved_attrs) ||
+            !underline_equal(&a->alt.saved_underline, &b->alt.saved_underline))
+        {
             differs(&d, "alternate screen's saved attributes differ");
+        }
         compare_kitty(&d, "alternate screen", &a->alt, &b->alt);
     }
 
@@ -610,8 +621,9 @@ dump_snapshot(const char *snapshot, size_t len)
  *
  *  - underline styles and links on cells that don't show them
  *    (snapshot.h)
- *  - a wide character in the last column, without auto-wrap: foot's
- *    reflow reads past the end of the row then (grid.c)
+ *  - a wrapped row that ends in a wide character cut off in the last
+ *    column (e.g. one that got wide there by composing, as ❤️ does):
+ *    the snapshot can't wrap it (see compare_rows())
  */
 static bool
 reflow_unreliable(const struct terminal *term)
@@ -636,6 +648,16 @@ reflow_unreliable(const struct terminal *term)
             }
             if (last->wc == CELL_SPACER && before->wc == CELL_SPACER)
                 return true;
+
+            int width = 1;
+            if (last->wc >= CELL_COMB_CHARS_LO && last->wc <= CELL_COMB_CHARS_HI) {
+                const struct composed *c = composed_lookup(term->composed, last->wc - CELL_COMB_CHARS_LO);
+                if (c != NULL)
+                    width = c->forced_width > 0 ? c->forced_width : c->width;
+            } else if (last->wc != 0 && last->wc < CELL_SPACER)
+                width = c32width(last->wc);
+            if (width > 1)
+                return true;
         }
 
         for (int col = 0; col < term->cols; col++) {
@@ -656,19 +678,6 @@ reflow_unreliable(const struct terminal *term)
             if (!cell->attrs.underline && range_at(row, false, col) != NULL)
                 return true;
             if (empty && range_at(row, true, col) != NULL)
-                return true;
-            if (empty)
-                continue;
-
-            int width = 1;
-            if (cell->wc >= CELL_COMB_CHARS_LO && cell->wc <= CELL_COMB_CHARS_HI) {
-                const struct composed *c = composed_lookup(term->composed, cell->wc - CELL_COMB_CHARS_LO);
-                if (c != NULL)
-                    width = c->forced_width > 0 ? c->forced_width : c->width;
-            } else
-                width = c32width(cell->wc);
-
-            if (width > 1 && col + width > term->cols)
                 return true;
         }
     }
@@ -727,6 +736,27 @@ test(const char *name, const char *input)
 {
     check(name, input, strlen(input), 20, 6, true);
     check(name, input, strlen(input), 80, 24, true);
+}
+
+/* Two outputs that leave a terminal the same (no snapshot involved) */
+static void
+test_same(const char *name, const char *input, const char *same_as)
+{
+    tests++;
+
+    struct terminal *a = new_term(20, 6);
+    struct terminal *b = new_term(20, 6);
+    feed(a, input, strlen(input));
+    feed(b, same_as, strlen(same_as));
+
+    struct diff d = compare(a, b);
+    if (d.found) {
+        failures++;
+        fprintf(stderr, "FAIL: %s: %s\n", name, d.msg);
+    }
+
+    free_term(a);
+    free_term(b);
 }
 
 /*
@@ -798,13 +828,6 @@ static const char *const texts[] = {
 static void
 random_output(struct writes *w, int cols, int rows, int ops)
 {
-    /*
-     * foot's own: with origin mode, DECRC may restore the cursor outside
-     * the scroll region, and a line feed then fails an assertion
-     * (term_cursor_down()). Not what's tested here.
-     */
-    bool origin = false;
-
     for (int i = 0; i < ops; i++) {
         switch (rnd(30)) {
         case 0: case 1: case 2: case 3: case 4: case 5: case 6: case 7:
@@ -842,7 +865,7 @@ random_output(struct writes *w, int cols, int rows, int ops)
             add(w, "\033[%u;%ur", top, bottom);
             break;
         }
-        case 18: add(w, rnd(2) || origin ? "\0337" : "\0338"); break;
+        case 18: add(w, rnd(2) ? "\0337" : "\0338"); break;
         case 19: {
             static const char *const modes[] = {
                 "?1h", "?1l", "?5h", "?5l", "?6h", "?6l", "?7h", "?7l", "?12h",
@@ -850,12 +873,7 @@ random_output(struct writes *w, int cols, int rows, int ops)
                 "?1004h", "?1006h", "?1007l", "?2004h", "?2004l", "4h", "4l",
                 ">4;2m", ">4;0m",
             };
-            const char *mode = modes[rnd(ALEN(modes))];
-            if (streq(mode, "?6h"))
-                origin = true;
-            else if (streq(mode, "?6l"))
-                origin = false;
-            add(w, "\033[%s", mode);
+            add(w, "\033[%s", modes[rnd(ALEN(modes))]);
             break;
         }
         case 20: add(w, rnd(2) ? "\033(0" : "\033(B"); break;
@@ -864,8 +882,7 @@ random_output(struct writes *w, int cols, int rows, int ops)
         case 23: add(w, "\033]133;%c\033\\", "ACD"[rnd(3)]); break;
         case 24: add(w, "\033[%u q", rnd(7)); break;
         case 25: add(w, "\033[%c%uu", "><"[rnd(2)], rnd(32)); break;
-        /* (Leaving it restores the cursor: see 'origin') */
-        case 26: add(w, rnd(2) || origin ? "\033[?1049h" : "\033[?1049l"); break;
+        case 26: add(w, rnd(2) ? "\033[?1049h" : "\033[?1049l"); break;
         case 27:
             if (rnd(2))
                 add(w, "\033H");
@@ -1165,6 +1182,31 @@ main(int argc, char *argv[])
     test("insert mode", "abc\033[4h\033[1GX");
     test("pen", "\033[1;33;44mpen\033]8;;https://example.com\033\\");
     test("deleted lines", "a\r\nb\r\nc\r\nd\033[2;1H\033[2M");
+
+    /* foot's own bugs, fixed in the fork (macos/UPSTREAM.md) */
+    test("DECRC, origin mode, below the region", "\033[5;1H\0337\033[2;3r\033[?6h\0338\nX");
+    test("DECRC, origin mode, above the region", "\0337\033[3;4r\033[?6h\0338\033MX\033[AY");
+    test("leaving the alternate screen, origin mode",
+         "\033[5;1H\033[?1049h\033[2;3r\033[?6h\033[?1049l\nX");
+    test("DECRC, styled underline",
+         "\033[4:3;58:2::255:0:0m\0337\033[24mplain\0338curly\033[4;58:5:3m\0337\033[0m\0338single");
+    test("DECRC, underline color without underline",
+         "\033[4;58:2::255:0:0m\0337\033[24m\0338X\033[24m\0337\0338Y");
+    test_same("deleted characters, with their underlines",
+              "\033[58;5;3mA\033[4:3mUU\033[0mx\r\033[P\033[H", "\033[4:3;58;5;3mUU\033[0mx\033[H");
+    test_same("inserted characters, with links and underlines",
+              "\033]8;;https://example.com\033\\L\033]8;;\033\\\033[4:3mU\033[0m\r\033[2@\033[H",
+              "\033[3G\033]8;;https://example.com\033\\L\033]8;;\033\\\033[4:3mU\033[0m\033[H");
+    test_same("insert mode, with links and underlines",
+              "\033[4:3mU\033]8;;https://example.com\033\\L\033]8;;\033\\\033[0m\r\033[4hab\033[4l\033[H",
+              "ab\033[4:3mU\033]8;;https://example.com\033\\L\033]8;;\033\\\033[0m\033[H");
+    test_same("inserted characters, past the row's end",
+              "\033[1;17H\033[4:3mUUUU\033[0m\033[1;15H\033[3@\033[H",
+              "\033[1;20H\033[4:3mU\033[0m\033[H");
+    test("inserted characters, past the row's end, reflowed",
+         "\033[1;17H\033[4:3mUUUU\033[0m\033[1;15H\033[3@\033[2;1H");
+    test("cut off wide characters, reflowed",
+         "\033[?7l\033[1;999H\xf0\x9f\x91\x8d\xf0\x9f\x8f\xbd\r\n\033[999G\xe6\x97\xa5\033[?7h\r\nend");
 
     fuzz(0, argc == 2 ? atoi(argv[1]) : 2000);
 

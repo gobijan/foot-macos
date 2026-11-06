@@ -1153,7 +1153,7 @@ emit_saved_cursor(struct emitter *e, const struct grid *grid,
 {
     const bool placeholder = emit_cursor(e, grid, grid->saved_cursor, 0, true);
 
-    set_pen(e->b, &e->pen, grid->saved_attrs, &no_underline);
+    set_pen(e->b, &e->pen, grid->saved_attrs, &grid->saved_underline);
     emit_charsets(e->b, charsets);
     put_str(e->b, "\0337");
     reset_charsets(e->b, charsets);

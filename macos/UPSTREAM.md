@@ -35,7 +35,7 @@ macOS.
 
 New code lives in `macos/`; the port's other own files are `.github/`,
 `Makefile`, `AGENTS.md` and `CLAUDE.md` (none of them exist upstream).
-Upstream files are changed as little as possible, in one of three ways:
+Upstream files are changed as little as possible, in one of four ways:
 
 1. **Not built on macOS, left untouched.** Upstream's Wayland backend
    is kept as is, so it never conflicts: `wayland.c`, `shm.c`,
@@ -75,6 +75,20 @@ Upstream files are changed as little as possible, in one of three ways:
 | `box-drawing.c` | Rounded corners (`╭╮╯╰`) catch an out of range `sqrt()` with `isnan()` too: macOS' libm doesn't set `errno`. |
    | `fdm.h`, `shm.h` | Additions for run loop integration, and IOSurface buffers (`macos/fdm.c`, `macos/shm.c`). |
    | `.gitignore` | The build directories (`/build/`, `/build-release/`, `/build-x86_64/`, and `-pgo` versions of the last two). |
+
+4. **Upstream bugs, fixed in place.** Found while fuzzing the snapshots
+   of persistent sessions (`meson test sessions`); each has a regression
+   test in `macos/test-sessions.c` (the underlines' also in the smoke
+   test, where they're drawn). These aren't sent upstream. If upstream
+   fixes one itself, take upstream's fix and drop the fork's.
+
+   | File | The bug | The fix |
+   |---|---|---|
+   | `terminal.c` (`term_restore_cursor()`) | With origin mode (DECOM), DECRC, and leaving the alternate screen (1049), could put the cursor outside the scrolling region: the next line feed or reverse index failed an assertion (debug builds), or moved it wrongly. | The row is kept within the region. |
+   | `terminal.c`, `terminal.h` (`term_save_cursor()`, `struct grid`) | DECSC saved the underline attribute, but not the underline's style and color: after DECRC, text could be underlined without a style, and drawing it was a `BUG()` (foot exited). | They're saved (`saved_underline`) and restored with the attributes. |
+   | `grid.c`, `grid.h` (`grid_row_ranges_move()`), `csi.c` (ICH, DCH), `terminal.c` (`print_insert()`) | Inserting and deleting characters (also in insert mode) moved the cells, but not the row's URI and underline ranges: links and underline styles ended up on other text, and an underlined character moved into a range with an underline color only was a `BUG()` when drawn (foot exited). | The ranges move with the cells. |
+   | `grid.c` (`grid_resize_and_reflow()`) | A composed wide character cut off in the last column (printed there without auto-wrap, e.g. 👍🏽, or one that got wide there by composing, as ❤️ does) was copied with its whole width when reflowing: a read past the row's end. | The width is limited to what's left of the row. |
+   | `terminal.c` (`term_init()`) | When configuring the PTY, or registering the timers, failed, `term_destroy()` ran on the terminal before it was initialized (a crash; in footd, of all sessions). | Those failures go to `close_fds`; the key bindings are referenced right after them. |
 
 footd (`macos/footd.c`, persistent sessions) runs foot's terminal core
 without a window (`macos/headless.c`): what the core calls into is

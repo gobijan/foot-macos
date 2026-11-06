@@ -1271,17 +1271,12 @@ term_init(const struct config *conf, struct fdm *fdm, struct reaper *reaper,
         goto close_fds;
     }
 
-    /* Need to register *very* early (before the first "goto err"), to
-     * ensure term_destroy() doesn't unref a key-binding we haven't
-     * yet ref:d */
-    key_binding_new_for_conf(wayl->key_binding_manager, wayl, conf);
-
     int ptmx_flags;
     if ((ptmx_flags = fcntl(ptmx, F_GETFL)) < 0 ||
         fcntl(ptmx, F_SETFL, ptmx_flags | O_NONBLOCK) < 0)
     {
         LOG_ERRNO("failed to configure ptmx as non-blocking");
-        goto err;
+        goto close_fds;  /* 'term' isn't initialized yet: no term_destroy() */
     }
 
     /*
@@ -1298,8 +1293,13 @@ term_init(const struct config *conf, struct fdm *fdm, struct reaper *reaper,
         !fdm_add(fdm, icon_update_fd, EPOLLIN, &fdm_icon_update_timeout, term) ||
         !fdm_add(fdm, app_id_update_fd, EPOLLIN, &fdm_app_id_update_timeout, term))
     {
-        goto err;
+        goto close_fds;
     }
+
+    /* Need to register *very* early (before the first "goto err"), to
+     * ensure term_destroy() doesn't unref a key-binding we haven't
+     * yet ref:d */
+    key_binding_new_for_conf(wayl->key_binding_manager, wayl, conf);
 
     const enum shm_bit_depth desired_bit_depth =
         conf->tweak.surface_bit_depth == SHM_BITS_AUTO
@@ -3335,6 +3335,7 @@ term_save_cursor(struct terminal *term)
 {
     term->grid->saved_cursor = term->grid->cursor;
     term->grid->saved_attrs = term->vt.attrs;
+    term->grid->saved_underline = term->vt.underline;
     term->saved_charsets = term->charsets;
 }
 
@@ -3344,14 +3345,23 @@ term_restore_cursor(struct terminal *term, const struct cursor *cursor)
     int row = min(cursor->point.row, term->rows - 1);
     int col = min(cursor->point.col, term->cols - 1);
 
+    /* With origin mode, the cursor stays within the scrolling region */
+    if (term->origin == ORIGIN_RELATIVE)
+        row = max(min(row, term->scroll_region.end - 1), term->scroll_region.start);
+
     term_cursor_to(term, row, col);
     term->grid->cursor.lcf = cursor->lcf;
 
     term->vt.attrs = term->grid->saved_attrs;
+    term->vt.underline = term->grid->saved_underline;
     term->charsets = term->saved_charsets;
 
     term->bits_affecting_ascii_printer.charset =
         term->charsets.set[term->charsets.selected] != CHARSET_ASCII;
+    term->bits_affecting_ascii_printer.underline_style =
+        term->vt.underline.style > UNDERLINE_SINGLE;
+    term->bits_affecting_ascii_printer.underline_color =
+        term->vt.underline.color_src != COLOR_DEFAULT;
     term_update_ascii_printer(term);
 }
 
@@ -3972,6 +3982,7 @@ print_insert(struct terminal *term, int width)
         &row->cells[term->grid->cursor.point.col + width],
         &row->cells[term->grid->cursor.point.col],
         move_count * sizeof(struct cell));
+    grid_row_ranges_move(row, term->grid->cursor.point.col, width, term->cols);
 
     /* Mark moved cells as dirty */
     for (size_t i = term->grid->cursor.point.col + width; i < term->cols; i++)

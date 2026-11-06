@@ -234,6 +234,7 @@ struct grid {
     struct cursor cursor;
     struct cursor saved_cursor;
     struct attributes saved_attrs;
+    struct underline_range_data saved_underline;
 
     struct row **rows;
     struct row *cur_row;

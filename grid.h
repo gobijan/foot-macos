@@ -92,6 +92,13 @@ void grid_row_underline_range_put(
     struct row *row, int col, struct underline_range_data data);
 void grid_row_underline_range_erase(struct row *row, int start, int end);
 
+/*
+ * The row's cells from 'start' on have moved by 'amount' columns (ICH,
+ * DCH, insert mode; negative: to the left, the cells before them
+ * deleted): their URI and underline ranges move with them
+ */
+void grid_row_ranges_move(struct row *row, int start, int amount, int cols);
+
 static inline void
 grid_row_uri_range_destroy(struct row_range *range)
 {

@@ -1108,6 +1108,8 @@ csi_dispatch(struct terminal *term, uint8_t final)
             memmove(&term->grid->cur_row->cells[term->grid->cursor.point.col],
                     &term->grid->cur_row->cells[term->grid->cursor.point.col + count],
                     remaining * sizeof(term->grid->cur_row->cells[0]));
+            grid_row_ranges_move(
+                term->grid->cur_row, term->grid->cursor.point.col, -count, term->cols);
 
             for (size_t c = 0; c < remaining; c++)
                 term->grid->cur_row->cells[term->grid->cursor.point.col + c].attrs.clean = 0;
@@ -1137,6 +1139,8 @@ csi_dispatch(struct terminal *term, uint8_t final)
             memmove(&term->grid->cur_row->cells[term->grid->cursor.point.col + count],
                     &term->grid->cur_row->cells[term->grid->cursor.point.col],
                     remaining * sizeof(term->grid->cur_row->cells[0]));
+            grid_row_ranges_move(
+                term->grid->cur_row, term->grid->cursor.point.col, count, term->cols);
             for (size_t c = 0; c < remaining; c++)
                 term->grid->cur_row->cells[term->grid->cursor.point.col + count + c].attrs.clean = 0;
             term->grid->cur_row->dirty = true;
