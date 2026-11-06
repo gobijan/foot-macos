@@ -61,6 +61,7 @@ static struct {
     bool fdm_failed;
     bool running;
     bool terminating;
+    bool end_sessions;     /* Quit and End Sessions (Option+Cmd+Q) */
 
     bool (*new_window)(void *data, const char *cwd);
     void *new_window_data;
@@ -960,6 +961,12 @@ create_menu(void)
         [menu addItem:[NSMenuItem separatorItem]];
         [menu addItem:menu_item(@"Quit foot", @selector(terminate:), @"q", cmd)];
 
+        /* With Option: what runs in foot ends too (as without sessions) */
+        NSMenuItem *end = menu_item(@"Quit and End Sessions", @selector(quitEndingSessions:),
+                                    @"q", cmd | NSEventModifierFlagOption);
+        end.alternate = YES;
+        [menu addItem:end];
+
         item.submenu = menu;
         [bar addItem:item];
     }
@@ -1144,12 +1151,20 @@ create_menu(void)
         LOG_ERR("failed to open the settings");
 }
 
+- (void)quitEndingSessions:(id)sender
+{
+    app.end_sessions = true;
+    [NSApp terminate:sender];
+    app.end_sessions = false;
+}
+
 - (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)sender
 {
     if (!app.running || tll_length(app.wayl->terms) == 0)
         return NSTerminateNow;
 
-    if (!app_confirm_quit())
+    const bool end_sessions = app.end_sessions;
+    if (!app_confirm_quit(end_sessions))
         return NSTerminateCancel;
 
     /* Shut down all terminals; the run loop exits when they're gone */
@@ -1157,9 +1172,11 @@ create_menu(void)
     app.keep_running = false;
 
     /* Sessions only detach: they keep running, as they're laid out */
-    session_layout_save();
+    if (!end_sessions)
+        session_layout_save();
     session_layout_fini();
-    sessions_detach_all();
+    if (!end_sessions)
+        sessions_detach_all();
 
     tll_foreach(app.wayl->terms, it)
         term_shutdown(it->item);

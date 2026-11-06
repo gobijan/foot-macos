@@ -181,13 +181,13 @@ window_close_all(NSWindow *window, NSArray<NSWindow *> *windows)
 }
 
 bool
-app_confirm_quit(void)
+app_confirm_quit(bool end_sessions)
 {
     NSMutableOrderedSet<NSString *> *processes = [NSMutableOrderedSet orderedSet];
 
     tll_foreach(app_wayland()->terms, it) {
         /* Sessions keep running (macos/session.h) */
-        if (it->item->session != NULL)
+        if (it->item->session != NULL && !end_sessions)
             continue;
 
         NSString *process = running_process(it->item);

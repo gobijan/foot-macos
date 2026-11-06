@@ -105,8 +105,11 @@ void window_close(struct wl_window *win);
 /* As above, for all panes of 'windows' (e.g. tabs), asking (once) in 'window' */
 void window_close_all(NSWindow *window, NSArray<NSWindow *> *windows);
 
-/* Whether to go ahead with quitting */
-bool app_confirm_quit(void);
+/*
+ * Whether to go ahead with quitting; with 'end_sessions', sessions end
+ * too (else they keep running: nothing to ask about them)
+ */
+bool app_confirm_quit(bool end_sessions);
 
 /* window.m */
 void window_update_outputs(struct wl_window *win);

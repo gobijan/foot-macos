@@ -235,8 +235,9 @@ split) ends what runs in it, as before.
   was.
 * foot started from a shell (e.g. `foot -e htop`) and footclient's
   terminals are as upstream's: they end with foot.
-* `macos-sessions=no` in `[main]` turns sessions off: quitting foot ends
-  what runs in it then.
+* foot > Quit and End Sessions (`Option+Cmd+Q`) quits as without
+  sessions: what runs in foot ends too (asking first, see above).
+  `macos-sessions=no` in `[main]` turns sessions off.
 * footd's socket is `~/Library/Application Support/foot/sessions-1.sock`.
   A foot with another session protocol (after an update that changes
   it) gets a footd of its own; the old one keeps its sessions until
