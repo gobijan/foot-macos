@@ -87,8 +87,8 @@ distclean: ## Remove both build directories
 ##@ Test
 
 .PHONY: test
-test: build ## Run foot's tests: the configuration, and the unit tests
-	$(MESON) test -C $(DEBUG_DIR) config --print-errorlogs
+test: build ## Run foot's tests: the configuration, sessions, and the unit tests
+	$(MESON) test -C $(DEBUG_DIR) config sessions footd --print-errorlogs
 	@# Debug builds run foot's unit tests at startup
 	./$(DEBUG_DIR)/macos/foot --version
 
@@ -99,7 +99,7 @@ smoke: build ## Run foot for real: output, footclient, the quake terminal (windo
 .PHONY: sanitize
 sanitize: $(SANITIZE_DIR)/build.ninja ## All of the above, with AddressSanitizer and UBSan, in build-sanitize/
 	$(NINJA) -C $(SANITIZE_DIR)
-	UBSAN_OPTIONS=$(SANITIZE_UBSAN) $(MESON) test -C $(SANITIZE_DIR) config --print-errorlogs
+	UBSAN_OPTIONS=$(SANITIZE_UBSAN) $(MESON) test -C $(SANITIZE_DIR) config sessions footd --print-errorlogs
 	macos/smoke-test.py $(SANITIZE_DIR)/macos
 
 .PHONY: check-config

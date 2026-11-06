@@ -296,6 +296,22 @@ footd_core = static_library(
   link_with: [pgolib, tokenize],
 )
 
+# Between windows and footd (both)
+session_protocol = static_library(
+  'session-protocol',
+  'session-protocol.c', 'session-protocol.h',
+  dependencies: [tllist, utf8proc],
+  link_with: [common],
+)
+
+footd = executable(
+  'footd',
+  'footd.c',
+  version,
+  link_with: [footd_core, session_protocol],
+  dependencies: [math, threads, pixman, xkb, utf8proc, tllist],
+  install: true)
+
 foot = executable(
   'foot',
   '../async.c', '../async.h',
@@ -449,6 +465,9 @@ if get_option('tests')
     dependencies: [math, threads, pixman, xkb, utf8proc, tllist])
 
   test('sessions', sessions_test)
+
+  # footd, driven as windows do it
+  test('footd', python, args: ['-I', files('test-footd.py'), footd], timeout: 120)
 endif
 
 summary(

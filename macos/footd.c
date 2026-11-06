@@ -1,0 +1,1428 @@
+/*
+ * footd: foot's sessions.
+ *
+ * footd has the PTYs of foot's terminals, and the programs running in
+ * them. A window attaches to a session (macos/session.c), and detaches
+ * when it's gone: when foot quits, or crashes, the programs keep
+ * running, and the next foot attaches again. Closing a window (or the
+ * program exiting) ends its session.
+ *
+ * What the programs write goes to the attached window as is, and to a
+ * terminal of footd's own (foot's terminal core, without a window: see
+ * headless.c), that keeps the session's state: a window that attaches
+ * gets it first (snapshot.c), then what follows. While no window is
+ * attached, footd's terminal answers the programs' queries; else the
+ * window does.
+ *
+ * foot starts footd when there's none (with the socket already
+ * listening), and footd exits once there are neither sessions nor
+ * windows left. Nothing wakes it up while idle.
+ */
+
+#include <errno.h>
+#include <fcntl.h>
+#include <getopt.h>
+#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+#include <sys/epoll.h>
+#include <sys/file.h>
+#include <sys/ioctl.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/un.h>
+
+#include <tllist.h>
+
+#define LOG_MODULE "footd"
+#define LOG_ENABLE_DBG 0
+#include "log.h"
+#include "config.h"
+#include "fdm.h"
+#include "headless.h"
+#include "reaper.h"
+#include "session-protocol.h"
+#include "snapshot.h"
+#include "terminal.h"
+#include "user-notification.h"
+#include "util.h"
+#include "version.h"
+#include "xmalloc.h"
+
+/* Writing to a window pauses reading the PTY beyond this */
+#define OUTPUT_HIGH_WATER (4 * 1024 * 1024)
+#define OUTPUT_LOW_WATER (256 * 1024)
+
+/* At most this much of a PTY is read at once (then others get a turn) */
+#define READ_BUDGET (1024 * 1024)
+
+/* An incomplete control sequence is kept up to this size (see update_tail()) */
+#define MAX_TAIL (1024 * 1024)
+
+struct bytes {
+    uint8_t *data;
+    size_t len;
+    size_t size;
+};
+
+static void
+bytes_append(struct bytes *b, const void *data, size_t len)
+{
+    if (b->len + len > b->size) {
+        size_t size = b->size > 0 ? b->size : 16 * 1024;
+        while (size < b->len + len)
+            size *= 2;
+        b->data = xrealloc(b->data, size);
+        b->size = size;
+    }
+    memcpy(&b->data[b->len], data, len);
+    b->len += len;
+}
+
+static void
+bytes_consume(struct bytes *b, size_t len)
+{
+    memmove(b->data, &b->data[len], b->len - len);
+    b->len -= len;
+}
+
+static void
+bytes_free(struct bytes *b)
+{
+    free(b->data);
+    *b = (struct bytes){0};
+}
+
+struct client;
+struct session;
+
+/* A window, attached to a session */
+struct attachment {
+    struct session *session;  /* NULL once it's ended (see drain()) */
+    struct client *client;    /* NULL once its connection is gone */
+    uint64_t token;
+    int fd;                   /* The window's socket */
+    struct bytes output;     /* Not yet written to it */
+};
+
+struct session {
+    uint64_t id;
+    struct config *conf;
+    struct terminal *term;  /* footd's: NULL once it's gone */
+    int pty;                /* The PTY master; -1 once closed */
+    bool pty_registered;
+    bool pty_paused;        /* Until the window has caught up */
+    int replies;            /* The terminal's replies */
+    pid_t pid;              /* What runs in it (the shell) */
+    struct session_size size;
+
+    /* Input (from the window, or footd's replies) not yet written to the PTY */
+    struct bytes input;
+
+    /* The end of the output, if it's an incomplete control sequence */
+    struct bytes tail;
+    bool tail_overflow;
+
+    struct attachment *attachment;
+    bool killed;
+};
+
+struct client {
+    struct session_conn conn;
+    pid_t pid;
+    bool greeted;
+    bool writing;
+};
+
+static struct {
+    struct fdm *fdm;
+    struct reaper *reaper;
+
+    int listen_fd;
+    char *socket_path;
+    char *lock_path;
+
+    tll(struct session *) sessions;
+    tll(struct client *) clients;
+
+    /* Of sessions that have ended: their output's last bytes */
+    tll(struct attachment *) draining;
+
+    /* The windows' layout, from the last window to tell */
+    void *layout;
+    size_t layout_len;
+
+    volatile sig_atomic_t quit;
+} footd = {.listen_fd = -1};
+
+static void session_free(struct session *s);
+static void detach(struct attachment *att);
+
+static bool
+set_nonblocking(int fd)
+{
+    int flags = fcntl(fd, F_GETFL);
+    return flags >= 0 && fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0 &&
+        fcntl(fd, F_SETFD, FD_CLOEXEC) == 0;
+}
+
+static struct session *
+session_find(uint64_t id)
+{
+    tll_foreach(footd.sessions, it) {
+        if (it->item->id == id)
+            return it->item;
+    }
+    return NULL;
+}
+
+/*
+ * Clients (windows' control connections)
+ */
+
+static void client_free(struct client *c);
+
+static void
+client_send(struct client *c, struct session_msg *msg, int fd)
+{
+    if (c->conn.fd < 0) {
+        if (fd >= 0)
+            close(fd);
+        return;
+    }
+
+    if (!session_conn_send(&c->conn, msg, fd)) {
+        LOG_WARN("client (PID=%d): failed to send", c->pid);
+        return;
+    }
+
+    const bool writing = session_conn_has_output(&c->conn);
+    if (writing != c->writing) {
+        c->writing = writing;
+        if (writing)
+            fdm_event_add(footd.fdm, c->conn.fd, EPOLLOUT);
+        else
+            fdm_event_del(footd.fdm, c->conn.fd, EPOLLOUT);
+    }
+}
+
+static void
+send_failed(struct client *c, uint64_t id, uint64_t token, const char *reason)
+{
+    LOG_WARN("session %016llx: %s", (unsigned long long)id, reason);
+
+    struct session_msg msg = {0};
+    session_msg_begin(&msg, SESSION_MSG_FAILED);
+    session_msg_u64(&msg, id);
+    session_msg_u64(&msg, token);
+    session_msg_str(&msg, reason);
+    client_send(c, &msg, -1);
+    session_msg_free(&msg);
+}
+
+static void
+send_started(struct client *c, const struct session *s, uint64_t token)
+{
+    struct session_msg msg = {0};
+    session_msg_begin(&msg, SESSION_MSG_STARTED);
+    session_msg_u64(&msg, s->id);
+    session_msg_u64(&msg, token);
+    session_msg_i32(&msg, s->pid);
+    client_send(c, &msg, -1);
+    session_msg_free(&msg);
+}
+
+/*
+ * The PTY
+ */
+
+static void
+pty_pause(struct session *s, bool pause)
+{
+    if (s->pty < 0 || !s->pty_registered || s->pty_paused == pause)
+        return;
+
+    s->pty_paused = pause;
+    if (pause)
+        fdm_event_del(footd.fdm, s->pty, EPOLLIN);
+    else
+        fdm_event_add(footd.fdm, s->pty, EPOLLIN);
+}
+
+/* Writes what it can of the input to the PTY; the rest when it's writable */
+static void
+flush_input(struct session *s)
+{
+    while (s->input.len > 0 && s->pty >= 0) {
+        ssize_t n = write(s->pty, s->input.data, s->input.len);
+        if (n < 0) {
+            if (errno == EINTR)
+                continue;
+            if (errno == EAGAIN)
+                break;
+
+            /* E.g. EIO: what runs in it has exited */
+            s->input.len = 0;
+            break;
+        }
+        bytes_consume(&s->input, n);
+    }
+
+    if (s->pty < 0 || !s->pty_registered)
+        return;
+
+    const bool pending = s->input.len > 0;
+    if (pending)
+        fdm_event_add(footd.fdm, s->pty, EPOLLOUT);
+    else
+        fdm_event_del(footd.fdm, s->pty, EPOLLOUT);
+
+    /* The window's input waits, while the program doesn't read it */
+    struct attachment *att = s->attachment;
+    if (att != NULL) {
+        if (pending)
+            fdm_event_del(footd.fdm, att->fd, EPOLLIN);
+        else
+            fdm_event_add(footd.fdm, att->fd, EPOLLIN);
+    }
+}
+
+static void
+write_input(struct session *s, const void *data, size_t len)
+{
+    bytes_append(&s->input, data, len);
+    flush_input(s);
+}
+
+/*
+ * The end of the output may be the start of a control sequence (its
+ * rest comes later). A window that attaches gets it after the snapshot,
+ * as its parser must be in the same state as footd's terminal's.
+ *
+ * Sequences start with ESC (and UTF-8 characters with a lead byte):
+ * the tail starts with the last of them, or it's continued.
+ */
+static void
+update_tail(struct session *s, const uint8_t *data, size_t len)
+{
+    if (s->term == NULL || s->term->vt.state == 0) {
+        /* Ground state */
+        s->tail.len = 0;
+        s->tail_overflow = false;
+        return;
+    }
+
+    ssize_t start = -1;
+    for (ssize_t i = len - 1; i >= 0; i--) {
+        if (data[i] == '\033') {
+            start = i;
+            break;
+        }
+    }
+
+    if (start < 0 && s->tail.len == 0 && !s->tail_overflow) {
+        /* A UTF-8 character's first byte(s) */
+        for (ssize_t i = len - 1; i >= 0 && i >= (ssize_t)len - 4; i--) {
+            if (data[i] >= 0xc0) {
+                start = i;
+                break;
+            }
+        }
+        if (start < 0)
+            start = 0;
+    }
+
+    if (start >= 0) {
+        s->tail.len = 0;
+        s->tail_overflow = false;
+        data += start;
+        len -= start;
+    }
+
+    if (s->tail_overflow)
+        return;
+
+    if (s->tail.len + len > MAX_TAIL) {
+        s->tail.len = 0;
+        s->tail_overflow = true;
+        return;
+    }
+
+    bytes_append(&s->tail, data, len);
+}
+
+static void flush_output(struct attachment *att);
+
+/* What the programs wrote */
+static void
+output(struct session *s, const uint8_t *data, size_t len)
+{
+    struct attachment *att = s->attachment;
+    if (att != NULL) {
+        bytes_append(&att->output, data, len);
+        flush_output(att);
+    }
+
+    if (s->term != NULL) {
+        headless_term_feed(s->term, data, len);
+        update_tail(s, data, len);
+    }
+}
+
+/* Reads what's there; returns false at the end */
+static bool
+read_pty(struct session *s)
+{
+    uint8_t buf[64 * 1024];
+    size_t total = 0;
+
+    while (total < READ_BUDGET && !s->pty_paused) {
+        ssize_t n = read(s->pty, buf, sizeof(buf));
+        if (n < 0) {
+            if (errno == EINTR)
+                continue;
+            if (errno == EAGAIN)
+                return true;
+
+            /* EIO: the other end is closed */
+            return false;
+        }
+
+        if (n == 0)
+            return false;
+
+        output(s, buf, n);
+        total += n;
+    }
+
+    return true;
+}
+
+static void
+close_pty(struct session *s)
+{
+    if (s->pty < 0)
+        return;
+
+    if (s->pty_registered)
+        fdm_del(footd.fdm, s->pty);
+    else
+        close(s->pty);
+
+    s->pty = -1;
+    s->pty_registered = false;
+}
+
+static bool
+fdm_pty(struct fdm *fdm, int fd, int events, void *data)
+{
+    struct session *s = data;
+
+    if (events & EPOLLOUT)
+        flush_input(s);
+
+    bool open = true;
+    if (events & EPOLLIN)
+        open = read_pty(s);
+
+    if (!open || ((events & EPOLLHUP) && !(events & EPOLLIN))) {
+        /*
+         * Nothing more will come (what runs in it has exited, or at
+         * least closed it): the session ends when it has exited (see
+         * session_terminated()). Until then, it stays as it is.
+         */
+        LOG_DBG("session %016llx: PTY closed", (unsigned long long)s->id);
+        fdm_del_no_close(footd.fdm, s->pty);
+        s->pty_registered = false;
+    }
+
+    return true;
+}
+
+/* footd's terminal's replies: only while no window answers instead */
+static bool
+fdm_replies(struct fdm *fdm, int fd, int events, void *data)
+{
+    struct session *s = data;
+
+    if (events & EPOLLIN) {
+        uint8_t buf[4096];
+        for (;;) {
+            ssize_t n = read(fd, buf, sizeof(buf));
+            if (n < 0 && errno == EINTR)
+                continue;
+            if (n <= 0)
+                break;
+            if (s->attachment == NULL && s->pty >= 0)
+                write_input(s, buf, n);
+        }
+    }
+
+    if (events & EPOLLHUP) {
+        fdm_del(fdm, fd);
+        s->replies = -1;
+    }
+    return true;
+}
+
+/*
+ * Attachments
+ */
+
+static void
+flush_output(struct attachment *att)
+{
+    struct session *s = att->session;
+
+    while (att->output.len > 0) {
+        ssize_t n = write(att->fd, att->output.data, att->output.len);
+        if (n < 0) {
+            if (errno == EINTR)
+                continue;
+            if (errno == EAGAIN)
+                break;
+
+            /* The window is gone; its HUP detaches it */
+            att->output.len = 0;
+            break;
+        }
+        bytes_consume(&att->output, n);
+    }
+
+    if (att->output.len > 0)
+        fdm_event_add(footd.fdm, att->fd, EPOLLOUT);
+    else
+        fdm_event_del(footd.fdm, att->fd, EPOLLOUT);
+
+    if (s == NULL)
+        return;
+
+    /* Without blocking the programs for good, nor buffering without bounds */
+    if (att->output.len > OUTPUT_HIGH_WATER)
+        pty_pause(s, true);
+    else if (att->output.len < OUTPUT_LOW_WATER)
+        pty_pause(s, false);
+}
+
+static void
+drain_done(struct attachment *att)
+{
+    tll_foreach(footd.draining, it) {
+        if (it->item == att) {
+            tll_remove(footd.draining, it);
+            break;
+        }
+    }
+
+    fdm_del(footd.fdm, att->fd);
+    bytes_free(&att->output);
+    free(att);
+}
+
+/*
+ * The session has ended: once the window has its output's last bytes,
+ * its socket is closed (and its terminal ends)
+ */
+static void
+drain(struct attachment *att)
+{
+    att->session = NULL;
+    fdm_event_del(footd.fdm, att->fd, EPOLLIN);
+    flush_output(att);
+
+    if (att->output.len == 0) {
+        fdm_del(footd.fdm, att->fd);
+        bytes_free(&att->output);
+        free(att);
+        return;
+    }
+
+    tll_push_back(footd.draining, att);
+}
+
+static bool
+fdm_window(struct fdm *fdm, int fd, int events, void *data)
+{
+    struct attachment *att = data;
+    struct session *s = att->session;
+
+    if (s == NULL) {
+        /* Draining */
+        if (events & EPOLLOUT)
+            flush_output(att);
+        if (att->output.len == 0 || (events & EPOLLHUP))
+            drain_done(att);
+        return true;
+    }
+
+    if (events & EPOLLOUT)
+        flush_output(att);
+
+    bool open = true;
+    if (events & EPOLLIN) {
+        uint8_t buf[16 * 1024];
+        ssize_t n;
+        do {
+            n = read(fd, buf, sizeof(buf));
+        } while (n < 0 && errno == EINTR);
+
+        if (n > 0) {
+            if (s->pty >= 0)
+                write_input(s, buf, n);
+        } else if (n == 0 || errno != EAGAIN)
+            open = false;
+    }
+
+    if (!open || ((events & EPOLLHUP) && !(events & EPOLLIN))) {
+        LOG_DBG("session %016llx: detached", (unsigned long long)s->id);
+        detach(att);
+    }
+
+    return true;
+}
+
+static void
+detach(struct attachment *att)
+{
+    struct session *s = att->session;
+    xassert(s->attachment == att);
+
+    fdm_del(footd.fdm, att->fd);
+    bytes_free(&att->output);
+    free(att);
+
+    s->attachment = NULL;
+
+    /* Nobody's reading: the programs mustn't be blocked by that */
+    pty_pause(s, false);
+
+    /* The window's input may have been waiting */
+    flush_input(s);
+}
+
+static void
+resize(struct session *s, const struct session_size *size)
+{
+    if (size->cols == 0 || size->rows == 0)
+        return;
+
+    s->size = *size;
+
+    if (s->term != NULL) {
+        headless_term_resize(
+            s->term, size->cols, size->rows,
+            max(size->cell_width, 1), max(size->cell_height, 1));
+    }
+
+    if (s->pty >= 0 &&
+        ioctl(s->pty, (unsigned int)TIOCSWINSZ,
+              &(struct winsize){
+                  .ws_row = size->rows,
+                  .ws_col = size->cols,
+                  .ws_xpixel = size->cols * size->cell_width,
+                  .ws_ypixel = size->rows * size->cell_height}) < 0)
+    {
+        LOG_ERRNO("session %016llx: TIOCSWINSZ", (unsigned long long)s->id);
+    }
+}
+
+/* Attaches the window's socket 'fd' (takes it) */
+static bool
+attach(struct session *s, struct client *c, uint64_t token, int fd,
+       const struct session_size *size)
+{
+    if (!set_nonblocking(fd)) {
+        close(fd);
+        return false;
+    }
+
+    /* (Not too small: a window's output arrives in large chunks) */
+    const int buffer_size = 512 * 1024;
+    setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &buffer_size, sizeof(buffer_size));
+    setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &buffer_size, sizeof(buffer_size));
+    const int on = 1;
+    setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, sizeof(on));
+
+    if (s->attachment != NULL) {
+        /* Another window: it's no longer attached (its terminal ends) */
+        struct attachment *old = s->attachment;
+        if (old->client != NULL) {
+            struct session_msg msg = {0};
+            session_msg_begin(&msg, SESSION_MSG_DETACHED);
+            session_msg_u64(&msg, s->id);
+            session_msg_u64(&msg, old->token);
+            client_send(old->client, &msg, -1);
+            session_msg_free(&msg);
+        }
+        detach(old);
+    }
+
+    struct attachment *att = xmalloc(sizeof(*att));
+    *att = (struct attachment){
+        .session = s,
+        .client = c,
+        .token = token,
+        .fd = fd,
+    };
+
+    if (!fdm_add(footd.fdm, fd, EPOLLIN, &fdm_window, att)) {
+        close(fd);
+        free(att);
+        return false;
+    }
+
+
+    s->attachment = att;
+
+    /* The window's size, before its state is taken */
+    if (size->cols != s->size.cols || size->rows != s->size.rows ||
+        size->cell_width != s->size.cell_width ||
+        size->cell_height != s->size.cell_height)
+    {
+        resize(s, size);
+    }
+
+    /* The state, then an incomplete control sequence, if any */
+    if (s->term != NULL) {
+        size_t len;
+        char *snapshot = snapshot_create(s->term, &len);
+        bytes_append(&att->output, snapshot, len);
+        free(snapshot);
+
+        if (s->tail.len > 0)
+            bytes_append(&att->output, s->tail.data, s->tail.len);
+    }
+
+    flush_output(att);
+    flush_input(s);
+    return true;
+}
+
+/*
+ * Sessions
+ */
+
+/* footd's terminal is gone: what ran in it has exited (term_shutdown()) */
+static void
+session_terminated(void *data, int exit_code)
+{
+    struct session *s = data;
+
+    LOG_INFO("session %016llx: ended (%d)", (unsigned long long)s->id, exit_code);
+    s->term = NULL;
+
+    /* What's left in the PTY goes to the window */
+    if (s->pty >= 0 && !s->killed) {
+        uint8_t buf[64 * 1024];
+        for (size_t total = 0; total < READ_BUDGET;) {
+            ssize_t n = read(s->pty, buf, sizeof(buf));
+            if (n <= 0)
+                break;
+            if (s->attachment != NULL)
+                bytes_append(&s->attachment->output, buf, n);
+            total += n;
+        }
+    }
+
+    tll_foreach(footd.sessions, it) {
+        if (it->item == s) {
+            tll_remove(footd.sessions, it);
+            break;
+        }
+    }
+
+    session_free(s);
+}
+
+static void
+session_free(struct session *s)
+{
+    struct attachment *att = s->attachment;
+    if (att != NULL) {
+        /* The rest of its output, and then it's closed: its terminal ends */
+        s->attachment = NULL;
+        drain(att);
+    }
+
+    close_pty(s);
+
+    if (s->replies >= 0)
+        fdm_del(footd.fdm, s->replies);
+
+    if (s->term != NULL) {
+        /*
+         * footd is exiting: not through term_shutdown(), and without
+         * waiting for what runs in it (it gets a SIGHUP)
+         */
+        if (s->term->slave > 0) {
+            kill(-s->term->slave, SIGHUP);
+            reaper_del(footd.reaper, s->term->slave);
+            s->term->slave = -1;
+        }
+        s->term->shutdown.cb = NULL;
+        term_destroy(s->term);
+    }
+
+    if (s->conf != NULL) {
+        config_free(s->conf);
+        free(s->conf);
+    }
+
+    bytes_free(&s->input);
+    bytes_free(&s->tail);
+    free(s);
+}
+
+static struct session *
+session_create(uint64_t id, const char *cwd, const char *conf_path,
+               const char *term_env, const char *shell, bool login_shell,
+               uint32_t scrollback_lines, char **argv, char **envp,
+               const struct session_size *size, const char **error)
+{
+    struct config *conf = xmalloc(sizeof(*conf));
+
+    /* As foot's windows load it; with what foot was told to use */
+    user_notifications_t notifications = tll_init();
+    config_override_t overrides = tll_init();
+    if (!config_load(conf, conf_path[0] != '\0' ? conf_path : NULL,
+                     &notifications, &overrides, false, false))
+    {
+        LOG_WARN("%s: configuration errors (see foot's)",
+                 conf_path[0] != '\0' ? conf_path : "foot.ini");
+    }
+    user_notifications_free(&notifications);
+
+    if (term_env[0] != '\0') {
+        free(conf->term);
+        conf->term = xstrdup(term_env);
+    }
+    if (shell[0] != '\0') {
+        free(conf->shell);
+        conf->shell = xstrdup(shell);
+    }
+    conf->login_shell = login_shell;
+    if (scrollback_lines > 0)
+        conf->scrollback.lines = scrollback_lines;
+
+    /* Nothing is rendered; and holding is the window's business */
+    conf->render_worker_count = 0;
+    conf->hold_at_exit = false;
+
+    struct session *s = xmalloc(sizeof(*s));
+    *s = (struct session){
+        .id = id,
+        .conf = conf,
+        .pty = -1,
+        .replies = -1,
+    };
+
+    int argc = 0;
+    while (argv[argc] != NULL)
+        argc++;
+
+    s->term = headless_term_new(
+        conf, cwd[0] != '\0' ? cwd : "/", argc, argv,
+        (const char *const *)envp, true, &s->pty, &s->replies,
+        &session_terminated, s);
+
+    if (s->term == NULL) {
+        *error = "failed to start";
+        config_free(conf);
+        free(conf);
+        free(s);
+        return NULL;
+    }
+
+    s->pid = s->term->slave;
+
+    s->pty_registered = fdm_add(footd.fdm, s->pty, EPOLLIN, &fdm_pty, s);
+    if (!s->pty_registered ||
+        !fdm_add(footd.fdm, s->replies, EPOLLIN, &fdm_replies, s))
+    {
+        *error = "failed to watch its PTY";
+        if (!s->pty_registered) {
+            close(s->replies);
+            s->replies = -1;
+        }
+
+        /* Ends it; then it's freed (session_terminated()) */
+        s->killed = true;
+        term_shutdown(s->term);
+        return NULL;
+    }
+
+    resize(s, size);
+
+    tll_push_back(footd.sessions, s);
+    LOG_INFO("session %016llx: started (PID=%d)", (unsigned long long)id, s->pid);
+    return s;
+}
+
+static void
+session_kill(struct session *s)
+{
+    LOG_INFO("session %016llx: closed", (unsigned long long)s->id);
+
+    if (s->attachment != NULL)
+        detach(s->attachment);
+
+    s->killed = true;
+
+    /* SIGHUP; later SIGTERM, then SIGKILL (see term_shutdown()) */
+    if (s->term != NULL)
+        term_shutdown(s->term);
+}
+
+/*
+ * Messages
+ */
+
+static bool
+handle_create(struct client *c, struct session_reader *r)
+{
+    uint64_t id = session_read_u64(r);
+    uint64_t token = session_read_u64(r);
+    struct session_size size = session_read_size(r);
+    char *cwd = session_read_str(r);
+    char *conf_path = session_read_str(r);
+    char *term_env = session_read_str(r);
+    char *shell = session_read_str(r);
+    bool login_shell = session_read_u8(r);
+    uint32_t scrollback = session_read_u32(r);
+    char **argv = session_read_strv(r);
+    char **envp = session_read_strv(r);
+    int fd = session_conn_take_fd(&c->conn);
+
+    bool ok = r->ok && fd >= 0;
+    if (!ok)
+        LOG_ERR("client (PID=%d): malformed CREATE", c->pid);
+    else if (session_find(id) != NULL)
+        send_failed(c, id, token, "already exists");
+    else {
+        const char *error = NULL;
+        struct session *s = session_create(
+            id, cwd, conf_path, term_env, shell, login_shell, scrollback,
+            argv, envp, &size, &error);
+
+        if (s == NULL)
+            send_failed(c, id, token, error);
+        else if (attach(s, c, token, fd, &size)) {
+            send_started(c, s, token);
+            fd = -1;
+        } else {
+            /* Nobody would ever see it */
+            fd = -1;
+            send_failed(c, id, token, "failed to attach");
+            session_kill(s);
+        }
+    }
+
+    if (fd >= 0)
+        close(fd);
+
+    free(cwd);
+    free(conf_path);
+    free(term_env);
+    free(shell);
+    session_strv_free(argv);
+    session_strv_free(envp);
+    return ok;
+}
+
+static bool
+handle_attach(struct client *c, struct session_reader *r)
+{
+    uint64_t id = session_read_u64(r);
+    uint64_t token = session_read_u64(r);
+    struct session_size size = session_read_size(r);
+    int fd = session_conn_take_fd(&c->conn);
+
+    if (!r->ok || fd < 0) {
+        LOG_ERR("client (PID=%d): malformed ATTACH", c->pid);
+        if (fd >= 0)
+            close(fd);
+        return false;
+    }
+
+    struct session *s = session_find(id);
+    if (s == NULL || s->killed) {
+        /* It ended meanwhile: closing the socket ends the window's terminal */
+        send_failed(c, id, token, "no such session");
+        close(fd);
+        return true;
+    }
+
+    if (attach(s, c, token, fd, &size)) {
+        LOG_INFO("session %016llx: attached", (unsigned long long)id);
+        send_started(c, s, token);
+    } else
+        send_failed(c, id, token, "failed to attach");
+    return true;
+}
+
+/* Only the window that's attached */
+static struct session *
+attached_session(struct client *c, uint64_t id, uint64_t token)
+{
+    struct session *s = session_find(id);
+    if (s == NULL || s->attachment == NULL ||
+        s->attachment->client != c || s->attachment->token != token)
+    {
+        return NULL;
+    }
+    return s;
+}
+
+static void
+handle_list(struct client *c)
+{
+    struct session_msg msg = {0};
+    session_msg_begin(&msg, SESSION_MSG_SESSIONS);
+
+    uint32_t count = 0;
+    tll_foreach(footd.sessions, it) {
+        if (!it->item->killed)
+            count++;
+    }
+    session_msg_u32(&msg, count);
+
+    tll_foreach(footd.sessions, it) {
+        const struct session *s = it->item;
+        if (s->killed)
+            continue;
+
+        session_msg_u64(&msg, s->id);
+        session_msg_u8(&msg, s->attachment != NULL);
+        session_msg_i32(&msg, s->pid);
+        session_msg_str(&msg, s->term != NULL ? s->term->window_title : NULL);
+        session_msg_str(&msg, s->term != NULL ? s->term->cwd : NULL);
+    }
+
+    session_msg_blob(&msg, footd.layout, footd.layout_len);
+    client_send(c, &msg, -1);
+    session_msg_free(&msg);
+}
+
+/* Returns false if the client must go */
+static bool
+handle_message(struct client *c, uint32_t type, struct session_reader *r)
+{
+    if (!c->greeted && type != SESSION_MSG_HELLO) {
+        LOG_ERR("client (PID=%d): no HELLO", c->pid);
+        return false;
+    }
+
+    switch (type) {
+    case SESSION_MSG_HELLO: {
+        uint32_t version = session_read_u32(r);
+        session_read_i32(r);
+        if (!r->ok || version != SESSION_PROTOCOL_VERSION) {
+            LOG_ERR("client (PID=%d): protocol version %u (expected %d)",
+                    c->pid, version, SESSION_PROTOCOL_VERSION);
+            return false;
+        }
+
+        c->greeted = true;
+
+        struct session_msg msg = {0};
+        session_msg_begin(&msg, SESSION_MSG_WELCOME);
+        session_msg_u32(&msg, SESSION_PROTOCOL_VERSION);
+        session_msg_i32(&msg, getpid());
+        client_send(c, &msg, -1);
+        session_msg_free(&msg);
+        return true;
+    }
+
+    case SESSION_MSG_CREATE:
+        return handle_create(c, r);
+
+    case SESSION_MSG_ATTACH:
+        return handle_attach(c, r);
+
+    case SESSION_MSG_RESIZE: {
+        uint64_t id = session_read_u64(r);
+        uint64_t token = session_read_u64(r);
+        struct session_size size = session_read_size(r);
+        if (!r->ok)
+            return false;
+
+        struct session *s = attached_session(c, id, token);
+        if (s != NULL)
+            resize(s, &size);
+        return true;
+    }
+
+    case SESSION_MSG_KILL: {
+        uint64_t id = session_read_u64(r);
+        uint64_t token = session_read_u64(r);
+        if (!r->ok)
+            return false;
+
+        /* Not if another window has attached to it meanwhile */
+        struct session *s = attached_session(c, id, token);
+        if (s != NULL)
+            session_kill(s);
+        return true;
+    }
+
+    case SESSION_MSG_LIST:
+        handle_list(c);
+        return true;
+
+    case SESSION_MSG_LAYOUT: {
+        size_t len;
+        const void *layout = session_read_blob(r, &len);
+        if (!r->ok)
+            return false;
+
+        free(footd.layout);
+        footd.layout = len > 0 ? xmemdup(layout, len) : NULL;
+        footd.layout_len = len;
+        return true;
+    }
+    }
+
+    LOG_WARN("client (PID=%d): unknown message type %u", c->pid, type);
+    return true;
+}
+
+static bool
+fdm_client(struct fdm *fdm, int fd, int events, void *data)
+{
+    struct client *c = data;
+
+    if (events & EPOLLOUT) {
+        if (!session_conn_flush(&c->conn)) {
+            client_free(c);
+            return true;
+        }
+        if (!session_conn_has_output(&c->conn)) {
+            c->writing = false;
+            fdm_event_del(fdm, fd, EPOLLOUT);
+        }
+    }
+
+    if (events & (EPOLLIN | EPOLLHUP)) {
+        bool eof;
+        bool ok = session_conn_read(&c->conn, &eof);
+
+        uint32_t type;
+        struct session_reader r;
+        bool error;
+        while (session_conn_next(&c->conn, &type, &r, &error)) {
+            if (!handle_message(c, type, &r)) {
+                client_free(c);
+                return true;
+            }
+        }
+
+        if (!ok || error) {
+            if (!eof)
+                LOG_WARN("client (PID=%d): connection error", c->pid);
+            client_free(c);
+            return true;
+        }
+    }
+
+    return true;
+}
+
+static void
+client_free(struct client *c)
+{
+    LOG_DBG("client (PID=%d): gone", c->pid);
+
+    /* Its windows' sockets detach them, when they're closed */
+    tll_foreach(footd.sessions, it) {
+        if (it->item->attachment != NULL && it->item->attachment->client == c)
+            it->item->attachment->client = NULL;
+    }
+
+    tll_foreach(footd.clients, it) {
+        if (it->item == c) {
+            tll_remove(footd.clients, it);
+            break;
+        }
+    }
+
+    if (c->conn.fd >= 0) {
+        fdm_del_no_close(footd.fdm, c->conn.fd);
+        session_conn_close(&c->conn);
+    }
+    free(c);
+}
+
+/* Returns false on errors (not when there's nothing to accept) */
+static bool
+accept_client(void)
+{
+    int fd = accept(footd.listen_fd, NULL, NULL);
+    if (fd < 0)
+        return errno == EAGAIN || errno == EINTR || errno == ECONNABORTED;
+
+    /* Only the user's own */
+    uid_t uid;
+    gid_t gid;
+    if (getpeereid(fd, &uid, &gid) < 0 || uid != getuid()) {
+        LOG_WARN("refusing a connection from another user (UID=%d)", (int)uid);
+        close(fd);
+        return true;
+    }
+
+    pid_t pid = -1;
+    socklen_t len = sizeof(pid);
+    getsockopt(fd, SOL_LOCAL, LOCAL_PEERPID, &pid, &len);
+
+    if (!set_nonblocking(fd)) {
+        close(fd);
+        return true;
+    }
+
+    struct client *c = xmalloc(sizeof(*c));
+    *c = (struct client){.pid = pid};
+    session_conn_init(&c->conn, fd);
+
+    if (!fdm_add(footd.fdm, fd, EPOLLIN, &fdm_client, c)) {
+        close(fd);
+        free(c);
+        return true;
+    }
+
+    tll_push_back(footd.clients, c);
+    LOG_DBG("client (PID=%d): connected", pid);
+    return true;
+}
+
+static bool
+fdm_listen(struct fdm *fdm, int fd, int events, void *data)
+{
+    if (events & EPOLLHUP)
+        return false;
+    return accept_client();
+}
+
+/*
+ * Exiting
+ */
+
+static bool
+fdm_signal_quit(struct fdm *fdm, int signo, void *data)
+{
+    footd.quit = true;
+    return true;
+}
+
+/*
+ * Without sessions, and windows: exit. Under the lock foot takes while
+ * connecting, so that it either connects before this, or starts a new
+ * footd after it.
+ */
+static bool
+idle_exit(void)
+{
+    if (tll_length(footd.sessions) > 0 || tll_length(footd.clients) > 0)
+        return false;
+
+    int lock = footd.lock_path != NULL
+        ? open(footd.lock_path, O_RDWR | O_CREAT | O_CLOEXEC, 0600) : -1;
+    if (lock >= 0 && flock(lock, LOCK_EX) < 0) {
+        close(lock);
+        lock = -1;
+    }
+
+    /* Someone connected meanwhile */
+    accept_client();
+    if (tll_length(footd.clients) > 0) {
+        if (lock >= 0)
+            close(lock);
+        return false;
+    }
+
+    if (footd.socket_path != NULL)
+        unlink(footd.socket_path);
+
+    /* The lock is released when we're gone */
+    return true;
+}
+
+static void
+print_usage(const char *prog)
+{
+    printf(
+        "Usage: %s [OPTIONS...]\n"
+        "\n"
+        "foot's sessions (foot starts it when needed).\n"
+        "\n"
+        "Options:\n"
+        "  -s,--socket=PATH         the socket to listen on (default: foot's)\n"
+        "  -f,--listen-fd=FD        listen on this socket (already bound)\n"
+        "  -d,--log-level={info|warning|error|none}  log level (warning)\n"
+        "  -l,--log-to-stderr       log to stderr, not the system log\n"
+        "  -v,--version             show the version number and quit\n",
+        prog);
+}
+
+int
+main(int argc, char *const *argv)
+{
+    static const struct option longopts[] = {
+        {"socket",        required_argument, NULL, 's'},
+        {"listen-fd",     required_argument, NULL, 'f'},
+        {"log-level",     required_argument, NULL, 'd'},
+        {"log-to-stderr", no_argument,       NULL, 'l'},
+        {"version",       no_argument,       NULL, 'v'},
+        {"help",          no_argument,       NULL, 'h'},
+        {NULL,            no_argument,       NULL, 0},
+    };
+
+    const char *socket_path = NULL;
+    int listen_fd = -1;
+    enum log_class log_level = LOG_CLASS_WARNING;
+    bool log_to_stderr = false;
+
+    int c;
+    while ((c = getopt_long(argc, argv, "s:f:d:lvh", longopts, NULL)) != -1) {
+        switch (c) {
+        case 's':
+            socket_path = optarg;
+            break;
+
+        case 'f':
+            listen_fd = atoi(optarg);
+            break;
+
+        case 'd': {
+            int lvl = log_level_from_string(optarg);
+            if (lvl < 0) {
+                fprintf(stderr, "-d,--log-level: %s: invalid log level\n", optarg);
+                return EXIT_FAILURE;
+            }
+            log_level = lvl;
+            break;
+        }
+
+        case 'l':
+            log_to_stderr = true;
+            break;
+
+        case 'v':
+            printf("footd version %s\n", FOOT_VERSION);
+            return EXIT_SUCCESS;
+
+        case 'h':
+            print_usage(argv[0]);
+            return EXIT_SUCCESS;
+
+        default:
+            print_usage(argv[0]);
+            return EXIT_FAILURE;
+        }
+    }
+
+    log_init(LOG_COLORIZE_AUTO, !log_to_stderr, LOG_FACILITY_DAEMON, log_level);
+
+    /* Never from (or on to) a terminal */
+    struct sigaction ignore = {.sa_handler = SIG_IGN};
+    sigemptyset(&ignore.sa_mask);
+    sigaction(SIGHUP, &ignore, NULL);
+    sigaction(SIGPIPE, &ignore, NULL);
+
+    char *path = socket_path != NULL ? xstrdup(socket_path) : session_socket_path();
+    if (path == NULL) {
+        LOG_ERR("no socket path (HOME not set?)");
+        return EXIT_FAILURE;
+    }
+
+    footd.socket_path = path;
+    footd.lock_path = session_lock_path(path);
+
+    if (listen_fd < 0) {
+        /* Standalone (foot hands over a listening socket otherwise) */
+        struct sockaddr_un addr = {.sun_family = AF_UNIX};
+        if (strlen(path) >= sizeof(addr.sun_path)) {
+            LOG_ERR("%s: socket path too long", path);
+            return EXIT_FAILURE;
+        }
+        strcpy(addr.sun_path, path);
+
+        listen_fd = socket(AF_UNIX, SOCK_STREAM, 0);
+        unlink(path);
+        if (listen_fd < 0 ||
+            bind(listen_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0 ||
+            chmod(path, 0600) < 0 || listen(listen_fd, 16) < 0)
+        {
+            LOG_ERRNO("%s: failed to listen", path);
+            return EXIT_FAILURE;
+        }
+    }
+
+    if (!set_nonblocking(listen_fd)) {
+        LOG_ERRNO("failed to configure the socket");
+        return EXIT_FAILURE;
+    }
+    footd.listen_fd = listen_fd;
+
+    int ret = EXIT_FAILURE;
+
+    if ((footd.fdm = fdm_init()) == NULL ||
+        (footd.reaper = reaper_init(footd.fdm)) == NULL ||
+        !headless_init(footd.fdm, footd.reaper) ||
+        !fdm_add(footd.fdm, listen_fd, EPOLLIN, &fdm_listen, NULL) ||
+        !fdm_signal_add(footd.fdm, SIGTERM, &fdm_signal_quit, NULL) ||
+        !fdm_signal_add(footd.fdm, SIGINT, &fdm_signal_quit, NULL))
+    {
+        goto out;
+    }
+
+    LOG_INFO("footd %s: listening on %s", FOOT_VERSION, path);
+
+    for (;;) {
+        if (!fdm_poll(footd.fdm)) {
+            LOG_ERR("FDM failure");
+            break;
+        }
+
+        if (footd.quit) {
+            LOG_INFO("quitting");
+            ret = EXIT_SUCCESS;
+            break;
+        }
+
+        if (idle_exit()) {
+            LOG_INFO("no sessions left");
+            ret = EXIT_SUCCESS;
+            break;
+        }
+    }
+
+out:
+    /* The sessions' programs get a SIGHUP, as the PTYs are closed */
+    tll_foreach(footd.sessions, it) {
+        session_free(it->item);
+        tll_remove(footd.sessions, it);
+    }
+    tll_foreach(footd.clients, it)
+        client_free(it->item);
+    tll_foreach(footd.draining, it)
+        drain_done(it->item);
+
+    if (footd.fdm != NULL) {
+        fdm_del(footd.fdm, listen_fd);
+        fdm_signal_del(footd.fdm, SIGTERM);
+        fdm_signal_del(footd.fdm, SIGINT);
+    } else
+        close(listen_fd);
+
+    headless_fini();
+    reaper_destroy(footd.reaper);
+    fdm_destroy(footd.fdm);
+
+    free(footd.layout);
+    free(footd.lock_path);
+    free(footd.socket_path);
+    log_deinit();
+    return ret;
+}
