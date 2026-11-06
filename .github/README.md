@@ -7,6 +7,8 @@ lightweight and minimalistic terminal emulator. The port is developed
 and maintained by [Bijan Rahnema](https://github.com/gobijan); it is
 unofficial, and not affiliated with upstream foot.
 
+![foot on macOS, split in three: Helix, GitUI and eza](splits.png)
+
 **Status:** work in progress. Usable day to day, but expect rough edges.
 
 foot's terminal core (VT parser, grid, sixel, search, URL mode etc) is
@@ -319,7 +321,15 @@ request when the result builds and passes the tests. See
 ## Credits
 
 foot is written by [Daniel Eklöf](https://codeberg.org/dnkl) and
-contributors. The app icon is based on foot's logo, designed by
+contributors.
+
+The macOS port is developed and maintained by
+[Bijan Rahnema](https://github.com/gobijan): the native platform layer,
+and everything the port adds to foot, such as native tabs, splits, the
+quake terminal, notifications, and signed releases with automatic
+updates.
+
+The app icon is based on foot's logo, designed by
 [Ordoviz](https://codeberg.org/Ordoviz).
 
 ## License
