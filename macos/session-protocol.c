@@ -530,3 +530,9 @@ session_lock_path(const char *socket_path)
 {
     return xasprintf("%s.lock", socket_path);
 }
+
+char *
+session_running_path(const char *socket_path)
+{
+    return xasprintf("%s.running", socket_path);
+}

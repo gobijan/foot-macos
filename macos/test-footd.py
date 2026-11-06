@@ -306,6 +306,56 @@ def main():
         win5.write(b'\n')
         win5.read_eof()
 
+        # Output ending in an incomplete sequence: a window that attaches
+        # gets it after the snapshot. A UTF-8 character after a sequence,
+        # one within an OSC (the OSC is what's incomplete), and a CSI.
+        script = ('stty -echo; printf "A\\033[1m\\303"; read x; '
+                  'printf "\\244\\033]2;t\\303"; read x; '
+                  'printf "\\244\\007\\033[3"; read x; printf "1mZ\\n"; read x')
+        win, _ = create(c, 6, 61, ['/bin/sh', '-c', script])
+        win.read_until(b'\xc3')
+        steps = [
+            (62, b'\x1b]2;t\xc3', b'\xc3\xa4\x1b]2;t\xc3'),
+            (63, b'\xa4\x07\x1b[3', b'\x1b]2;t\xc3\xa4\x07\x1b[3'),
+            (64, b'1mZ', b'\x1b[31mZ'),
+        ]
+        for token, until, expected in steps:
+            win.close()
+            time.sleep(.2)
+            win = attach(c, 6, token)
+            win.write(b'x\n')
+            out = win.read_until(until)
+            if expected not in out:
+                raise Failure(f'incomplete sequence: {expected!r} not in {out[-300:]!r}')
+        sessions, _ = list_sessions(c)
+        if [s['title'] for s in sessions if s['id'] == 6] != ['t\u00e4']:
+            raise Failure(f'title: {sessions}')
+        c.send(KILL, u64(6) + u64(64))
+        win.read_eof()
+
+        # Another footd, for the same socket: it doesn't take over
+        other = subprocess.run([footd, f'--socket={path}', '--log-level=none'],
+                               timeout=TIMEOUT)
+        if other.returncode == 0:
+            raise Failure('a second footd ran')
+        Client(path).close()
+
+        # Quitting foot ending its sessions: the ones no window is attached to
+        win7, pid7 = create(c, 7, 71, ['/bin/sh', '-c', 'echo up; sleep 100'])
+        win7.read_until(b'up')
+        win7.close()
+        win8, _ = create(c, 8, 81, ['/bin/sh', '-c', 'echo up; read x; echo "got $x"'])
+        win8.read_until(b'up')
+        c.send(KILL, u64(0) + u64(0))
+        deadline = time.time() + TIMEOUT
+        while [s['id'] for s in list_sessions(c)[0]] != [8]:
+            if time.time() > deadline:
+                raise Failure(f'after ending detached sessions: {list_sessions(c)[0]}')
+            time.sleep(.05)
+        win8.write(b'still\n')
+        win8.read_until(b'got still')
+        win8.read_eof()
+
         # The layout is kept
         c.send(LAYOUT, string('a layout'))
         _, layout = list_sessions(c)

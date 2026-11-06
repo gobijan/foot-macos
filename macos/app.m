@@ -1175,7 +1175,9 @@ create_menu(void)
     if (!end_sessions)
         session_layout_save();
     session_layout_fini();
-    if (!end_sessions)
+    if (end_sessions)
+        sessions_end_detached();
+    else
         sessions_detach_all();
 
     tll_foreach(app.wayl->terms, it)

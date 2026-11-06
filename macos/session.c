@@ -129,16 +129,6 @@ strv_dup(char *const *strv)
 }
 
 static void
-strv_free(char **strv)
-{
-    if (strv == NULL)
-        return;
-    for (char **s = strv; *s != NULL; s++)
-        free(*s);
-    free(strv);
-}
-
-static void
 close_footd_fd(struct session_link *link)
 {
     if (link->footd_fd >= 0)
@@ -501,6 +491,27 @@ create_parent_dir(const char *path)
 }
 
 /*
+ * Whether a footd has the socket: it refuses connections when its
+ * backlog is full, too (e.g. while it's busy), and then it mustn't be
+ * replaced (its sessions would be gone, for windows).
+ */
+static bool
+footd_running(const char *socket_path)
+{
+    char *running_path = session_running_path(socket_path);
+    int fd = open(running_path, O_RDONLY | O_CLOEXEC);
+    free(running_path);
+
+    /* None ever ran */
+    if (fd < 0)
+        return false;
+
+    const bool running = flock(fd, LOCK_SH | LOCK_NB) < 0 && errno == EWOULDBLOCK;
+    close(fd);
+    return running;
+}
+
+/*
  * Connects to footd; with 'start', starting it if there's none. Under a
  * lock, that footd also takes when it exits: either it's there (and
  * stays), or it's gone (and the socket with it).
@@ -529,7 +540,9 @@ connect_footd(bool start)
     }
 
     int fd = connect_to(path);
-    if (fd < 0 && start && (errno == ENOENT || errno == ECONNREFUSED)) {
+    if (fd < 0 && start && (errno == ENOENT || errno == ECONNREFUSED) &&
+        !footd_running(path))
+    {
         /* None (or it crashed, and left its socket behind) */
         unlink(path);
         int listen_fd = listen_on(path);
@@ -651,6 +664,32 @@ session_link_set_term(struct session_link *link, struct terminal *term)
     if (link->window_fd >= 0)
         close(link->window_fd);
     link->window_fd = -1;
+
+    /*
+     * Not for what foot starts (e.g. what opens URLs): footd would see
+     * the session as attached while that runs, after a crash
+     */
+    if (term->ptmx >= 0 && fcntl(term->ptmx, F_SETFD, FD_CLOEXEC) < 0)
+        LOG_ERRNO("failed to configure the session's socket");
+}
+
+bool
+session_link_write_failed(struct terminal *term)
+{
+    if (term->session == NULL)
+        return false;
+
+    tll_foreach(term->ptmx_buffers, it) {
+        free(it->item.data);
+        tll_remove(term->ptmx_buffers, it);
+    }
+    tll_foreach(term->ptmx_paste_buffers, it) {
+        free(it->item.data);
+        tll_remove(term->ptmx_paste_buffers, it);
+    }
+
+    fdm_event_del(term->fdm, term->ptmx, EPOLLOUT);
+    return true;
 }
 
 /* Creates the session, or attaches to it */
@@ -695,8 +734,8 @@ open_session(struct session_link *link)
     session_msg_free(&msg);
 
     /* Not needed any more */
-    strv_free(link->argv);
-    strv_free(link->envp);
+    session_strv_free(link->argv);
+    session_strv_free(link->envp);
     link->argv = link->envp = NULL;
 }
 
@@ -763,8 +802,8 @@ session_link_destroy(struct session_link *link)
     }
 
     free(link->cwd);
-    strv_free(link->argv);
-    strv_free(link->envp);
+    session_strv_free(link->argv);
+    session_strv_free(link->envp);
     free(link->conf_path);
     free(link->term_env);
     free(link->shell);
@@ -780,12 +819,18 @@ session_link_pid(const struct session_link *link)
 pid_t
 session_link_foreground_pgrp(const struct session_link *link)
 {
-    if (link == NULL || link->pid <= 0)
+    return link != NULL ? session_foreground_pgrp(link->pid) : 0;
+}
+
+pid_t
+session_foreground_pgrp(pid_t pid)
+{
+    if (pid <= 0)
         return 0;
 
     /* The process group its terminal's foreground is (tcgetpgrp(), from footd's PTY) */
     struct proc_bsdinfo info;
-    if (proc_pidinfo(link->pid, PROC_PIDTBSDINFO, 0, &info, sizeof(info)) != sizeof(info))
+    if (proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, sizeof(info)) != sizeof(info))
         return 0;
 
     return info.e_tpgid > 0 ? (pid_t)info.e_tpgid : 0;
@@ -826,6 +871,20 @@ void
 sessions_detach_all(void)
 {
     client.detaching = true;
+}
+
+void
+sessions_end_detached(void)
+{
+    if (client.conn.fd < 0)
+        return;
+
+    struct session_msg msg = {0};
+    session_msg_begin(&msg, SESSION_MSG_KILL);
+    session_msg_u64(&msg, 0);
+    session_msg_u64(&msg, 0);
+    send_msg(&msg, -1);
+    session_msg_free(&msg);
 }
 
 void

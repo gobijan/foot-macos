@@ -23,6 +23,10 @@
 #include "util.h"
 #include "xmalloc.h"
 
+#if defined(__APPLE__)
+ #include "rlimits.h"
+#endif
+
 extern char **environ;
 
 struct environ {
@@ -297,6 +301,11 @@ slave_exec(int ptmx, char *argv[], char *const envp[], int err_fd,
         argv[0] = arg0;
     } else
         file = argv[0];
+
+#if defined(__APPLE__)
+    /* footd's is raised (macos/rlimits.h) */
+    rlimits_restore_open_files();
+#endif
 
     foot_execvpe(file, argv, envp);
 

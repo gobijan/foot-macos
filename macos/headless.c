@@ -509,6 +509,7 @@ session_link_new(struct fdm *fdm, const struct config *conf, const char *cwd,
 
 void session_link_set_term(struct session_link *link, struct terminal *term) {}
 void session_link_destroy(struct session_link *link) {}
+bool session_link_write_failed(struct terminal *term) { return false; }
 
 /* Helpers (utmp, the bell's command, new terminals) are the window's too */
 

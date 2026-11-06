@@ -37,7 +37,7 @@ enum session_msg_type {
                                 lines, strv argv, strv envp; + the window's socket */
     SESSION_MSG_ATTACH,      /* u64 id, u64 token, size; + the window's socket */
     SESSION_MSG_RESIZE,      /* u64 id, u64 token, size */
-    SESSION_MSG_KILL,        /* u64 id, u64 token */
+    SESSION_MSG_KILL,        /* u64 id, u64 token (0: not attached; and ID 0: all) */
     SESSION_MSG_LIST,        /* - */
     SESSION_MSG_LAYOUT,      /* blob: the windows' layout, kept for the next one */
 
@@ -183,3 +183,10 @@ char *session_socket_path(void);
 
 /* The lock taken while connecting to footd, or starting it (and while it exits) */
 char *session_lock_path(const char *socket_path);
+
+/*
+ * The lock footd holds while it runs: a socket that refuses connections
+ * is left behind by a footd that's gone, unless that's locked (its
+ * backlog is full then)
+ */
+char *session_running_path(const char *socket_path);

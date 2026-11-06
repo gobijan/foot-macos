@@ -22,10 +22,12 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <getopt.h>
+#include <locale.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <uchar.h>
 #include <unistd.h>
 
 #include <sys/epoll.h>
@@ -43,6 +45,8 @@
 #include "config.h"
 #include "fdm.h"
 #include "headless.h"
+#include "macros.h"
+#include "rlimits.h"
 #include "reaper.h"
 #include "session-protocol.h"
 #include "snapshot.h"
@@ -62,7 +66,7 @@
 /* Output for a window is sent once there's this much (or the PTY is empty) */
 #define FLUSH_THRESHOLD (64 * 1024)
 
-/* An incomplete control sequence is kept up to this size (see update_tail()) */
+/* An incomplete control sequence is kept up to this size (see feed_output()) */
 #define MAX_TAIL (1024 * 1024)
 
 struct bytes {
@@ -165,11 +169,15 @@ static struct {
     void *layout;
     size_t layout_len;
 
+    bool listen_paused;
+    int running_lock;   /* Held while footd runs (see session_running_path()) */
+
     volatile sig_atomic_t quit;
-} footd = {.listen_fd = -1};
+} footd = {.listen_fd = -1, .running_lock = -1};
 
 static void session_free(struct session *s);
 static void detach(struct attachment *att);
+static void listen_pause(bool pause);
 
 static bool
 set_nonblocking(int fd)
@@ -309,47 +317,24 @@ write_input(struct session *s, const void *data, size_t len)
 
 /*
  * The end of the output may be the start of a control sequence (its
- * rest comes later). A window that attaches gets it after the snapshot,
- * as its parser must be in the same state as footd's terminal's.
+ * rest comes later), or of a UTF-8 character. A window that attaches
+ * gets it after the snapshot: its parser must be in the same state as
+ * footd's terminal's.
  *
- * Sequences start with ESC (and UTF-8 characters with a lead byte):
- * the tail starts with the last of them, or it's continued.
+ * In foot's parser, an ESC always starts a sequence (it ends a string,
+ * e.g. an OSC, that's been going on), and nothing else does but UTF-8
+ * characters' first bytes. So the tail starts at the last ESC, or at
+ * the last first byte after it, if the parser was in its ground state
+ * right before that byte. Else, it's what's going on since an earlier
+ * chunk. feed_output() feeds footd's terminal in two parts for this,
+ * when there's such a byte.
  */
 static void
-update_tail(struct session *s, const uint8_t *data, size_t len)
+set_tail(struct session *s, const uint8_t *data, size_t len, bool append)
 {
-    if (s->term == NULL || s->term->vt.state == 0) {
-        /* Ground state */
+    if (!append) {
         s->tail.len = 0;
         s->tail_overflow = false;
-        return;
-    }
-
-    ssize_t start = -1;
-    for (ssize_t i = len - 1; i >= 0; i--) {
-        if (data[i] == '\033') {
-            start = i;
-            break;
-        }
-    }
-
-    if (start < 0 && s->tail.len == 0 && !s->tail_overflow) {
-        /* A UTF-8 character's first byte(s) */
-        for (ssize_t i = len - 1; i >= 0 && i >= (ssize_t)len - 4; i--) {
-            if (data[i] >= 0xc0) {
-                start = i;
-                break;
-            }
-        }
-        if (start < 0)
-            start = 0;
-    }
-
-    if (start >= 0) {
-        s->tail.len = 0;
-        s->tail_overflow = false;
-        data += start;
-        len -= start;
     }
 
     if (s->tail_overflow)
@@ -364,6 +349,44 @@ update_tail(struct session *s, const uint8_t *data, size_t len)
     bytes_append(&s->tail, data, len);
 }
 
+static void
+feed_output(struct session *s, const uint8_t *data, size_t len)
+{
+    ssize_t esc = -1;
+    for (ssize_t i = len - 1; i >= 0; i--) {
+        if (data[i] == '\033') {
+            esc = i;
+            break;
+        }
+    }
+
+    ssize_t lead = -1;
+    for (ssize_t i = len - 1; i > esc; i--) {
+        if (data[i] >= 0xc0) {
+            lead = i;
+            break;
+        }
+    }
+
+    bool lead_starts = false;
+    if (lead >= 0) {
+        headless_term_feed(s->term, data, lead);
+        lead_starts = s->term->vt.state == 0;
+        headless_term_feed(s->term, &data[lead], len - lead);
+    } else
+        headless_term_feed(s->term, data, len);
+
+    if (s->term->vt.state == 0) {
+        /* Ground state: nothing's going on */
+        set_tail(s, NULL, 0, false);
+    } else if (lead_starts)
+        set_tail(s, &data[lead], len - lead, false);
+    else if (esc >= 0)
+        set_tail(s, &data[esc], len - esc, false);
+    else
+        set_tail(s, data, len, true);
+}
+
 static void flush_output(struct attachment *att);
 
 /* What the programs wrote (sent to the window by read_pty()) */
@@ -374,10 +397,8 @@ output(struct session *s, const uint8_t *data, size_t len)
     if (att != NULL)
         bytes_append(&att->output, data, len);
 
-    if (s->term != NULL) {
-        headless_term_feed(s->term, data, len);
-        update_tail(s, data, len);
-    }
+    if (s->term != NULL)
+        feed_output(s, data, len);
 }
 
 /*
@@ -766,6 +787,8 @@ session_terminated(void *data, int exit_code)
 static void
 session_free(struct session *s)
 {
+    listen_pause(false);
+
     struct attachment *att = s->attachment;
     if (att != NULL) {
         /* The rest of its output, and then it's closed: its terminal ends */
@@ -1087,10 +1110,23 @@ handle_message(struct client *c, uint32_t type, struct session_reader *r)
         if (!r->ok)
             return false;
 
-        /* Not if another window has attached to it meanwhile */
+        /*
+         * Not if another window has attached to it meanwhile. Token 0:
+         * one that no window is attached to; ID 0 too: all of them
+         * (foot quits ending its sessions, and its windows end theirs)
+         */
+        if (id == 0 && token == 0) {
+            tll_foreach(footd.sessions, it) {
+                if (!it->item->killed && it->item->attachment == NULL)
+                    session_kill(it->item);
+            }
+            return true;
+        }
+
         struct session *s = session_find(id);
         if (s != NULL && !s->killed &&
-            s->last_client == c && s->last_token == token)
+            (token == 0 ? s->attachment == NULL
+                        : s->last_client == c && s->last_token == token))
         {
             session_kill(s);
         }
@@ -1163,6 +1199,7 @@ static void
 client_free(struct client *c)
 {
     LOG_DBG("client (PID=%d): gone", c->pid);
+    listen_pause(false);
 
     /* Its windows' sockets detach them, when they're closed */
     tll_foreach(footd.sessions, it) {
@@ -1186,16 +1223,39 @@ client_free(struct client *c)
     free(c);
 }
 
-/* Returns false on errors (not when there's nothing to accept) */
+/*
+ * Without file descriptors left, nobody is accepted (the socket isn't
+ * watched) until some are closed: when a session or client is gone.
+ */
+static void
+listen_pause(bool pause)
+{
+    if (footd.listen_paused == pause || footd.listen_fd < 0)
+        return;
+
+    footd.listen_paused = pause;
+    if (pause)
+        fdm_event_del(footd.fdm, footd.listen_fd, EPOLLIN);
+    else
+        fdm_event_add(footd.fdm, footd.listen_fd, EPOLLIN);
+}
+
+/* Never fails: nobody else's sessions depend on one connection */
 static bool
 accept_client(void)
 {
     int fd = accept(footd.listen_fd, NULL, NULL);
-    if (fd < 0)
-        return errno == EAGAIN || errno == EINTR || errno == ECONNABORTED;
+    if (fd < 0) {
+        if (errno == EMFILE || errno == ENFILE || errno == ENOBUFS || errno == ENOMEM) {
+            LOG_ERRNO("failed to accept a connection; waiting for file descriptors");
+            listen_pause(true);
+        } else if (errno != EAGAIN && errno != EINTR && errno != ECONNABORTED)
+            LOG_ERRNO("failed to accept a connection");
+        return true;
+    }
 
     /* Only the user's own */
-    uid_t uid;
+    uid_t uid = (uid_t)-1;
     gid_t gid;
     if (getpeereid(fd, &uid, &gid) < 0 || uid != getuid()) {
         LOG_WARN("refusing a connection from another user (UID=%d)", (int)uid);
@@ -1230,8 +1290,10 @@ accept_client(void)
 static bool
 fdm_listen(struct fdm *fdm, int fd, int events, void *data)
 {
-    if (events & EPOLLHUP)
+    if (events & EPOLLHUP) {
+        LOG_ERR("the socket is gone");
         return false;
+    }
     return accept_client();
 }
 
@@ -1244,6 +1306,16 @@ fdm_signal_quit(struct fdm *fdm, int signo, void *data)
 {
     footd.quit = true;
     return true;
+}
+
+/* Once footd doesn't accept connections any more */
+static void
+release_running_lock(void)
+{
+    if (footd.running_lock >= 0) {
+        close(footd.running_lock);
+        footd.running_lock = -1;
+    }
 }
 
 /*
@@ -1275,8 +1347,30 @@ idle_exit(void)
     if (footd.socket_path != NULL)
         unlink(footd.socket_path);
 
-    /* The lock is released when we're gone */
+    /* A footd foot starts now takes over (the lock is released when we're gone) */
+    release_running_lock();
     return true;
+}
+
+/*
+ * A UTF-8 one, as foot's (main.c): the terminals check titles, app IDs
+ * etc with its character classes (widths are utf8proc's)
+ */
+static void
+set_locale(void)
+{
+    static const char *const locales[] = {"", "C.UTF-8", "en_US.UTF-8"};
+
+    for (size_t i = 0; i < ALEN(locales); i++) {
+        char32_t c;
+        if (setlocale(LC_CTYPE, locales[i]) != NULL &&
+            mbrtoc32(&c, u8"ö", 2, &(mbstate_t){0}) == 2 && c == U'ö')
+        {
+            return;
+        }
+    }
+
+    LOG_WARN("no UTF-8 locale: titles with other than ASCII characters are ignored");
 }
 
 static void
@@ -1354,6 +1448,7 @@ main(int argc, char *const *argv)
     }
 
     log_init(LOG_COLORIZE_AUTO, !log_to_stderr, LOG_FACILITY_DAEMON, log_level);
+    set_locale();
 
     /* Never from (or on to) a terminal */
     struct sigaction ignore = {.sa_handler = SIG_IGN};
@@ -1369,6 +1464,27 @@ main(int argc, char *const *argv)
 
     footd.socket_path = path;
     footd.lock_path = session_lock_path(path);
+
+    /*
+     * As long as it runs: foot tells a footd that's busy from one
+     * that's gone (and left its socket behind) by it
+     */
+    char *running_path = session_running_path(path);
+    footd.running_lock = open(running_path, O_RDWR | O_CREAT | O_CLOEXEC, 0600);
+    if (footd.running_lock < 0 || flock(footd.running_lock, LOCK_EX | LOCK_NB) < 0) {
+        LOG_ERRNO("%s: another footd is running", running_path);
+        free(running_path);
+        return EXIT_FAILURE;
+    }
+    free(running_path);
+
+    /*
+     * Each session takes a dozen file descriptors (its PTY, sockets,
+     * and its terminal's timers); applications start with a limit of
+     * 256. What runs in the sessions gets the usual one
+     * (slave_exec()).
+     */
+    rlimits_raise_open_files();
 
     if (listen_fd < 0) {
         /* Standalone (foot hands over a listening socket otherwise) */
@@ -1430,6 +1546,17 @@ main(int argc, char *const *argv)
     }
 
 out:
+    if (footd.fdm != NULL) {
+        fdm_del(footd.fdm, listen_fd);
+        fdm_signal_del(footd.fdm, SIGTERM);
+        fdm_signal_del(footd.fdm, SIGINT);
+    } else
+        close(listen_fd);
+    footd.listen_fd = -1;
+
+    /* Connections are refused now: foot starts another footd (see connect_footd()) */
+    release_running_lock();
+
     /* The sessions' programs get a SIGHUP, as the PTYs are closed */
     tll_foreach(footd.sessions, it) {
         session_free(it->item);
@@ -1439,13 +1566,6 @@ out:
         client_free(it->item);
     tll_foreach(footd.draining, it)
         drain_done(it->item);
-
-    if (footd.fdm != NULL) {
-        fdm_del(footd.fdm, listen_fd);
-        fdm_signal_del(footd.fdm, SIGTERM);
-        fdm_signal_del(footd.fdm, SIGINT);
-    } else
-        close(listen_fd);
 
     headless_fini();
     reaper_destroy(footd.reaper);

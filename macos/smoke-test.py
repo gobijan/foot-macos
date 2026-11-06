@@ -12,6 +12,7 @@ import json
 import os
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -210,58 +211,62 @@ class Tests:
         if foot.returncode != 0:
             raise Failure(f'foot: exit code {foot.returncode}\n{out}')
 
-    def test_sessions(self):
-        """Sessions: in footd; kept, with their splits, tabs and quake terminal, when foot quits; ended with their panes"""
-        tmp = os.path.join(self.tmp, 'sessions')
-        os.mkdir(tmp)
-        sock = os.path.join(tmp, 's.sock')
+    class Sessions:
+        """foot with sessions (in a footd of its own), driven by macos/smoke-driver.m"""
 
-        # footd's protocol, as macos/test-footd.py speaks it (no __pycache__ in macos/)
-        sys.dont_write_bytecode = True
-        spec = importlib.util.spec_from_file_location(
-            'test_footd', os.path.join(ROOT, 'macos', 'test-footd.py'))
-        footd = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(footd)
+        def __init__(self, tests, name):
+            self.tmp = tmp = os.path.join(tests.tmp, name)
+            os.mkdir(tmp)
+            self.sock = os.path.join(tmp, 's.sock')
+            self.foot = tests.foot
 
-        # Each shell reports its PID and size, until the test is done
-        script = os.path.join(tmp, 'shell.sh')
-        with open(script, 'w') as f:
-            f.write(f"""
-                echo $$ > {tmp}/pid.$$.tmp && mv {tmp}/pid.$$.tmp {tmp}/pid.$$
-                last=
-                while [ ! -e {tmp}/quit ]; do
-                    size=$(stty size)
-                    if [ "$size" != "$last" ]; then
-                        echo "$size" > {tmp}/size.$$.tmp
-                        mv {tmp}/size.$$.tmp {tmp}/size.$$
-                        last=$size
-                    fi
-                    sleep .1
-                done
-            """)
+            # footd's protocol, as macos/test-footd.py speaks it (no __pycache__ in macos/)
+            sys.dont_write_bytecode = True
+            spec = importlib.util.spec_from_file_location(
+                'test_footd', os.path.join(ROOT, 'macos', 'test-footd.py'))
+            self.footd = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(self.footd)
 
-        config = os.path.join(tmp, 'foot.ini')
-        with open(config, 'w') as f:
-            f.write(f'shell=/bin/sh {script}\nlogin-shell=no\nmacos-confirm-close=no\n')
+            # Each shell reports its PID and size, until the test is done
+            script = os.path.join(tmp, 'shell.sh')
+            with open(script, 'w') as f:
+                f.write(f"""
+                    echo $$ > {tmp}/pid.$$.tmp && mv {tmp}/pid.$$.tmp {tmp}/pid.$$
+                    last=
+                    while [ ! -e {tmp}/quit ]; do
+                        size=$(stty size)
+                        if [ "$size" != "$last" ]; then
+                            echo "$size" > {tmp}/size.$$.tmp
+                            mv {tmp}/size.$$.tmp {tmp}/size.$$
+                            last=$size
+                        fi
+                        sleep .1
+                    done
+                """)
 
-        env = dict(ENV, FOOT_SESSIONS_SOCKET=sock, DYLD_INSERT_LIBRARIES=self.driver,
-                   FOOT_SMOKE_DIR=tmp)
+            self.config = os.path.join(tmp, 'foot.ini')
+            with open(self.config, 'w') as f:
+                f.write(f'shell=/bin/sh {script}\nlogin-shell=no\nmacos-confirm-close=no\n')
 
-        def start():
+            self.env = dict(ENV, FOOT_SESSIONS_SOCKET=self.sock, DYLD_INSERT_LIBRARIES=tests.driver,
+                            FOOT_SMOKE_DIR=tmp)
+
+        def start(self):
             return subprocess.Popen(
-                [self.foot, f'--config={config}', '--window-size-chars=100x30'],
+                [self.foot, f'--config={self.config}', '--window-size-chars=100x30'],
                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                text=True, env=env)
+                text=True, env=self.env)
 
-        def shells():
-            return sorted(int(name[4:]) for name in os.listdir(tmp)
+        def shells(self):
+            return sorted(int(name[4:]) for name in os.listdir(self.tmp)
                           if name.startswith('pid.') and not name.endswith('.tmp'))
 
-        def size(pid):
-            with open(os.path.join(tmp, f'size.{pid}')) as f:
+        def size(self, pid):
+            with open(os.path.join(self.tmp, f'size.{pid}')) as f:
                 rows, cols = f.read().split()
             return int(rows), int(cols)
 
+        @staticmethod
         def alive(pid):
             try:
                 os.kill(pid, 0)
@@ -269,13 +274,20 @@ class Tests:
             except ProcessLookupError:
                 return False
 
-        def sessions():
-            client = footd.Client(sock)
+        def footd_pid(self, shell):
+            parent = int(run('ps', '-o', 'ppid=', '-p', str(shell)).strip())
+            if 'footd' not in run('ps', '-o', 'comm=', '-p', str(parent)):
+                raise Failure('the shell is not footd\'s')
+            return parent
+
+        def sessions(self):
+            client = self.footd.Client(self.sock)
             client.hello()
-            got, _ = footd.list_sessions(client)
+            got, _ = self.footd.list_sessions(client)
             client.close()
             return got
 
+        @staticmethod
         def wait(what, check, proc=None):
             deadline = time.time() + TIMEOUT
             while not check():
@@ -283,96 +295,182 @@ class Tests:
                     raise Failure(f'{what}: not so')
                 time.sleep(.1)
 
-        def perform(action):
-            with open(os.path.join(tmp, 'action'), 'w') as f:
+        def perform(self, action):
+            with open(os.path.join(self.tmp, 'action'), 'w') as f:
                 f.write(action)
 
-        def windows(proc):
-            path = os.path.join(tmp, 'windows')
+        def windows(self, proc):
+            path = os.path.join(self.tmp, 'windows')
             if os.path.exists(path):
                 os.unlink(path)
-            perform('windows')
-            wait('the windows', lambda: os.path.exists(path), proc)
+            self.perform('windows')
+            self.wait('the windows', lambda: os.path.exists(path), proc)
             with open(path) as f:
                 return sorted((w['tabs'], w['panes']) for w in json.load(f))
 
-        def finish(proc, what):
+        @staticmethod
+        def finish(proc, what, check=True):
             try:
                 out, _ = proc.communicate(timeout=TIMEOUT)
             except subprocess.TimeoutExpired:
                 proc.kill()
                 out, _ = proc.communicate()
                 raise Failure(f'{what}: foot did not exit\n{out}')
-            if proc.returncode != 0:
+            if check and proc.returncode != 0:
                 raise Failure(f'{what}: exit code {proc.returncode}\n{out}')
 
-        foot = start()
+        def done(self, foot):
+            open(os.path.join(self.tmp, 'quit'), 'w').close()
+            if foot is not None and foot.poll() is None:
+                foot.kill()
+                foot.communicate()
+
+    def test_sessions(self):
+        """Sessions: in footd; kept, with their splits, tabs and quake terminal, when foot quits; ended with their panes"""
+        t = self.Sessions(self, 'sessions')
+
+        foot = t.start()
         try:
             # The shell is footd's (its parent), and has the window's size
-            wait('a shell', lambda: len(shells()) == 1 and os.path.exists(f'{tmp}/size.{shells()[0]}'), foot)
-            a = shells()[0]
-            parent = int(run('ps', '-o', 'ppid=', '-p', str(a)).strip())
-            if 'footd' not in run('ps', '-o', 'comm=', '-p', str(parent)):
-                raise Failure('the shell is not footd\'s')
-            if size(a) != (30, 100):
-                raise Failure(f'size: {size(a)}')
+            t.wait('a shell', lambda: len(t.shells()) == 1 and os.path.exists(f'{t.tmp}/size.{t.shells()[0]}'), foot)
+            a = t.shells()[0]
+            t.footd_pid(a)
+            if t.size(a) != (30, 100):
+                raise Failure(f'size: {t.size(a)}')
 
-            perform('splitRight:')
-            wait('a split', lambda: len(shells()) == 2, foot)
-            b = [pid for pid in shells() if pid != a][0]
-            wait('the split\'s size', lambda: os.path.exists(f'{tmp}/size.{b}') and size(a)[1] < 100, foot)
+            t.perform('splitRight:')
+            t.wait('a split', lambda: len(t.shells()) == 2, foot)
+            b = [pid for pid in t.shells() if pid != a][0]
+            t.wait('the split\'s size', lambda: os.path.exists(f'{t.tmp}/size.{b}') and t.size(a)[1] < 100, foot)
 
             # A tab (the tab bar takes some rows), and the quake terminal
-            perform('newWindowForTab:')
-            wait('a tab', lambda: len(shells()) == 3, foot)
-            wait('the tab bar', lambda: size(a)[0] < 30 and size(b)[0] < 30, foot)
-            sizes = {a: size(a), b: size(b)}
-            perform('toggleQuakeTerminal:')
-            wait('the quake terminal', lambda: len(shells()) == 4, foot)
-            all_shells = shells()
-            layout = windows(foot)
+            t.perform('newWindowForTab:')
+            t.wait('a tab', lambda: len(t.shells()) == 3, foot)
+            t.wait('the tab bar', lambda: t.size(a)[0] < 30 and t.size(b)[0] < 30, foot)
+            sizes = {a: t.size(a), b: t.size(b)}
+            t.perform('toggleQuakeTerminal:')
+            t.wait('the quake terminal', lambda: len(t.shells()) == 4, foot)
+            all_shells = t.shells()
+            layout = t.windows(foot)
             if layout != [(2, 1), (2, 2)]:
                 raise Failure(f'windows (tabs, panes): {layout}')
 
             # Quitting (Cmd+Q) only detaches: the shells keep running
-            perform('terminate:')
-            finish(foot, 'quitting')
-            if not all(alive(pid) for pid in all_shells):
+            t.perform('terminate:')
+            t.finish(foot, 'quitting')
+            if not all(t.alive(pid) for pid in all_shells):
                 raise Failure('a shell ended when foot quit')
-            if [s['attached'] for s in sessions()] != [False] * 4:
-                raise Failure(f'after quitting: {sessions()}')
+            if [s['attached'] for s in t.sessions()] != [False] * 4:
+                raise Failure(f'after quitting: {t.sessions()}')
 
             # Started again: attached again, as they were, nothing new started
-            foot = start()
-            wait('attached again', lambda: sorted(s['attached'] for s in sessions()) == [False, True, True, True], foot)
+            foot = t.start()
+            t.wait('attached again', lambda: sorted(s['attached'] for s in t.sessions()) == [False, True, True, True], foot)
             time.sleep(1)
-            if windows(foot) != layout:
-                raise Failure(f'windows (tabs, panes): {windows(foot)}, were {layout}')
-            if {a: size(a), b: size(b)} != sizes:
-                raise Failure(f'sizes {sizes} became {({a: size(a), b: size(b)})}')
+            if t.windows(foot) != layout:
+                raise Failure(f'windows (tabs, panes): {t.windows(foot)}, were {layout}')
+            if {a: t.size(a), b: t.size(b)} != sizes:
+                raise Failure(f'sizes {sizes} became {({a: t.size(a), b: t.size(b)})}')
 
             # The quake terminal's, once it's shown
-            perform('toggleQuakeTerminal:')
-            wait('the quake terminal attached', lambda: all(s['attached'] for s in sessions()), foot)
-            if shells() != all_shells:
-                raise Failure(f'new shells: {shells()}')
+            t.perform('toggleQuakeTerminal:')
+            t.wait('the quake terminal attached', lambda: all(s['attached'] for s in t.sessions()), foot)
+            if t.shells() != all_shells:
+                raise Failure(f'new shells: {t.shells()}')
 
             # Closing a pane ends its session; the last ones, the windows (and foot)
-            perform('performClose:')
-            wait('a session ended', lambda: len(sessions()) == 3, foot)
-            perform('performCloseWindow:')
-            wait('the window\'s sessions ended', lambda: len(sessions()) == 1, foot)
-            perform('toggleQuakeTerminal:')
-            perform('performClose:')
-            finish(foot, 'closing the windows')
-            wait('footd exiting', lambda: not os.path.exists(sock))
-            if any(alive(pid) for pid in all_shells):
+            t.perform('performClose:')
+            t.wait('a session ended', lambda: len(t.sessions()) == 3, foot)
+            t.perform('performCloseWindow:')
+            t.wait('the window\'s sessions ended', lambda: len(t.sessions()) == 1, foot)
+            t.perform('toggleQuakeTerminal:')
+            t.perform('performClose:')
+            t.finish(foot, 'closing the windows')
+            t.wait('footd exiting', lambda: not os.path.exists(t.sock))
+            if any(t.alive(pid) for pid in all_shells):
                 raise Failure('a shell is still running')
         finally:
-            open(os.path.join(tmp, 'quit'), 'w').close()
-            if foot.poll() is None:
-                foot.kill()
-                foot.communicate()
+            t.done(foot)
+
+    def test_sessions_ending(self):
+        """Sessions: Quit and End Sessions ends those no window shows too; a busy footd is kept, a crashed one replaced"""
+        t = self.Sessions(self, 'sessions-ending')
+
+        foot = t.start()
+        try:
+            t.wait('a shell', lambda: len(t.shells()) == 1, foot)
+            t.perform('toggleQuakeTerminal:')
+            t.wait('the quake terminal', lambda: len(t.shells()) == 2, foot)
+            first = t.shells()
+            t.perform('terminate:')
+            t.finish(foot, 'quitting')
+
+            # The quake terminal's session is attached once it's shown: not yet
+            foot = t.start()
+            t.wait('attached again', lambda: sorted(s['attached'] for s in t.sessions()) == [False, True], foot)
+            t.perform('quitEndingSessions:')
+            t.finish(foot, 'quitting, ending the sessions')
+            t.wait('footd exiting', lambda: not os.path.exists(t.sock))
+            t.wait('the shells ending', lambda: not any(t.alive(pid) for pid in first))
+
+            foot = t.start()
+            t.wait('a shell', lambda: len(t.shells()) == 3, foot)
+            shell = [pid for pid in t.shells() if pid not in first][0]
+            footd_pid = t.footd_pid(shell)
+
+            # footd is busy (its backlog is full): another foot doesn't replace it, and
+            # gets a PTY of its own
+            inode = os.stat(t.sock).st_ino
+            os.kill(footd_pid, signal.SIGSTOP)
+            backlog = []
+            other = None
+            try:
+                while True:
+                    conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                    try:
+                        conn.connect(t.sock)
+                    except ConnectionRefusedError:
+                        conn.close()
+                        break
+                    backlog.append(conn)
+                    if len(backlog) > 1000:
+                        raise Failure('footd\'s backlog is never full')
+
+                other = t.start()
+                t.wait('the other foot\'s shell', lambda: len(t.shells()) == 4, other)
+                own = [pid for pid in t.shells() if pid not in first + [shell]][0]
+                parent = int(run('ps', '-o', 'ppid=', '-p', str(own)).strip())
+                if parent != other.pid:
+                    raise Failure(f'the other foot\'s shell is {parent}\'s')
+                other.send_signal(signal.SIGTERM)
+                t.finish(other, 'the other foot', check=False)
+            finally:
+                os.kill(footd_pid, signal.SIGCONT)
+                for conn in backlog:
+                    conn.close()
+                if other is not None and other.poll() is None:
+                    other.kill()
+                    other.communicate()
+            if os.stat(t.sock).st_ino != inode or [s['pid'] for s in t.sessions()] != [shell]:
+                raise Failure(f'footd was replaced: {t.sessions()}')
+
+            # footd crashes: its windows end, and the next foot starts another one
+            # (the socket it left behind refuses connections)
+            os.kill(footd_pid, signal.SIGKILL)
+            t.finish(foot, 'footd crashed', check=False)
+            if not os.path.exists(t.sock):
+                raise Failure('footd took its socket with it')
+            known = t.shells()
+            foot = t.start()
+            t.wait('a shell', lambda: len(t.shells()) == len(known) + 1, foot)
+            new = [pid for pid in t.shells() if pid not in known][0]
+            if t.footd_pid(new) == footd_pid:
+                raise Failure('the same footd')
+            t.perform('performClose:')
+            t.finish(foot, 'closing the window')
+            t.wait('footd exiting', lambda: not os.path.exists(t.sock))
+        finally:
+            t.done(foot)
 
     def test_server(self):
         """foot --server, footclient, and the quake terminal"""

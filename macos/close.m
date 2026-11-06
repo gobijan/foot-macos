@@ -52,9 +52,12 @@ process_name(pid_t pid, char name[static MAXCOMLEN + 1])
     return name[0] != '\0';
 }
 
-/* The name of what's running in the terminal, or nil if there's nothing to lose */
+/*
+ * The name of what runs in a terminal (its first process is 'pid', its
+ * foreground process group 'pgrp'), or nil if there's nothing to lose
+ */
 static NSString *
-running_process(const struct terminal *term)
+running_process_of(pid_t pid, pid_t pgrp)
 {
     static const char *const shells[] = {
         "bash", "csh", "dash", "elvish", "fish", "ksh", "nu", "pwsh", "sh",
@@ -64,10 +67,6 @@ running_process(const struct terminal *term)
     /* They keep running, detached */
     static const char *const multiplexers[] = {"screen", "tmux", "zellij"};
 
-    if (!term->conf->macos.confirm_close || term->shutdown.in_progress || term->ptmx < 0)
-        return nil;
-
-    const pid_t pgrp = terminal_foreground_pgrp(term);
     if (pgrp <= 0)
         return nil;
 
@@ -90,10 +89,19 @@ running_process(const struct terminal *term)
      * A shell waiting for a command is the terminal's own, and has its
      * process group for itself. Any other is e.g. running a script.
      */
-    if (pgrp == terminal_pid(term) && count == 1 && in_list(name, shells, ALEN(shells)))
+    if (pgrp == pid && count == 1 && in_list(name, shells, ALEN(shells)))
         return nil;
 
     return @(name);
+}
+
+static NSString *
+running_process(const struct terminal *term)
+{
+    if (!term->conf->macos.confirm_close || term->shutdown.in_progress || term->ptmx < 0)
+        return nil;
+
+    return running_process_of(terminal_pid(term), terminal_foreground_pgrp(term));
 }
 
 static NSAlert *
@@ -185,7 +193,8 @@ app_confirm_quit(bool end_sessions)
 {
     NSMutableOrderedSet<NSString *> *processes = [NSMutableOrderedSet orderedSet];
 
-    tll_foreach(app_wayland()->terms, it) {
+    struct wayland *wayl = app_wayland();
+    tll_foreach(wayl->terms, it) {
         /* Sessions keep running (macos/session.h) */
         if (it->item->session != NULL && !end_sessions)
             continue;
@@ -193,6 +202,24 @@ app_confirm_quit(bool end_sessions)
         NSString *process = running_process(it->item);
         if (process != nil)
             [processes addObject:process];
+    }
+
+    /* And the sessions no window shows (e.g. the quake terminal's, until it's shown) */
+    struct session_list sessions;
+    if (end_sessions && tll_front(wayl->terms)->conf->macos.confirm_close &&
+        sessions_list(wayl->fdm, &sessions))
+    {
+        for (size_t i = 0; i < sessions.count; i++) {
+            const struct session_info *session = &sessions.sessions[i];
+            if (session->attached)
+                continue;
+
+            NSString *process = running_process_of(
+                session->pid, session_foreground_pgrp(session->pid));
+            if (process != nil)
+                [processes addObject:process];
+        }
+        session_list_free(&sessions);
     }
 
     if (processes.count == 0)

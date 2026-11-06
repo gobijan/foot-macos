@@ -9,6 +9,7 @@
  */
 
 #include <errno.h>
+#include <locale.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -859,7 +860,7 @@ random_output(struct writes *w, int cols, int rows, int ops)
         }
         case 20: add(w, rnd(2) ? "\033(0" : "\033(B"); break;
         case 21: add(w, rnd(2) ? "\016" : "\017"); break;
-        case 22: add(w, "\033]2;title %u\033\\", rnd(100)); break;
+        case 22: add(w, "\033]2;t\u00eftle %u\033\\", rnd(100)); break;
         case 23: add(w, "\033]133;%c\033\\", "ACD"[rnd(3)]); break;
         case 24: add(w, "\033[%u q", rnd(7)); break;
         case 25: add(w, "\033[%c%uu", "><"[rnd(2)], rnd(32)); break;
@@ -1068,6 +1069,12 @@ main(int argc, char *argv[])
     log_init(LOG_COLORIZE_AUTO, false, LOG_FACILITY_USER, LOG_CLASS_WARNING);
     signal(SIGPIPE, SIG_IGN);
 
+    /* As footd's (titles are checked with its character classes) */
+    if (setlocale(LC_CTYPE, "en_US.UTF-8") == NULL && setlocale(LC_CTYPE, "C.UTF-8") == NULL) {
+        fprintf(stderr, "no UTF-8 locale\n");
+        return EXIT_FAILURE;
+    }
+
     struct fdm *fdm = fdm_init();
     struct reaper *reaper = reaper_init(fdm);
     headless_init(fdm, reaper);
@@ -1151,6 +1158,7 @@ main(int argc, char *argv[])
          "\033]4;1;rgb:12/34/56\033\\\033]10;rgb:ff/ff/00\033\\\033]11;rgb:00/00/10\033\\"
          "\033]12;rgb:ff/00/00\033\\");
     test("title and cwd", "\033]2;my title\033\\\033]7;file://localhost/Users/me/a%20dir\033\\");
+    test("title, not ASCII", "\033]2;Grüße, 世界 🙂\033\\");
     test("last column", "\033[1;20HX");
     test("last column, wrapped next", "01234567890123456789\r");
     test("no auto wrap", "\033[?7l0123456789012345678901234");

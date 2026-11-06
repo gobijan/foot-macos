@@ -258,7 +258,12 @@ fdm_ptmx(struct fdm *fdm, int fd, int events, void *data)
     const bool hup = events & EPOLLHUP;
 
     if (pollout) {
-        if (!fdm_ptmx_out(fdm, fd, events, data))
+        if (!fdm_ptmx_out(fdm, fd, events, data)
+#if defined(__APPLE__)
+            /* A session's, that footd has closed (macos/session.h) */
+            && !session_link_write_failed(term)
+#endif
+            )
             return false;
     }
 

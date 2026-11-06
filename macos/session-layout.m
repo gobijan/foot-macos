@@ -166,10 +166,22 @@ session_layout_save(void)
     }
 }
 
+/* A window, or its splits, being resized with the mouse: it changes all the time */
+static bool
+resizing(void)
+{
+    tll_foreach(app_wayland()->terms, it) {
+        if (it->item->window != NULL && it->item->window->is_resizing)
+            return true;
+    }
+    return false;
+}
+
 static void
 fdm_hook(struct fdm *fdm, void *data)
 {
-    if (layout.dirty)
+    /* Once it's done (the hooks run then, too) */
+    if (layout.dirty && !resizing())
         session_layout_save();
 }
 

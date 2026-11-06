@@ -46,6 +46,14 @@ struct session_link *session_link_new(
 /* term_init(): the terminal has opened the PTY (or failed to) */
 void session_link_set_term(struct session_link *link, struct terminal *term);
 
+/*
+ * fdm_ptmx(): writing to the terminal's PTY failed. A session's is
+ * footd's socket: footd has closed it (e.g. another window has taken
+ * the session over), and the window still reads what's left. Drops
+ * what's queued; false if it isn't a session's.
+ */
+bool session_link_write_failed(struct terminal *term);
+
 /* render.c's TIOCSWINSZ */
 void session_link_resize(struct session_link *link, int cols, int rows,
                          int cell_width, int cell_height);
@@ -76,8 +84,17 @@ bool session_link_has_command(const struct session_link *link);
 pid_t terminal_pid(const struct terminal *term);
 pid_t terminal_foreground_pgrp(const struct terminal *term);
 
+/* A session's terminal's foreground process group, from its first process (0 if unknown) */
+pid_t session_foreground_pgrp(pid_t pid);
+
 /* foot is quitting (or exiting): its windows' sessions keep running */
 void sessions_detach_all(void);
+
+/*
+ * foot quits ending its sessions: those no window is attached to (e.g.
+ * the quake terminal's, until it's shown); windows end theirs
+ */
+void sessions_end_detached(void);
 
 /* foot exits: the connection to footd is closed (once the terminals are gone) */
 void sessions_fini(void);
