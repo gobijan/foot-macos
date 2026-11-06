@@ -38,6 +38,7 @@
 #include "render.h"
 #include "search.h"
 #include "selection.h"
+#include "session.h"
 #include "shm.h"
 #include "sixel.h"
 #include "spawn.h"
@@ -495,6 +496,19 @@ notify_icon_add(struct terminal *term, const char *id,
 
 void notify_icon_del(struct terminal *term, const char *id) {}
 void notify_icon_free(struct notification_icon *icon) {}
+
+/* footd's terminals have the session's PTY themselves (see session.h) */
+
+struct session_link *
+session_link_new(struct fdm *fdm, const struct config *conf, const char *cwd,
+                 int argc, char *const *argv, const char *const *envp,
+                 const char **pty_path)
+{
+    return NULL;
+}
+
+void session_link_set_term(struct session_link *link, struct terminal *term) {}
+void session_link_destroy(struct session_link *link) {}
 
 /* Helpers (utmp, the bell's command, new terminals) are the window's too */
 

@@ -6,7 +6,8 @@
  * meanwhile.
  *
  * The test writes an action's selector (e.g. "splitRight:") to
- * $FOOT_SMOKE_DIR/action; it's removed once performed.
+ * $FOOT_SMOKE_DIR/action; it's removed once performed. Actions go to
+ * the first terminal window that's shown.
  */
 
 #import <AppKit/AppKit.h>
@@ -26,9 +27,12 @@ poll_action(void)
 
     action = [action stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
 
+    /* (Not a window that's being closed, or isn't shown yet) */
     NSView *splits = nil;
     for (NSWindow *window in NSApp.windows) {
-        if ([NSStringFromClass([window.contentView class]) isEqualToString:@"FootSplitView"]) {
+        if (window.isVisible &&
+            [NSStringFromClass([window.contentView class]) isEqualToString:@"FootSplitView"])
+        {
             splits = window.contentView;
             break;
         }
@@ -40,7 +44,9 @@ poll_action(void)
 
     [[NSFileManager defaultManager] removeItemAtPath:action_path error:nil];
 
-    if (![splits tryToPerform:NSSelectorFromString(action) with:nil])
+    /* The window's, or the application's (e.g. terminate:, Cmd+Q) */
+    const SEL selector = NSSelectorFromString(action);
+    if (![splits tryToPerform:selector with:nil] && ![NSApp tryToPerform:selector with:nil])
         fprintf(stderr, "smoke-driver: %s: not performed\n", action.UTF8String);
 }
 

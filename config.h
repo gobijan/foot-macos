@@ -253,6 +253,9 @@ struct config {
         /* Ask before closing a window (or quitting) with something running in it */
         bool confirm_close;
 
+        /* Terminals are persistent sessions (footd, macos/session.h) */
+        bool sessions;
+
         /* The quake terminal (footclient --quake, macos/quake.m) */
         struct macos_quake {
             int position;               /* top, bottom, left, right, center */

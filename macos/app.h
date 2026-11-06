@@ -39,6 +39,15 @@ NSMenuItem *updates_menu_item(void);
 NSWindow *app_new_tab_parent(void);
 
 /*
+ * A new terminal, in 'cwd' (NULL: the home directory): in a window of
+ * its own, or a tab of 'tab_parent', or a split of 'split_parent' (in
+ * 'dir'). Returns it, or NULL.
+ */
+struct terminal *app_new_terminal(const char *cwd, NSWindow *tab_parent,
+                                  struct wl_window *split_parent,
+                                  enum split_dir dir);
+
+/*
  * Splits 'win': a new terminal, in its working directory, goes in 'dir'
  * (macos/split-view.m). While it's created, app_new_split_parent()
  * returns 'win' (else NULL), and the direction in '*dir' (may be NULL).
@@ -58,6 +67,9 @@ void app_windows_changed(void);
 
 /* quake.m: the quake terminal's window, a panel (see wayl_quake()) */
 bool quake_owns_config(const struct config *conf);
+
+/* The quake terminal, if there is one */
+struct terminal *quake_terminal(void);
 NSWindow *quake_window_create(NSRect content_rect);
 
 /* The initial configure: its frame (before the terminal is sized), and shown */

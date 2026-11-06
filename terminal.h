@@ -419,6 +419,9 @@ struct terminal {
 
     pid_t slave;
     int ptmx;
+#if defined(__APPLE__)
+    struct session_link *session;  /* A persistent session's (macos/session.h) */
+#endif
 
     struct vt vt;
     struct grid *grid;

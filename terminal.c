@@ -51,6 +51,10 @@
 #include "xmalloc.h"
 #include "xsnprintf.h"
 
+#if defined(__APPLE__)
+ #include "session.h"
+#endif
+
 #define PTMX_TIMING 0
 
 static void
@@ -1196,6 +1200,11 @@ term_init(const struct config *conf, struct fdm *fdm, struct reaper *reaper,
         return NULL;
     }
 
+#if defined(__APPLE__)
+    /* A persistent session's: footd's PTY, as a socket (macos/session.h) */
+    struct session_link *session = pty_path == NULL
+        ? session_link_new(fdm, conf, cwd, argc, argv, envp, &pty_path) : NULL;
+#endif
     ptmx = pty_path ? open(pty_path, PTY_OPEN_FLAGS) : posix_openpt(PTY_OPEN_FLAGS);
     if (ptmx < 0) {
         LOG_ERRNO("failed to open PTY");
@@ -1249,7 +1258,8 @@ term_init(const struct config *conf, struct fdm *fdm, struct reaper *reaper,
         goto close_fds;
     }
 
-    if (ioctl(ptmx, (unsigned int)TIOCSWINSZ,
+    if (isatty(ptmx) &&
+        ioctl(ptmx, (unsigned int)TIOCSWINSZ,
               &(struct winsize){.ws_row = 24, .ws_col = 80}) < 0)
     {
         LOG_ERRNO("failed to set initial TIOCSWINSZ");
@@ -1433,6 +1443,11 @@ term_init(const struct config *conf, struct fdm *fdm, struct reaper *reaper,
         .active_notifications = tll_init(),
     };
 
+#if defined(__APPLE__)
+    term->session = session;
+    session_link_set_term(session, term);
+#endif
+
     pixman_region32_init(&term->render.last_overlay_clip);
 
     term_update_ascii_printer(term);
@@ -1516,6 +1531,9 @@ err:
     return NULL;
 
 close_fds:
+#if defined(__APPLE__)
+    session_link_destroy(session);
+#endif
     if (pts >= 0)
         close(pts);
     close(ptmx);
@@ -2071,6 +2089,10 @@ term_destroy(struct terminal *term)
                      exit_status);
         }
     }
+
+#if defined(__APPLE__)
+    session_link_destroy(term->session);
+#endif
 
     free(term);
 

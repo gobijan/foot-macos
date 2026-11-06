@@ -5,8 +5,9 @@
 # reach. Together with a sanitizer build (make sanitize), this is what
 # finds memory errors in it.
 #
-# Usage: smoke-test.py <directory with foot and footclient>
+# Usage: smoke-test.py <directory with foot and footclient> [tests...]
 
+import importlib.util
 import os
 import shutil
 import signal
@@ -208,6 +209,141 @@ class Tests:
         if foot.returncode != 0:
             raise Failure(f'foot: exit code {foot.returncode}\n{out}')
 
+    def test_sessions(self):
+        """Sessions: in footd; kept, with their splits, when foot quits; ended with their panes"""
+        tmp = os.path.join(self.tmp, 'sessions')
+        os.mkdir(tmp)
+        sock = os.path.join(tmp, 's.sock')
+
+        # footd's protocol, as macos/test-footd.py speaks it (no __pycache__ in macos/)
+        sys.dont_write_bytecode = True
+        spec = importlib.util.spec_from_file_location(
+            'test_footd', os.path.join(ROOT, 'macos', 'test-footd.py'))
+        footd = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(footd)
+
+        # Each shell reports its PID and size, until the test is done
+        script = os.path.join(tmp, 'shell.sh')
+        with open(script, 'w') as f:
+            f.write(f"""
+                echo $$ > {tmp}/pid.$$.tmp && mv {tmp}/pid.$$.tmp {tmp}/pid.$$
+                last=
+                while [ ! -e {tmp}/quit ]; do
+                    size=$(stty size)
+                    if [ "$size" != "$last" ]; then
+                        echo "$size" > {tmp}/size.$$.tmp
+                        mv {tmp}/size.$$.tmp {tmp}/size.$$
+                        last=$size
+                    fi
+                    sleep .1
+                done
+            """)
+
+        config = os.path.join(tmp, 'foot.ini')
+        with open(config, 'w') as f:
+            f.write(f'shell=/bin/sh {script}\nlogin-shell=no\nmacos-confirm-close=no\n')
+
+        env = dict(ENV, FOOT_SESSIONS_SOCKET=sock, DYLD_INSERT_LIBRARIES=self.driver,
+                   FOOT_SMOKE_DIR=tmp)
+
+        def start():
+            return subprocess.Popen(
+                [self.foot, f'--config={config}', '--window-size-chars=100x30'],
+                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, env=env)
+
+        def shells():
+            return sorted(int(name[4:]) for name in os.listdir(tmp)
+                          if name.startswith('pid.') and not name.endswith('.tmp'))
+
+        def size(pid):
+            with open(os.path.join(tmp, f'size.{pid}')) as f:
+                rows, cols = f.read().split()
+            return int(rows), int(cols)
+
+        def alive(pid):
+            try:
+                os.kill(pid, 0)
+                return True
+            except ProcessLookupError:
+                return False
+
+        def sessions():
+            client = footd.Client(sock)
+            client.hello()
+            got, _ = footd.list_sessions(client)
+            client.close()
+            return got
+
+        def wait(what, check, proc=None):
+            deadline = time.time() + TIMEOUT
+            while not check():
+                if time.time() > deadline or (proc is not None and proc.poll() is not None):
+                    raise Failure(f'{what}: not so')
+                time.sleep(.1)
+
+        def perform(action):
+            with open(os.path.join(tmp, 'action'), 'w') as f:
+                f.write(action)
+
+        def finish(proc, what):
+            try:
+                out, _ = proc.communicate(timeout=TIMEOUT)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                out, _ = proc.communicate()
+                raise Failure(f'{what}: foot did not exit\n{out}')
+            if proc.returncode != 0:
+                raise Failure(f'{what}: exit code {proc.returncode}\n{out}')
+
+        foot = start()
+        try:
+            # The shell is footd's (its parent), and has the window's size
+            wait('a shell', lambda: len(shells()) == 1 and os.path.exists(f'{tmp}/size.{shells()[0]}'), foot)
+            a = shells()[0]
+            parent = int(run('ps', '-o', 'ppid=', '-p', str(a)).strip())
+            if 'footd' not in run('ps', '-o', 'comm=', '-p', str(parent)):
+                raise Failure('the shell is not footd\'s')
+            if size(a) != (30, 100):
+                raise Failure(f'size: {size(a)}')
+
+            perform('splitRight:')
+            wait('a split', lambda: len(shells()) == 2, foot)
+            b = [pid for pid in shells() if pid != a][0]
+            wait('the split\'s size', lambda: os.path.exists(f'{tmp}/size.{b}') and size(a)[1] < 100, foot)
+            sizes = {a: size(a), b: size(b)}
+
+            # Quitting (Cmd+Q) only detaches: the shells keep running
+            perform('terminate:')
+            finish(foot, 'quitting')
+            if not (alive(a) and alive(b)):
+                raise Failure('a shell ended when foot quit')
+            if sorted(s['attached'] for s in sessions()) != [False, False]:
+                raise Failure(f'after quitting: {sessions()}')
+
+            # Started again: attached again, split as they were, nothing new started
+            foot = start()
+            wait('attached again', lambda: [s['attached'] for s in sessions()] == [True, True], foot)
+            time.sleep(1)
+            if shells() != sorted([a, b]):
+                raise Failure(f'new shells: {shells()}')
+            if {a: size(a), b: size(b)} != sizes:
+                raise Failure(f'sizes {sizes} became {({a: size(a), b: size(b)})}')
+
+            # Closing a pane ends its session; the last one, the window (and foot)
+            perform('performClose:')
+            wait('a session ended', lambda: len(sessions()) == 1 and alive(a) != alive(b), foot)
+            perform('performClose:')
+            finish(foot, 'closing the window')
+            wait('footd exiting', lambda: not os.path.exists(sock))
+            if alive(a) or alive(b):
+                raise Failure('a shell is still running')
+        finally:
+            open(os.path.join(tmp, 'quit'), 'w').close()
+            if foot.poll() is None:
+                foot.kill()
+                foot.communicate()
+
     def test_server(self):
         """foot --server, footclient, and the quake terminal"""
         env = dict(ENV, XDG_RUNTIME_DIR=self.tmp)
@@ -236,8 +372,9 @@ class Tests:
 
 
 def main():
-    if len(sys.argv) != 2:
-        sys.exit('usage: smoke-test.py <directory with foot and footclient>')
+    if len(sys.argv) < 2:
+        sys.exit('usage: smoke-test.py <directory with foot and footclient> [test names...]')
+    only = [f'test_{name}' for name in sys.argv[2:]]
 
     # Short: it's where foot's server socket goes
     tmp = tempfile.mkdtemp(prefix='foot-', dir='/tmp')
@@ -246,7 +383,7 @@ def main():
     try:
         tests = Tests(os.path.abspath(sys.argv[1]), tmp)
         for name in sorted(dir(tests)):
-            if not name.startswith('test_'):
+            if not name.startswith('test_') or (only and name not in only):
                 continue
 
             test = getattr(tests, name)

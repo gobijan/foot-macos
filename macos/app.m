@@ -1,4 +1,5 @@
 #import "app.h"
+#import "session-layout.h"
 #import "split-view.h"
 #import "view.h"
 
@@ -25,6 +26,7 @@
 #include "input.h"
 #include "key-binding.h"
 #include "render.h"
+#include "session.h"
 #include "terminal.h"
 #include "util.h"
 #include "xmalloc.h"
@@ -268,12 +270,31 @@ wayl_run(struct wayland *wayl, volatile sig_atomic_t *aborted, bool keep_running
     app.keep_running = keep_running || app.launched_as_app;
     app.server = keep_running;
 
+    /* footclient's terminals are footclient's (it waits for them) */
+    if (app.server)
+        sessions_enable(false);
+
     if (should_exit())
         return !app.fdm_failed;
 
     if (app.launched_as_app && !app.server && tll_length(wayl->terms) == 1) {
         app.initial_term = tll_front(wayl->terms);
         app.started = CFAbsoluteTimeGetCurrent();
+    }
+
+    /*
+     * Sessions the last foot left running: their windows are opened
+     * again, instead of the new one (unless it runs a command)
+     */
+    if (!app.server && tll_length(wayl->terms) <= 1) {
+        struct terminal *initial = tll_length(wayl->terms) == 1 ? tll_front(wayl->terms) : NULL;
+        if (session_layout_restore(wayl->fdm) && initial != NULL &&
+            initial->session != NULL && !session_link_has_command(initial->session))
+        {
+            term_shutdown(initial);
+            if (app.initial_term == initial)
+                app.initial_term = NULL;
+        }
     }
 
     /* A server starts in the background, without windows */
@@ -293,6 +314,15 @@ wayl_run(struct wayland *wayl, volatile sig_atomic_t *aborted, bool keep_running
     app.running = true;
     [NSApp run];
     app.running = false;
+
+    /*
+     * However the run loop ended, the terminals that are left are
+     * destroyed now (main()): their sessions keep running, as they're
+     * laid out
+     */
+    session_layout_save();
+    session_layout_fini();
+    sessions_detach_all();
 
     return !app.fdm_failed;
 }
@@ -380,6 +410,26 @@ app_new_tab_parent(void)
     return app.tab_parent;
 }
 
+struct terminal *
+app_new_terminal(const char *cwd, NSWindow *tab_parent,
+                 struct wl_window *split_parent, enum split_dir dir)
+{
+    if (app.new_window == NULL)
+        return NULL;
+
+    const size_t count = tll_length(app.wayl->terms);
+
+    app.tab_parent = tab_parent;
+    app.split_parent = split_parent;
+    app.split_dir = dir;
+    const bool ok = app.new_window(app.new_window_data, cwd);
+    app.tab_parent = nil;
+    app.split_parent = NULL;
+
+    /* term_init() adds it last */
+    return ok && tll_length(app.wayl->terms) > count ? tll_back(app.wayl->terms) : NULL;
+}
+
 /*
  * The terminal's working directory, for a new window (or tab, or pane)
  * to start in: the foreground process' (e.g. a sub shell), or else the
@@ -389,7 +439,7 @@ app_new_tab_parent(void)
 static bool
 term_cwd(const struct terminal *term, char cwd[static PATH_MAX])
 {
-    const pid_t pids[] = {tcgetpgrp(term->ptmx), term->slave};
+    const pid_t pids[] = {terminal_foreground_pgrp(term), terminal_pid(term)};
     for (size_t i = 0; i < ALEN(pids); i++) {
         struct proc_vnodepathinfo info;
         if (pids[i] <= 0 ||
@@ -443,6 +493,15 @@ wayl_prepare_environment(void)
 {
     /* Before a parent shell may be gone */
     app.launched_as_app = getppid() == 1;
+
+    /*
+     * The application's terminals keep running when it quits; foot
+     * started from a shell exits with them, as upstream. Unless a
+     * footd is given (e.g. for testing).
+     */
+    const char *sessions_socket = getenv("FOOT_SESSIONS_SOCKET");
+    sessions_enable(app.launched_as_app ||
+                    (sessions_socket != NULL && sessions_socket[0] != '\0'));
 
     @autoreleasepool {
         /* Started through a symlink to foot.app's executable (e.g.
@@ -1097,6 +1156,11 @@ create_menu(void)
     app.terminating = true;
     app.keep_running = false;
 
+    /* Sessions only detach: they keep running, as they're laid out */
+    session_layout_save();
+    session_layout_fini();
+    sessions_detach_all();
+
     tll_foreach(app.wayl->terms, it)
         term_shutdown(it->item);
 
@@ -1264,6 +1328,9 @@ wayl_init(struct fdm *fdm, struct key_binding_manager *key_binding_manager,
         NULL, kCFRunLoopBeforeWaiting, true, 0, &before_waiting, NULL);
     CFRunLoopAddObserver(CFRunLoopGetMain(), app.observer, kCFRunLoopCommonModes);
 
+    /* Sessions: the windows' layout is kept */
+    session_layout_init(fdm);
+
     return wayl;
 
 err:
@@ -1276,6 +1343,9 @@ wayl_destroy(struct wayland *wayl)
 {
     if (wayl == NULL)
         return;
+
+    /* However foot exits (e.g. SIGTERM), its sessions keep running */
+    sessions_detach_all();
 
     tll_foreach(wayl->terms, it) {
         static bool have_warned = false;
@@ -1319,6 +1389,9 @@ wayl_destroy(struct wayland *wayl)
     [NSApp removeObserver:app.delegate
                forKeyPath:@"effectiveAppearance"
                   context:&appearance_context];
+
+    session_layout_fini();
+    sessions_fini();
 
     app.wayl = NULL;
     free(wayl);

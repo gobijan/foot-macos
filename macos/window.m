@@ -1,4 +1,5 @@
 #import "app.h"
+#import "session-layout.h"
 #import "split-view.h"
 #import "view.h"
 
@@ -501,9 +502,30 @@ window_configure(struct wl_window *win, NSWindow *tab_parent, bool split)
     const NSSize size = NSMakeSize(term->width / term->scale, term->height / term->scale);
     [nswindow setContentSize:size];
 
-    /* Cascade from the key window, if any */
+    /* Cascade from the key window, if any; or where it was (a session's) */
     NSWindow *key = NSApp.keyWindow;
-    if (tab_parent != nil) {
+    NSRect restored;
+    if (tab_parent == nil && session_layout_restored_frame(nswindow, &restored)) {
+        /* Not on a screen that's gone */
+        NSScreen *on = nil;
+        for (NSScreen *screen in NSScreen.screens) {
+            if (NSIntersectsRect(screen.visibleFrame, restored)) {
+                on = screen;
+                break;
+            }
+        }
+
+        if (on == nil) {
+            const NSRect visible = NSScreen.mainScreen.visibleFrame;
+            restored.size.width = MIN(NSWidth(restored), NSWidth(visible));
+            restored.size.height = MIN(NSHeight(restored), NSHeight(visible));
+            restored.origin.x = NSMidX(visible) - NSWidth(restored) / 2;
+            restored.origin.y = NSMidY(visible) - NSHeight(restored) / 2;
+        }
+
+        [nswindow setFrame:restored display:NO];
+        window_resized(win);
+    } else if (tab_parent != nil) {
         [nswindow setFrame:tab_parent.frame display:NO];
         [tab_parent addTabbedWindow:nswindow ordered:NSWindowAbove];
     } else if (key != nil && key != nswindow) {
@@ -1072,6 +1094,7 @@ window_live_resize_ended(struct wl_window *win)
         window_resized(win);
         render_refresh(win->term);
     }
+    session_layout_changed();
     app_run_hooks();
 }
 
@@ -1101,6 +1124,25 @@ window_live_resize_ended(struct wl_window *win)
     NSWindow *nswindow = notification.object;
     const BOOL visible = (nswindow.occlusionState & NSWindowOcclusionStateVisible) != 0;
     [_splits setWindowOccluded:!visible];
+}
+
+/* Sessions: where the windows are, and their tabs, are kept (layout.m) */
+- (void)windowDidMove:(NSNotification *)notification
+{
+    session_layout_changed();
+    app_run_hooks();
+}
+
+- (void)windowDidBecomeMain:(NSNotification *)notification
+{
+    session_layout_changed();
+    app_run_hooks();
+}
+
+- (void)windowDidEnterFullScreen:(NSNotification *)notification
+{
+    session_layout_changed();
+    app_run_hooks();
 }
 
 @end

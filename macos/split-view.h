@@ -67,4 +67,10 @@
 /* The pane a close confirmation (sheet) is shown for, if just one */
 @property (nonatomic) struct wl_window *sheetPane;
 
+/* The tree (macos/layout.m saves it) */
+@property (nonatomic, readonly) struct split *root;
+
+/* Restoring a layout: the split that 'win' (just inserted) is the second of */
+- (void)setRatio:(double)ratio ofSplitAbove:(struct wl_window *)win;
+
 @end

@@ -89,7 +89,7 @@ rm -rf "$dist"
 mkdir -p "$dist"
 ditto build-release/macos/foot.app "$app"
 
-for exe in foot footclient; do
+for exe in foot footclient footd; do
     lipo -create build-release/macos/$exe build-x86_64/macos/$exe -output "$app/Contents/MacOS/$exe"
 done
 
@@ -116,7 +116,9 @@ sign "$framework/Versions/B/Autoupdate"
 sign "$framework/Versions/B/Updater.app"
 sign "$framework"
 sign "$app/Contents/MacOS/footclient"
-# The privacy permissions of the programs running in foot
+# The privacy permissions of the programs running in foot (in footd's
+# sessions, too)
+sign --entitlements macos/foot.entitlements "$app/Contents/MacOS/footd"
 sign --entitlements macos/foot.entitlements "$app"
 codesign --verify --deep --strict "$app"
 

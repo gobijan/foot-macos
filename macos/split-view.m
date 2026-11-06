@@ -1,6 +1,7 @@
 #import "split-view.h"
 
 #import "app.h"
+#import "session-layout.h"
 #import "view.h"
 
 #include <math.h>
@@ -244,6 +245,21 @@ rect_of(struct split_rect r)
     return split_count(_root);
 }
 
+- (struct split *)root
+{
+    return _root;
+}
+
+- (void)setRatio:(double)ratio ofSplitAbove:(struct wl_window *)win
+{
+    struct split *leaf = [self leafOf:win];
+    if (leaf == NULL || leaf->parent == NULL || !(ratio > 0. && ratio < 1.))
+        return;
+
+    leaf->parent->ratio = ratio;
+    [self relayout];
+}
+
 - (struct split *)leafOf:(const struct wl_window *)win
 {
     for (struct split *it = split_first(_root); it != NULL; it = split_following(it)) {
@@ -306,6 +322,9 @@ rect_of(struct split_rect r)
 
     [self updateDividers];
     [self updateDecorations];
+
+    /* Sessions: the panes, and their sizes, are kept */
+    session_layout_changed();
 }
 
 - (void)collectSplits:(struct split *)node into:(NSMutableArray<NSValue *> *)splits
@@ -573,6 +592,7 @@ rect_of(struct split_rect r)
         ? [NSString stringWithUTF8String:win->title] : @"foot";
 
     [self updateDecorations];
+    session_layout_changed();
     app_run_hooks();
 }
 

@@ -15,6 +15,7 @@
 #define LOG_ENABLE_DBG 0
 #include "log.h"
 #include "config.h"
+#include "session.h"
 #include "terminal.h"
 #include "util.h"
 
@@ -22,7 +23,8 @@
  * Closing a window (or quitting) terminates what's running in it. With
  * something other than a shell waiting for a command, ask first
  * (macos-confirm-close). Asked from the processes, so that it works with
- * any shell (no shell integration needed).
+ * any shell (no shell integration needed). Quitting doesn't terminate
+ * sessions (macos/session.h): they keep running.
  */
 
 static bool
@@ -65,7 +67,7 @@ running_process(const struct terminal *term)
     if (!term->conf->macos.confirm_close || term->shutdown.in_progress || term->ptmx < 0)
         return nil;
 
-    const pid_t pgrp = tcgetpgrp(term->ptmx);
+    const pid_t pgrp = terminal_foreground_pgrp(term);
     if (pgrp <= 0)
         return nil;
 
@@ -88,7 +90,7 @@ running_process(const struct terminal *term)
      * A shell waiting for a command is the terminal's own, and has its
      * process group for itself. Any other is e.g. running a script.
      */
-    if (pgrp == term->slave && count == 1 && in_list(name, shells, ALEN(shells)))
+    if (pgrp == terminal_pid(term) && count == 1 && in_list(name, shells, ALEN(shells)))
         return nil;
 
     return @(name);
@@ -184,6 +186,10 @@ app_confirm_quit(void)
     NSMutableOrderedSet<NSString *> *processes = [NSMutableOrderedSet orderedSet];
 
     tll_foreach(app_wayland()->terms, it) {
+        /* Sessions keep running (macos/session.h) */
+        if (it->item->session != NULL)
+            continue;
+
         NSString *process = running_process(it->item);
         if (process != nil)
             [processes addObject:process];

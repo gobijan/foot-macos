@@ -352,6 +352,8 @@ foot = executable(
   'clear.c', 'clear.h',
   'splits.c', 'splits.h',
   'windows.c', 'windows.h',
+  'session.c', 'session.h',
+  'session-layout.m', 'session-layout.h',
   'quake.m',
   'hotkey.m',
   'themes.m',
@@ -359,7 +361,7 @@ foot = executable(
   'default-colors.c', 'default-colors.h',
   default_config, srgb_funcs, version,
   dependencies: [math, threads, pixman, xkb, utf8proc, tllist, fcft, appkit],
-  link_with: pgolib,
+  link_with: [pgolib, session_protocol],
   install: true)
 
 footclient = executable(
@@ -429,7 +431,7 @@ info_plist = configure_file(
 custom_target(
   'foot.app',
   output: 'foot.app',
-  input: [foot, footclient, info_plist, files('icon/foot.icns'), terminfo],
+  input: [foot, footclient, footd, info_plist, files('icon/foot.icns'), terminfo],
   command: [files('make-bundle.sh'), '@OUTPUT@', '@INPUT@', root / 'themes',
             root / 'macos' / 'themes'],
   build_by_default: true,

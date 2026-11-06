@@ -61,10 +61,10 @@ Upstream files are changed as little as possible, in one of three ways:
    | `meson.build` | A 6 line hook right after `project()`, handing over to `macos/meson.build`. New upstream sources/targets must be added there. |
    | `main.c` | `wayl_prepare_environment()`, `wayl_enable_new_windows()`, and `wayl_run()` instead of the `fdm_poll()` loop; SIGUSR1/SIGUSR2 switch all windows' color theme (`wayl_theme_switch_all()`). |
    | `input.c`, `input.h` | Wayland keyboard/pointer listeners became `input_key()`, `input_modifiers()`, `input_pointer_*()` etc, called by `macos/view.m`. Touch support removed. Key repeat comes from macOS. Upstream changes to the `keyboard_*`/`wl_pointer_*` listeners must be ported to the corresponding `input_*` function. |
-   | `render.c`, `render.h` | `wl_surface_*()` → `wayl_surface_*()`; frame callbacks → `render_frame_callback()`; xcursor themes → `wayl_set_cursor()`; presentation timing removed; the single pixel overlay is a layer color. |
-   | `terminal.c`, `terminal.h` | Timer FDs are read with `timerfd_read()` (kqueue timers, see `macos/timerfd.c`); the deferred shutdown uses a pipe (no eventfd); render workers use dispatch semaphores; font sizes use 72 DPI (points); the PTY slave is opened early (macOS quirk); scale = the window's backing scale factor; the font smoothing options are passed to fcft. |
+   | `render.c`, `render.h` | `wl_surface_*()` → `wayl_surface_*()`; frame callbacks → `render_frame_callback()`; xcursor themes → `wayl_set_cursor()`; presentation timing removed; the single pixel overlay is a layer color; `tiocswinsz()` hands a persistent session's size to footd (`session_link_resize()`). |
+   | `terminal.c`, `terminal.h` | Timer FDs are read with `timerfd_read()` (kqueue timers, see `macos/timerfd.c`); the deferred shutdown uses a pipe (no eventfd); render workers use dispatch semaphores; font sizes use 72 DPI (points); the PTY slave is opened early (macOS quirk); scale = the window's backing scale factor; the font smoothing options are passed to fcft. Persistent sessions (`macos/session.h`): `term_init()` gets footd's socket as `--pty`'s path (`/dev/fd/N`) from `session_link_new()`, the initial `TIOCSWINSZ` is only for a TTY, `term->session` is set there and freed in `term_destroy()`. |
    | `ime.c`, `ime.h` | text-input-v3 listeners → `ime_enter()`, `ime_preedit()`, `ime_commit()`, `ime_done()` (fed by `NSTextInputClient`). |
-   | `config.c`, `config.h` | Font patterns parsed without fontconfig (`macos/font-pattern.c`); `macos-option-as-alt`, `macos-font-smoothing`, `macos-font-smoothing-strength`, `macos-follow-appearance` and `macos-confirm-close` (both on by default), the quake terminal's `macos-quake-*`; the default colors (`macos/default-colors.c`); macOS default commands (`open`, `osascript`), `login-shell=yes` and `pad=8x8`. |
+   | `config.c`, `config.h` | Font patterns parsed without fontconfig (`macos/font-pattern.c`); `macos-option-as-alt`, `macos-font-smoothing`, `macos-font-smoothing-strength`, `macos-follow-appearance`, `macos-confirm-close` and `macos-sessions` (on by default), the quake terminal's `macos-quake-*`; the default colors (`macos/default-colors.c`); macOS default commands (`open`, `osascript`), `login-shell=yes` and `pad=8x8`. |
    | `cursor-shape.c`, `cursor-shape.h` | Wayland cursor-shape protocol mapping removed. |
    | `server.c` | No `SOCK_CLOEXEC`/`accept4()` on macOS; `footclient --quake` requests are handed to `wayl_quake()` (`macos/quake.m`), right before a terminal would be created. |
    | `client.c`, `client-protocol.h` | `footclient --quake[=ACTION]`: the action is in `client_data` (3 of its reserved bits), and the server's reply is the quake terminal's state, which is printed. |
@@ -74,6 +74,16 @@ Upstream files are changed as little as possible, in one of three ways:
 | `box-drawing.c` | Rounded corners (`╭╮╯╰`) catch an out of range `sqrt()` with `isnan()` too: macOS' libm doesn't set `errno`. |
    | `fdm.h`, `shm.h` | Additions for run loop integration, and IOSurface buffers (`macos/fdm.c`, `macos/shm.c`). |
    | `.gitignore` | The build directories (`/build/`, `/build-release/`, `/build-x86_64/`, and `-pgo` versions of the last two). |
+
+footd (`macos/footd.c`, persistent sessions) runs foot's terminal core
+without a window (`macos/headless.c`): what the core calls into is
+stubbed there, as in upstream's `pgo/pgo.c`. When upstream's core calls
+a new platform function, footd needs a stub too (it fails to link
+otherwise); when `render_resize()`'s grid handling changes,
+`headless_term_resize()` must follow. New terminal state (modes,
+colors) belongs in the snapshot a window gets when it attaches
+(`macos/snapshot.c`): `meson test sessions` compares terminals before
+and after one, also with random output, and tells what's missing.
 
 Not modified at all: everything else, including `foot.ini`,
 `meson_options.txt`, `README.md`, `CONTRIBUTING.md` and `tests/` (this
@@ -97,8 +107,8 @@ For humans and AI assistants alike:
    code (the files in group 1, or code in `#if !defined(__APPLE__)`
    blocks), decide whether the macOS layer needs the equivalent.
 4. **Verify.** `make test` (`ninja -C build && meson test -C build
-   config`), then `make run` (debug builds run foot's unit tests at
-   startup).
+   config sessions footd`), then `make run` (debug builds run foot's
+   unit tests at startup).
 5. **Update this file** if the way the port touches upstream changes.
 
 To see the port's complete diff against upstream (`make port-diff`

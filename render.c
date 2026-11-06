@@ -43,6 +43,10 @@
 #include "util.h"
 #include "xmalloc.h"
 
+#if defined(__APPLE__)
+ #include "session.h"
+#endif
+
 #define TIME_SCROLL_DAMAGE 0
 
 struct renderer {
@@ -4119,6 +4123,13 @@ static void
 tiocswinsz(struct terminal *term)
 {
     if (term->ptmx >= 0) {
+#if defined(__APPLE__)
+        /* A persistent session's PTY is footd's (macos/session.h) */
+        if (term->session != NULL) {
+            session_link_resize(term->session, term->cols, term->rows,
+                                term->cell_width, term->cell_height);
+        } else
+#endif
         if (ioctl(term->ptmx, (unsigned int)TIOCSWINSZ,
                      &(struct winsize){
                          .ws_row = term->rows,

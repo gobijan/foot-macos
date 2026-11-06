@@ -1,4 +1,5 @@
 #import "app.h"
+#import "session-layout.h"
 
 #import <QuartzCore/QuartzCore.h>
 
@@ -10,6 +11,7 @@
 #include "client-protocol.h"
 #include "config.h"
 #include "render.h"
+#include "session.h"
 #include "terminal.h"
 
 /*
@@ -103,6 +105,12 @@ static struct {
 }
 
 @end
+
+struct terminal *
+quake_terminal(void)
+{
+    return quake.term;
+}
 
 bool
 quake_owns_config(const struct config *conf)
@@ -653,9 +661,13 @@ wayl_quake(struct wayland *wayl, struct fdm *fdm, struct reaper *reaper,
     quake.show_when_configured = action != CLIENT_QUAKE_HIDE;
     apply_alpha();
 
+    /* Sessions: the last foot's quake terminal's, if it's still there */
+    sessions_attach_next(session_layout_take_quake_session(), false);
+
     quake.term = term_init(
         new_conf, fdm, reaper, wayl, "foot", cwd, NULL, NULL, argc, argv,
         envp, &term_shutdown_handler, new_conf);
+    sessions_attach_next(0, false);
 
     if (quake.term == NULL) {
         LOG_ERR("failed to instantiate the quake terminal");

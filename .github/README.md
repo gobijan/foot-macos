@@ -184,9 +184,10 @@ frameworks.
   with dark colors only replaces Grok Night, one with light colors only
   Grok Day. For one theme in both modes, turn it off. Programs that ask
   for theme changes (mode 2031, e.g. Neovim) are notified.
-* Closing a window, or quitting, asks first when something other than
-  the shell is running in it (tmux, screen and zellij don't count: they keep
-  running). `macos-confirm-close=no` in `[main]` turns that off.
+* Closing a window asks first when something other than the shell is
+  running in it (tmux, screen and zellij don't count: they keep
+  running). So does quitting, without [sessions](#sessions).
+  `macos-confirm-close=no` in `[main]` turns that off.
 * Desktop notifications (OSC 9, 99 and 777, `bell=notify`) are foot's
   own in Notification Center: macOS asks for the permission once, and
   clicking one leads back to its terminal. A
@@ -210,6 +211,40 @@ frameworks.
 * The shell is started as a login shell, so that it sets up `$PATH`.
 * `TERM=foot`; the terminfo entry is bundled, and found through
   `$TERMINFO_DIRS`.
+
+## Sessions
+
+What runs in foot keeps running when foot quits (`Cmd+Q`), crashes, or
+is updated. When foot starts again, its windows are back, with their
+tabs and splits, where they were, and with what's in them, scrollback
+included; the programs in them didn't notice. Closing a window (or a
+split) ends what runs in it, as before.
+
+* The programs run in footd, foot's sessions (in foot.app, next to
+  foot). foot starts it when it's needed, and it exits once there are
+  neither sessions nor foot windows left; it does nothing while idle.
+  Each window's terminal is attached to a session: what the programs
+  write comes from footd, as it would from a PTY.
+* footd keeps a session's state while no window is attached, and
+  answers the programs' queries (colors, size) meanwhile. A window that
+  attaches gets that state first: the screen (and the alternate one,
+  e.g. Vim's or htop's), the scrollback, wrapped lines, the cursor,
+  modes, colors, title and links. Not kept: sixel images, and the title
+  and color stacks.
+* The quake terminal is a session too: the next foot shows it as it
+  was.
+* foot started from a shell (e.g. `foot -e htop`) and footclient's
+  terminals are as upstream's: they end with foot.
+* `macos-sessions=no` in `[main]` turns sessions off: quitting foot ends
+  what runs in it then.
+* footd's socket is `~/Library/Application Support/foot/sessions-1.sock`.
+  A foot with another session protocol (after an update that changes
+  it) gets a footd of its own; the old one keeps its sessions until
+  they end.
+* Output passes through footd as fast as directly when it's text, and
+  up to 30% slower with lots of control sequences (e.g. a full screen
+  redrawn hundreds of thousands of times a second, `make bench`'s
+  `cursor_motion`); typing is just as fast.
 
 ## Quake terminal
 

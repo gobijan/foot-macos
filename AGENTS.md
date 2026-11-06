@@ -31,6 +31,18 @@ are committed.
 
 Debug builds run foot's unit tests (`UNITTEST` blocks) at startup.
 
+Persistent sessions: the programs run in footd (`macos/footd.c`), a
+daemon foot starts; a window's terminal reads footd's socket instead of
+a PTY (`macos/session.c`), and the windows' layout is kept by footd
+(`macos/session-layout.m`). footd keeps each session's state in foot's
+terminal core without a window (`macos/headless.c`), and sends it to a
+window that attaches (`macos/snapshot.c`). Only foot as the application
+uses sessions; tests enable them with `FOOT_SESSIONS_SOCKET=<path>` (a
+footd of their own). `meson test sessions` checks the snapshots
+(`test-sessions --dump COLS ROWS INPUT` shows a terminal's state),
+`meson test footd` footd itself, `macos/smoke-test.py build/macos
+sessions` the whole thing with windows.
+
 ## Rules
 
 - **Keep upstream merges trivial.** Read `macos/UPSTREAM.md` before
