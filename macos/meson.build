@@ -254,17 +254,19 @@ vtlib = static_library(
   '../vt.c', '../vt.h',
   builtin_terminfo, srgb_funcs,
   version,
-  dependencies: [pixman, fcft, tllist, xkb, utf8proc],
+  dependencies: [pixman, tllist, xkb, utf8proc],
   link_with: [common, misc],
 )
 
+# The terminal core. Without fcft: foot links the CoreText one, footd
+# its stand-ins (macos/headless.c). Its header is in macos/fcft.
 pgolib = static_library(
   'pgolib',
   '../grid.c', '../grid.h',
   '../selection.c', '../selection.h',
   '../terminal.c', '../terminal.h',
   emoji_variation_sequences,
-  dependencies: [pixman, fcft, tllist, xkb, utf8proc],
+  dependencies: [pixman, tllist, xkb, utf8proc],
   link_with: vtlib,
 )
 
@@ -273,6 +275,25 @@ tokenize = static_library(
   '../tokenize.c',
   dependencies: [utf8proc],
   link_with: [common],
+)
+
+# The session daemon's terminals (macos/footd.c): foot's terminal core,
+# without a window; no AppKit, nor CoreText
+footd_core = static_library(
+  'footd-core',
+  '../async.c', '../async.h',
+  '../config.c', '../config.h',
+  '../reaper.c', '../reaper.h',
+  '../slave.c', '../slave.h',
+  '../user-notification.c', '../user-notification.h',
+  'fdm.c', '../fdm.h',
+  'timerfd.c', 'compat/sys/timerfd.h',
+  'default-colors.c', 'default-colors.h',
+  'font-pattern.c', 'font-pattern.h',
+  'headless.c', 'headless.h',
+  'snapshot.c', 'snapshot.h',
+  dependencies: [math, threads, pixman, xkb, utf8proc, tllist],
+  link_with: [pgolib, tokenize],
 )
 
 foot = executable(
@@ -419,6 +440,15 @@ if get_option('tests')
     dependencies: [pixman, xkb, fcft, tllist, utf8proc])
 
   test('config', config_test)
+
+  # Sessions: a terminal's state survives a snapshot (macos/snapshot.c)
+  sessions_test = executable(
+    'test-sessions',
+    'test-sessions.c',
+    link_with: footd_core,
+    dependencies: [math, threads, pixman, xkb, utf8proc, tllist])
+
+  test('sessions', sessions_test)
 endif
 
 summary(
