@@ -61,6 +61,12 @@ class Tests:
         subprocess.run(['xcrun', 'cc', '-O2', '-o', self.tbench,
                         os.path.join(ROOT, 'macos', 'bench', 'tbench.c')], check=True)
 
+        # Runs menu actions in foot, for test_splits
+        self.driver = os.path.join(tmp, 'smoke-driver.dylib')
+        subprocess.run(['xcrun', 'cc', '-dynamiclib', '-fobjc-arc', '-framework', 'AppKit',
+                        '-o', self.driver, os.path.join(ROOT, 'macos', 'smoke-driver.m')],
+                       check=True)
+
     def foot_args(self, *args):
         return [self.foot, f'--config={self.config}', *args]
 
@@ -102,6 +108,105 @@ class Tests:
         with open(out) as f:
             if f.read().split() != ['30', '100']:
                 raise Failure('stty size: not the window size')
+
+    def test_splits(self):
+        """Splits: right and down, zoomed, closed; each pane's terminal size"""
+        tmp = os.path.join(self.tmp, 'splits')
+        os.mkdir(tmp)
+
+        # Each pane's shell reports its size, until the test is done
+        script = os.path.join(tmp, 'pane.sh')
+        with open(script, 'w') as f:
+            f.write(f"""
+                last=
+                while [ ! -e {tmp}/quit ]; do
+                    size=$(stty size)
+                    if [ "$size" != "$last" ]; then
+                        echo "$size" > {tmp}/size.$$.tmp
+                        mv {tmp}/size.$$.tmp {tmp}/size.$$
+                        last=$size
+                    fi
+                    sleep .1
+                done
+            """)
+
+        config = os.path.join(tmp, 'foot.ini')
+        with open(config, 'w') as f:
+            f.write(f'shell=/bin/sh {script}\nlogin-shell=no\nmacos-confirm-close=no\n')
+
+        def sizes():
+            result = {}
+            for name in os.listdir(tmp):
+                if name.startswith('size.') and not name.endswith('.tmp'):
+                    with open(os.path.join(tmp, name)) as f:
+                        rows, cols = f.read().split()
+                    result[name[5:]] = (int(rows), int(cols))
+            return result
+
+        def wait(what, check):
+            deadline = time.time() + TIMEOUT
+            while True:
+                got = sizes()
+                if check(got):
+                    return got
+                if time.time() > deadline or foot.poll() is not None:
+                    raise Failure(f'{what}: the panes\' sizes are {got}')
+                time.sleep(.1)
+
+        def perform(action):
+            with open(os.path.join(tmp, 'action'), 'w') as f:
+                f.write(action)
+
+        def new_pane(got, known):
+            panes = [pane for pane in got if pane not in known]
+            return panes[0] if len(panes) == 1 else None
+
+        env = dict(ENV, DYLD_INSERT_LIBRARIES=self.driver, FOOT_SMOKE_DIR=tmp)
+        foot = subprocess.Popen(
+            [self.foot, f'--config={config}', '--window-size-chars=100x30'],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, env=env)
+
+        try:
+            got = wait('the window', lambda got: list(got.values()) == [(30, 100)])
+            a = next(iter(got))
+
+            # Side by side: halves of the width
+            perform('splitRight:')
+            got = wait('split right', lambda got: (
+                (b := new_pane(got, [a])) is not None and
+                got[a][0] == got[b][0] == 30 and abs(got[a][1] - got[b][1]) <= 1 and
+                90 <= got[a][1] + got[b][1] < 100))
+            b = new_pane(got, [a])
+            a_size, b_size = got[a], got[b]
+
+            # The new pane has the focus: it's split, stacked
+            perform('splitDown:')
+            got = wait('split down', lambda got: (
+                (c := new_pane(got, [a, b])) is not None and got[a] == a_size and
+                got[b][1] == got[c][1] == b_size[1] and abs(got[b][0] - got[c][0]) <= 1 and
+                25 <= got[b][0] + got[c][0] < 30))
+            c = new_pane(got, [a, b])
+
+            # Zoomed: the whole window; the other panes keep their size
+            perform('toggleSplitZoom:')
+            got = wait('zoom', lambda got: got[c] == (30, 100) and got[a] == a_size)
+            perform('toggleSplitZoom:')
+            wait('zoom out', lambda got: got[c][1] == b_size[1] and got[c][0] < 30)
+
+            # Closing the new pane: the one it split gets its space back
+            perform('performClose:')
+            wait('close', lambda got: got[b] == b_size and got[a] == a_size)
+        finally:
+            open(os.path.join(tmp, 'quit'), 'w').close()
+            try:
+                out, _ = foot.communicate(timeout=TIMEOUT)
+            except subprocess.TimeoutExpired:
+                foot.kill()
+                out, _ = foot.communicate()
+
+        if foot.returncode != 0:
+            raise Failure(f'foot: exit code {foot.returncode}\n{out}')
 
     def test_server(self):
         """foot --server, footclient, and the quake terminal"""
