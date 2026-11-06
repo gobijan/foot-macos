@@ -59,6 +59,9 @@
 /* At most this much of a PTY is read at once (then others get a turn) */
 #define READ_BUDGET (1024 * 1024)
 
+/* Output for a window is sent once there's this much (or the PTY is empty) */
+#define FLUSH_THRESHOLD (64 * 1024)
+
 /* An incomplete control sequence is kept up to this size (see update_tail()) */
 #define MAX_TAIL (1024 * 1024)
 
@@ -128,6 +131,13 @@ struct session {
 
     struct attachment *attachment;
     bool killed;
+
+    /*
+     * The window that was attached last: it may still end the session,
+     * once detached (its socket is closed before it says so)
+     */
+    struct client *last_client;
+    uint64_t last_token;
 };
 
 struct client {
@@ -356,15 +366,13 @@ update_tail(struct session *s, const uint8_t *data, size_t len)
 
 static void flush_output(struct attachment *att);
 
-/* What the programs wrote */
+/* What the programs wrote (sent to the window by read_pty()) */
 static void
 output(struct session *s, const uint8_t *data, size_t len)
 {
     struct attachment *att = s->attachment;
-    if (att != NULL) {
+    if (att != NULL)
         bytes_append(&att->output, data, len);
-        flush_output(att);
-    }
 
     if (s->term != NULL) {
         headless_term_feed(s->term, data, len);
@@ -372,33 +380,49 @@ output(struct session *s, const uint8_t *data, size_t len)
     }
 }
 
-/* Reads what's there; returns false at the end */
+/*
+ * Reads what's there; returns false at the end.
+ *
+ * A PTY hands out (at most) 1 KiB per read(). Each is parsed right
+ * away: while footd's terminal parses it, the programs write more (they
+ * would wait for footd otherwise, and footd for them). It's sent to the
+ * window in larger chunks: once the PTY is empty (right away, when
+ * there's little), or there's enough.
+ */
 static bool
 read_pty(struct session *s)
 {
     uint8_t buf[64 * 1024];
     size_t total = 0;
+    bool open = true;
 
     while (total < READ_BUDGET && !s->pty_paused) {
         ssize_t n = read(s->pty, buf, sizeof(buf));
         if (n < 0) {
             if (errno == EINTR)
                 continue;
-            if (errno == EAGAIN)
-                return true;
-
-            /* EIO: the other end is closed */
-            return false;
+            if (errno != EAGAIN) {
+                /* EIO: the other end is closed */
+                open = false;
+            }
+            break;
         }
 
-        if (n == 0)
-            return false;
+        if (n == 0) {
+            open = false;
+            break;
+        }
 
         output(s, buf, n);
         total += n;
+
+        if (s->attachment != NULL && s->attachment->output.len >= FLUSH_THRESHOLD)
+            flush_output(s->attachment);
     }
 
-    return true;
+    if (s->attachment != NULL)
+        flush_output(s->attachment);
+    return open;
 }
 
 static void
@@ -676,6 +700,8 @@ attach(struct session *s, struct client *c, uint64_t token, int fd,
 
 
     s->attachment = att;
+    s->last_client = c;
+    s->last_token = token;
 
     /* The window's size, before its state is taken */
     if (size->cols != s->size.cols || size->rows != s->size.rows ||
@@ -1062,9 +1088,12 @@ handle_message(struct client *c, uint32_t type, struct session_reader *r)
             return false;
 
         /* Not if another window has attached to it meanwhile */
-        struct session *s = attached_session(c, id, token);
-        if (s != NULL)
+        struct session *s = session_find(id);
+        if (s != NULL && !s->killed &&
+            s->last_client == c && s->last_token == token)
+        {
             session_kill(s);
+        }
         return true;
     }
 
@@ -1139,6 +1168,8 @@ client_free(struct client *c)
     tll_foreach(footd.sessions, it) {
         if (it->item->attachment != NULL && it->item->attachment->client == c)
             it->item->attachment->client = NULL;
+        if (it->item->last_client == c)
+            it->item->last_client = NULL;
     }
 
     tll_foreach(footd.clients, it) {
