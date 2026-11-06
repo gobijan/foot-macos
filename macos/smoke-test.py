@@ -8,6 +8,7 @@
 # Usage: smoke-test.py <directory with foot and footclient> [tests...]
 
 import importlib.util
+import json
 import os
 import shutil
 import signal
@@ -210,7 +211,7 @@ class Tests:
             raise Failure(f'foot: exit code {foot.returncode}\n{out}')
 
     def test_sessions(self):
-        """Sessions: in footd; kept, with their splits, when foot quits; ended with their panes"""
+        """Sessions: in footd; kept, with their splits, tabs and quake terminal, when foot quits; ended with their panes"""
         tmp = os.path.join(self.tmp, 'sessions')
         os.mkdir(tmp)
         sock = os.path.join(tmp, 's.sock')
@@ -286,6 +287,15 @@ class Tests:
             with open(os.path.join(tmp, 'action'), 'w') as f:
                 f.write(action)
 
+        def windows(proc):
+            path = os.path.join(tmp, 'windows')
+            if os.path.exists(path):
+                os.unlink(path)
+            perform('windows')
+            wait('the windows', lambda: os.path.exists(path), proc)
+            with open(path) as f:
+                return sorted((w['tabs'], w['panes']) for w in json.load(f))
+
         def finish(proc, what):
             try:
                 out, _ = proc.communicate(timeout=TIMEOUT)
@@ -311,32 +321,52 @@ class Tests:
             wait('a split', lambda: len(shells()) == 2, foot)
             b = [pid for pid in shells() if pid != a][0]
             wait('the split\'s size', lambda: os.path.exists(f'{tmp}/size.{b}') and size(a)[1] < 100, foot)
+
+            # A tab (the tab bar takes some rows), and the quake terminal
+            perform('newWindowForTab:')
+            wait('a tab', lambda: len(shells()) == 3, foot)
+            wait('the tab bar', lambda: size(a)[0] < 30 and size(b)[0] < 30, foot)
             sizes = {a: size(a), b: size(b)}
+            perform('toggleQuakeTerminal:')
+            wait('the quake terminal', lambda: len(shells()) == 4, foot)
+            all_shells = shells()
+            layout = windows(foot)
+            if layout != [(2, 1), (2, 2)]:
+                raise Failure(f'windows (tabs, panes): {layout}')
 
             # Quitting (Cmd+Q) only detaches: the shells keep running
             perform('terminate:')
             finish(foot, 'quitting')
-            if not (alive(a) and alive(b)):
+            if not all(alive(pid) for pid in all_shells):
                 raise Failure('a shell ended when foot quit')
-            if sorted(s['attached'] for s in sessions()) != [False, False]:
+            if [s['attached'] for s in sessions()] != [False] * 4:
                 raise Failure(f'after quitting: {sessions()}')
 
-            # Started again: attached again, split as they were, nothing new started
+            # Started again: attached again, as they were, nothing new started
             foot = start()
-            wait('attached again', lambda: [s['attached'] for s in sessions()] == [True, True], foot)
+            wait('attached again', lambda: sorted(s['attached'] for s in sessions()) == [False, True, True, True], foot)
             time.sleep(1)
-            if shells() != sorted([a, b]):
-                raise Failure(f'new shells: {shells()}')
+            if windows(foot) != layout:
+                raise Failure(f'windows (tabs, panes): {windows(foot)}, were {layout}')
             if {a: size(a), b: size(b)} != sizes:
                 raise Failure(f'sizes {sizes} became {({a: size(a), b: size(b)})}')
 
-            # Closing a pane ends its session; the last one, the window (and foot)
+            # The quake terminal's, once it's shown
+            perform('toggleQuakeTerminal:')
+            wait('the quake terminal attached', lambda: all(s['attached'] for s in sessions()), foot)
+            if shells() != all_shells:
+                raise Failure(f'new shells: {shells()}')
+
+            # Closing a pane ends its session; the last ones, the windows (and foot)
             perform('performClose:')
-            wait('a session ended', lambda: len(sessions()) == 1 and alive(a) != alive(b), foot)
+            wait('a session ended', lambda: len(sessions()) == 3, foot)
+            perform('performCloseWindow:')
+            wait('the window\'s sessions ended', lambda: len(sessions()) == 1, foot)
+            perform('toggleQuakeTerminal:')
             perform('performClose:')
-            finish(foot, 'closing the window')
+            finish(foot, 'closing the windows')
             wait('footd exiting', lambda: not os.path.exists(sock))
-            if alive(a) or alive(b):
+            if any(alive(pid) for pid in all_shells):
                 raise Failure('a shell is still running')
         finally:
             open(os.path.join(tmp, 'quit'), 'w').close()
