@@ -332,6 +332,8 @@ session_protocol = static_library(
 footd = executable(
   'footd',
   'footd.c',
+  'footd-bridge.c', 'footd-bridge.h',
+  'session-mux.c', 'session-mux.h',
   version,
   link_with: [footd_core, session_protocol],
   dependencies: [math, threads, pixman, xkb, utf8proc, tllist],

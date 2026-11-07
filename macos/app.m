@@ -7,6 +7,7 @@
 #import <QuartzCore/QuartzCore.h>
 
 #include <crt_externs.h>
+#include <glob.h>
 #include <libproc.h>
 #include <limits.h>
 #include <locale.h>
@@ -87,6 +88,8 @@ static struct {
     NSMenuItem *quake_item;
 
     NSMenuItem *close_item;
+    NSMenu *window_hosts_menu;  /* Shell > New Window on */
+    NSMenu *tab_hosts_menu;     /* Shell > New Tab on */
 
     FootAppDelegate *delegate;
 } app;
@@ -469,16 +472,31 @@ main_window_cwd(char cwd[static PATH_MAX])
     return win != NULL && term_cwd(win->term, cwd);
 }
 
+/* The main window's focused pane's machine (NULL: this one) */
+static const char *
+main_window_host(void)
+{
+    NSWindow *main = NSApp.mainWindow;
+    if (![main.contentView isKindOfClass:[FootSplitView class]])
+        return NULL;
+
+    const struct wl_window *win = ((FootSplitView *)main.contentView).focused;
+    return win != NULL && win->term != NULL ? session_link_host(win->term->session) : NULL;
+}
+
 void
 app_new_split(struct wl_window *win, enum split_dir dir)
 {
     char cwd[PATH_MAX];
     const bool have_cwd = term_cwd(win->term, cwd);
 
+    /* Where it runs (e.g. on another machine) */
+    sessions_create_next_on(session_link_host(win->term->session));
     app.split_parent = win;
     app.split_dir = dir;
     new_window(have_cwd ? cwd : NULL);
     app.split_parent = NULL;
+    sessions_create_next_on(NULL);
 }
 
 struct wl_window *
@@ -976,6 +994,17 @@ create_menu(void)
 
         [menu addItem:menu_item(@"New Window", @selector(newWindow:), @"n", cmd)];
         [menu addItem:menu_item(@"New Tab", @selector(newWindowForTab:), @"t", cmd)];
+
+        /* On another machine (filled when they're opened) */
+        NSMenuItem *window_on = menu_item(@"New Window on", nil, @"", 0);
+        app.window_hosts_menu = window_on.submenu = [[NSMenu alloc] initWithTitle:@"New Window on"];
+        app.window_hosts_menu.delegate = app.delegate;
+        [menu addItem:window_on];
+        NSMenuItem *tab_on = menu_item(@"New Tab on", nil, @"", 0);
+        app.tab_hosts_menu = tab_on.submenu = [[NSMenu alloc] initWithTitle:@"New Tab on"];
+        app.tab_hosts_menu.delegate = app.delegate;
+        [menu addItem:tab_on];
+
         app.quake_item = menu_item(quake_item_title(), @selector(toggleQuakeTerminal:), @"", 0);
         [menu addItem:app.quake_item];
         [menu addItem:[NSMenuItem separatorItem]];
@@ -1077,25 +1106,232 @@ create_menu(void)
     NSApp.mainMenu = bar;
 }
 
+/*
+ * Other machines, for sessions there (Shell > New Window on, New Tab
+ * on): those in ~/.ssh/config (and its includes), and those used last
+ */
+
+static NSString *const recent_hosts_key = @"RecentHosts";
+#define MAX_RECENT_HOSTS 8
+
+static void
+ssh_config_hosts(const char *path, NSMutableOrderedSet<NSString *> *hosts, int depth)
+{
+    FILE *f = depth < 8 ? fopen(path, "r") : NULL;
+    if (f == NULL)
+        return;
+
+    const char *home = getenv("HOME");
+    char *line = NULL;
+    size_t size = 0;
+
+    while (getline(&line, &size, f) > 0) {
+        char *p = line;
+        char *key = strsep(&p, " \t=");
+        while (key != NULL && key[0] == '\0')
+            key = strsep(&p, " \t=");
+        if (key == NULL || p == NULL)
+            continue;
+
+        const bool host = strcasecmp(key, "Host") == 0;
+        if (!host && strcasecmp(key, "Include") != 0)
+            continue;
+
+        for (char *word; (word = strsep(&p, " \t\r\n")) != NULL;) {
+            if (word[0] == '#')
+                break;
+            if (word[0] == '\0')
+                continue;
+
+            if (host) {
+                /* Patterns aren't machines */
+                if (strpbrk(word, "*?!\"") == NULL)
+                    [hosts addObject:@(word)];
+                continue;
+            }
+
+            /* Relative to ~/.ssh, or the home's */
+            char *pattern = word[0] == '~' && home != NULL
+                ? xasprintf("%s%s", home, word + 1)
+                : word[0] != '/' && home != NULL
+                ? xasprintf("%s/.ssh/%s", home, word) : xstrdup(word);
+
+            glob_t g;
+            if (glob(pattern, 0, NULL, &g) == 0) {
+                for (size_t i = 0; i < g.gl_pathc; i++)
+                    ssh_config_hosts(g.gl_pathv[i], hosts, depth + 1);
+                globfree(&g);
+            }
+            free(pattern);
+        }
+    }
+
+    free(line);
+    fclose(f);
+}
+
+static NSArray<NSString *> *
+known_hosts(void)
+{
+    NSMutableOrderedSet<NSString *> *hosts = [NSMutableOrderedSet orderedSet];
+    NSArray *recent = [NSUserDefaults.standardUserDefaults arrayForKey:recent_hosts_key];
+    for (id host in recent) {
+        if ([host isKindOfClass:[NSString class]])
+            [hosts addObject:host];
+    }
+
+    const char *home = getenv("HOME");
+    if (home != NULL) {
+        char *path = xasprintf("%s/.ssh/config", home);
+        ssh_config_hosts(path, hosts, 0);
+        free(path);
+    }
+    return hosts.array;
+}
+
+static void
+remember_host(NSString *host)
+{
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    NSMutableArray *recent = [NSMutableArray arrayWithObject:host];
+    for (id other in [defaults arrayForKey:recent_hosts_key]) {
+        if ([other isKindOfClass:[NSString class]] && ![other isEqual:host] &&
+            recent.count < MAX_RECENT_HOSTS)
+        {
+            [recent addObject:other];
+        }
+    }
+    [defaults setObject:recent forKey:recent_hosts_key];
+}
+
+/* As for ssh: [user@]host, or a name from ~/.ssh/config (no options) */
+static NSString *
+ask_host(bool tab)
+{
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = tab ? @"New Tab on Another Machine" : @"New Window on Another Machine";
+    alert.informativeText = @"As for ssh: user@host, or a host in ~/.ssh/config. "
+        "foot's footd must be installed there (e.g. ~/.local/bin/footd).";
+    [alert addButtonWithTitle:@"Connect"];
+    [alert addButtonWithTitle:@"Cancel"];
+
+    NSTextField *field = [NSTextField textFieldWithString:@""];
+    field.placeholderString = @"user@host";
+    field.frame = NSMakeRect(0, 0, 260, 24);
+    alert.accessoryView = field;
+    alert.window.initialFirstResponder = field;
+
+    if ([alert runModal] != NSAlertFirstButtonReturn)
+        return nil;
+
+    NSString *host = [field.stringValue stringByTrimmingCharactersInSet:
+        NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (host.length == 0 || [host hasPrefix:@"-"] ||
+        [host rangeOfCharacterFromSet:NSCharacterSet.whitespaceAndNewlineCharacterSet].location != NSNotFound)
+    {
+        return nil;
+    }
+    return host;
+}
+
+/* NULL: this machine */
+static void
+open_on(NSString *host, bool tab)
+{
+    if (host != nil && !sessions_remote_supported()) {
+        NSAlert *alert = [[NSAlert alloc] init];
+        alert.messageText = @"Sessions on other machines need a newer footd";
+        alert.informativeText = @"The footd running now was started by an older foot. "
+            "It keeps running until its sessions have ended: Quit and End Sessions "
+            "(Option+Cmd+Q) ends them, and the next foot starts a new footd.";
+        [alert runModal];
+        return;
+    }
+
+    if (host != nil)
+        remember_host(host);
+
+    sessions_create_next_on(host.UTF8String);
+    if (tab)
+        new_tab(NULL);
+    else
+        new_window(NULL);
+    sessions_create_next_on(NULL);
+}
+
+static void
+fill_hosts_menu(NSMenu *menu, bool tab)
+{
+    [menu removeAllItems];
+
+    NSMenuItem *here = menu_item(@"This Mac", tab ? @selector(newTabOn:) : @selector(newWindowOn:),
+                                 @"", 0);
+    [menu addItem:here];
+    [menu addItem:[NSMenuItem separatorItem]];
+
+    for (NSString *host in known_hosts()) {
+        NSMenuItem *item = menu_item(host, tab ? @selector(newTabOn:) : @selector(newWindowOn:),
+                                     @"", 0);
+        item.representedObject = host;
+        [menu addItem:item];
+    }
+
+    [menu addItem:menu_item(@"Other…", tab ? @selector(newTabOnOther:) : @selector(newWindowOnOther:),
+                            @"", 0)];
+}
+
 @implementation FootAppDelegate
 
-/* In the working directory of the window it's opened from */
+/* In the working directory of the window it's opened from (and on its machine) */
 - (void)newWindow:(id)sender
 {
     char cwd[PATH_MAX];
+    sessions_create_next_on(main_window_host());
     new_window(main_window_cwd(cwd) ? cwd : NULL);
+    sessions_create_next_on(NULL);
 }
 
 /* The tab bar's + button too. Each tab is a window of its own */
 - (void)newWindowForTab:(id)sender
 {
     char cwd[PATH_MAX];
+    sessions_create_next_on(main_window_host());
     new_tab(main_window_cwd(cwd) ? cwd : NULL);
+    sessions_create_next_on(NULL);
+}
+
+- (void)newWindowOn:(NSMenuItem *)sender
+{
+    open_on(sender.representedObject, false);
+}
+
+- (void)newTabOn:(NSMenuItem *)sender
+{
+    open_on(sender.representedObject, true);
+}
+
+- (void)newWindowOnOther:(id)sender
+{
+    NSString *host = ask_host(false);
+    if (host != nil)
+        open_on(host, false);
+}
+
+- (void)newTabOnOther:(id)sender
+{
+    NSString *host = ask_host(true);
+    if (host != nil)
+        open_on(host, true);
 }
 
 /* Close (Cmd+W): a split (see FootSplitView), a tab, or else the window */
 - (void)menuNeedsUpdate:(NSMenu *)menu
 {
+    if (menu == app.window_hosts_menu || menu == app.tab_hosts_menu) {
+        fill_hosts_menu(menu, menu == app.tab_hosts_menu);
+        return;
+    }
+
     app.close_item.title = NSApp.keyWindow.tabbedWindows.count > 1
         ? @"Close Tab" : @"Close";
 }

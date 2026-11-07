@@ -96,6 +96,16 @@ void sessions_detach_all(void);
  */
 void sessions_end_detached(void);
 
+/*
+ * Sessions on other machines (over SSH; footd-bridge.h). The next
+ * session_link_new() runs on 'host' (NULL: here); a window's: where it
+ * runs (NULL: here). An older footd can't have them (it was started by
+ * an older foot, and runs until its sessions have ended).
+ */
+void sessions_create_next_on(const char *host);
+const char *session_link_host(const struct session_link *link);
+bool sessions_remote_supported(void);
+
 /* foot exits: the connection to footd is closed (once the terminals are gone) */
 void sessions_fini(void);
 

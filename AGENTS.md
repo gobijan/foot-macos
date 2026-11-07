@@ -45,7 +45,11 @@ footd of their own). `meson test sessions` checks the snapshots
 sessions` the whole thing with windows. footd builds on Linux too (for
 servers foot reaches over SSH): `macos/meson.build` builds only footd
 there, the core's macOS parts have stand-ins in `macos/compat-linux/`,
-and `make linux` checks it.
+and `make linux` checks it. Sessions on other machines: CREATE has a
+host; footd then runs `ssh HOST footd --bridge` (`macos/footd-bridge.c`)
+and relays the windows' sockets as channels over that stream
+(`macos/session-mux.c`). `meson test footd` covers it with a second
+footd and a script for ssh (`$FOOTD_SSH`).
 
 ## Rules
 

@@ -4,6 +4,9 @@
 # created, detached from, attached to again (getting their state), and
 # ended; footd exits when there's nothing left. No windows involved.
 #
+# Then sessions on another machine: a second footd, behind footd
+# --bridge, that a script stands in for ssh to ($FOOTD_SSH).
+#
 # Usage: test-footd.py <footd>
 
 import os
@@ -19,6 +22,7 @@ VERSION = 1
 
 HELLO, CREATE, ATTACH, RESIZE, KILL, LIST, LAYOUT = range(1, 8)
 WELCOME, STARTED, FAILED, DETACHED, SESSIONS = range(100, 105)
+FEATURE_REMOTE = 1 << 0
 
 TIMEOUT = 20
 
@@ -106,6 +110,8 @@ class Client:
         r = self.expect(WELCOME)
         if r.u32() != VERSION:
             raise Failure('protocol version')
+        r.i32()
+        self.features = r.u32()
 
     def close(self):
         self.sock.close()
@@ -160,19 +166,22 @@ class Window:
         self.ours.close()
 
 
-def create(client, id, token, argv, cols=80, rows=24, cwd='/'):
+def create(client, id, token, argv, cols=80, rows=24, cwd='/', host=None):
     win = Window()
     payload = (u64(id) + u64(token) + size(cols, rows) + string(cwd) +
                string(CONFIG) + string('xterm-256color') + string('/bin/sh') + u8(0) +
                u32(1000) + strv(argv) + strv([f'{k}={v}' for k, v in ENV.items()]))
+    if host is not None:
+        payload += string(host)
     client.send(CREATE, payload, win.give())
     r = client.expect(STARTED)
     win.sent()
     if r.u64() != id or r.u64() != token:
         raise Failure('STARTED for another session')
     pid = r.i32()
-    if pid <= 0:
-        raise Failure('no PID')
+    # On another machine: its PID isn't one here
+    if (pid != 0) if host else (pid <= 0):
+        raise Failure(f'PID {pid}')
     return win, pid
 
 
@@ -209,6 +218,114 @@ def wait_exit(proc):
         return proc.wait(timeout=TIMEOUT)
     except subprocess.TimeoutExpired:
         raise Failure('footd did not exit')
+
+
+def children(pid):
+    out = subprocess.run(['pgrep', '-P', str(pid)], capture_output=True, text=True).stdout
+    return [int(p) for p in out.split()]
+
+
+def test_remote(footd, tmp):
+    """Sessions on another machine: footd --bridge to a second footd, a script for ssh"""
+    remote_path = os.path.join(tmp, 'r.sock')
+    ssh = os.path.join(tmp, 'ssh')
+    with open(ssh, 'w') as f:
+        # ssh's arguments: -T -o BatchMode=yes -- HOST COMMAND
+        f.write('#!/bin/sh\n'
+                '[ "$5" = testhost ] || { echo "host: $5" >&2; exit 1; }\n'
+                'exec "$TEST_FOOTD" --bridge --socket="$TEST_REMOTE" --log-to-stderr\n')
+    os.chmod(ssh, 0o755)
+
+    path = os.path.join(tmp, 'l.sock')
+    env = dict(os.environ, FOOTD_SSH=ssh, TEST_FOOTD=os.path.abspath(footd),
+               TEST_REMOTE=remote_path, REMOTE_MARK='there', HOME=tmp)
+    proc = subprocess.Popen([footd, f'--socket={path}', '--log-to-stderr', '--log-level=warning'],
+                            env=env)
+    try:
+        deadline = time.time() + TIMEOUT
+        while not os.path.exists(path):
+            if time.time() > deadline or proc.poll() is not None:
+                raise Failure('footd did not start')
+            time.sleep(.02)
+
+        c = Client(path)
+        c.hello()
+        if not c.features & FEATURE_REMOTE:
+            raise Failure('no remote sessions (features)')
+
+        # There: the window's size; that machine's environment, not the window's
+        global ENV
+        ENV = dict(ENV, WINDOW_MARK='here')
+        script = ('stty size; echo "w=${WINDOW_MARK:-} r=${REMOTE_MARK:-}"; echo ready; '
+                  'read x; echo "got $x"; read y; echo bye')
+        win, _ = create(c, 100, 1, ['/bin/sh', '-c', script], cols=90, rows=20, host='testhost')
+        out = win.read_until(b'ready')
+        if b'20 90' not in out:
+            raise Failure(f'remote: stty size: {out!r}')
+        if b'w= r=there' not in out:
+            raise Failure(f'remote: environment: {out!r}')
+        win.write(b'foo\n')
+        win.read_until(b'got foo')
+
+        # Detached: it runs on, there; attached again, it has its state
+        win.close()
+        time.sleep(.3)
+        sessions, _ = list_sessions(c)
+        if [(s['id'], s['attached']) for s in sessions] != [(100, False)]:
+            raise Failure(f'remote: after detaching: {sessions}')
+        win = attach(c, 100, 2, cols=90, rows=20)
+        win.read_until(b'got foo')
+        win.write(b'bar\n')
+        win.read_eof()
+        if b'bye' not in win.output:
+            raise Failure(f'remote: the end: {win.output[-200:]!r}')
+        time.sleep(.2)
+        sessions, _ = list_sessions(c)
+        if sessions:
+            raise Failure(f'remote: an ended session is left: {sessions}')
+
+        # The connection is lost: the window stays, is told, and typing connects again
+        win, _ = create(c, 101, 3, ['/bin/sh', '-c', 'echo up; read x; echo "got $x"'],
+                        host='testhost')
+        win.read_until(b'up')
+        for pid in children(proc.pid):
+            os.kill(pid, 9)
+        win.read_until(b'connection to testhost is lost')
+        win.output = b''
+        win.write(b'\n')
+        win.read_until(b'up')       # Its state, anew
+        c.expect(STARTED)
+        win.write(b'again\n')
+        win.read_until(b'got again')
+        win.read_eof()
+
+        # Closing a window (its socket, then KILL) ends its session, there too
+        win, _ = create(c, 102, 4, ['/bin/sh', '-c', 'echo up; sleep 100'], host='testhost')
+        win.read_until(b'up')
+        win.close()
+        c.send(KILL, u64(102) + u64(4))
+        there = Client(remote_path)
+        there.hello()
+        deadline = time.time() + TIMEOUT
+        while list_sessions(there)[0]:
+            if time.time() > deadline:
+                raise Failure(f'remote: not ended there: {list_sessions(there)[0]}')
+            time.sleep(.05)
+        there.close()
+
+        # Without sessions and windows, both footds exit (the remote one: its bridge gone)
+        c.close()
+        if wait_exit(proc) != 0:
+            raise Failure('remote: footd failed')
+        deadline = time.time() + TIMEOUT
+        while os.path.exists(remote_path):
+            if time.time() > deadline:
+                raise Failure('remote: the other footd did not exit')
+            time.sleep(.05)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
 
 
 def main():
@@ -397,6 +514,8 @@ def main():
             raise Failure('footd failed')
         if os.path.exists(path):
             raise Failure('the socket is left behind')
+
+        test_remote(footd, tmp)
 
         print('footd: all tests passed')
         return 0

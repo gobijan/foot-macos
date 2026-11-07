@@ -14,7 +14,14 @@
  *
  * Messages are a header (type, payload size; 32 bits each, little
  * endian) and a payload of fields: integers (little endian), strings
- * (a 32-bit length, and the bytes) and lists of strings.
+ * (a 32-bit length, and the bytes) and lists of strings. Fields added
+ * later come last, and are optional: whoever doesn't know them ignores
+ * them, whoever does reads them if they're there (session_read_more()).
+ *
+ * Sessions on other machines: footd reaches them over SSH, where
+ * `footd --bridge` passes them on to the footd there. That connection
+ * is a stream (no file descriptors): what a window's socket would carry
+ * goes in messages of its own instead, on a channel per socket.
  */
 
 #include <stdbool.h>
@@ -34,7 +41,9 @@ enum session_msg_type {
     SESSION_MSG_HELLO = 1,   /* u32 version, i32 pid */
     SESSION_MSG_CREATE,      /* u64 id, u64 token, size, str cwd, str config path,
                                 str TERM, str shell, u8 login shell, u32 scrollback
-                                lines, strv argv, strv envp; + the window's socket */
+                                lines, strv argv, strv envp, str host (optional:
+                                where it runs, over SSH; empty: here); + the
+                                window's socket */
     SESSION_MSG_ATTACH,      /* u64 id, u64 token, size; + the window's socket */
     SESSION_MSG_RESIZE,      /* u64 id, u64 token, size */
     SESSION_MSG_KILL,        /* u64 id, u64 token (0: not attached; and ID 0: all) */
@@ -42,13 +51,27 @@ enum session_msg_type {
     SESSION_MSG_LAYOUT,      /* blob: the windows' layout, kept for the next one */
 
     /* footd -> window */
-    SESSION_MSG_WELCOME = 100,  /* u32 version, i32 pid */
-    SESSION_MSG_STARTED,        /* u64 id, u64 token, i32 shell PID */
+    SESSION_MSG_WELCOME = 100,  /* u32 version, i32 pid, u32 features (optional) */
+    SESSION_MSG_STARTED,        /* u64 id, u64 token, i32 shell PID (0: on another
+                                   machine), str host (optional: that one) */
     SESSION_MSG_FAILED,         /* u64 id, u64 token, str reason */
     SESSION_MSG_DETACHED,       /* u64 id, u64 token: another window attached */
     SESSION_MSG_SESSIONS,       /* u32 count, {u64 id, u8 attached, i32 shell PID,
                                    str title, str cwd} * count, blob layout */
+
+    /*
+     * Over a stream (footd --bridge), both ways: the windows' sockets, as
+     * channels. A CREATE or ATTACH has the channel announced before it,
+     * instead of a socket.
+     */
+    SESSION_MSG_CHANNEL = 200,  /* u32 channel: the next CREATE or ATTACH's socket */
+    SESSION_MSG_DATA,           /* u32 channel, blob: written to the socket */
+    SESSION_MSG_EOF,            /* u32 channel: the socket is closed */
+    SESSION_MSG_FLOW,           /* u32 channel, u8 paused: (not) to be read for now */
 };
+
+/* WELCOME's features */
+#define SESSION_FEATURE_REMOTE (1u << 0)  /* CREATE's host */
 
 /* A terminal's size: what the PTY gets (TIOCSWINSZ) */
 struct session_size {
@@ -81,6 +104,9 @@ void session_msg_str(struct session_msg *msg, const char *s);
 /* A NULL terminated list (NULL: an empty one) */
 void session_msg_strv(struct session_msg *msg, const char *const *strv);
 void session_msg_blob(struct session_msg *msg, const void *data, size_t len);
+
+/* Bytes as they are: another message's payload, passed on */
+void session_msg_raw(struct session_msg *msg, const void *data, size_t len);
 void session_msg_free(struct session_msg *msg);
 
 /*
@@ -111,6 +137,9 @@ void session_strv_free(char **strv);
 /* Points into the message (not copied) */
 const void *session_read_blob(struct session_reader *r, size_t *len);
 
+/* Whether there's more: optional fields, added later (see above) */
+bool session_read_more(const struct session_reader *r);
+
 /*
  * A connection: buffered, non-blocking, passing file descriptors
  */
@@ -122,6 +151,8 @@ struct session_out_fd {
 
 struct session_conn {
     int fd;
+    int out_fd;   /* The same, unless it's a stream */
+    bool stream;  /* Pipes (e.g. SSH's): no file descriptors */
 
     struct {
         uint8_t *data;
@@ -141,12 +172,15 @@ struct session_conn {
 
 void session_conn_init(struct session_conn *conn, int fd);
 
+/* Over pipes, or any stream: read from 'in_fd', written to 'out_fd' */
+void session_conn_init_stream(struct session_conn *conn, int in_fd, int out_fd);
+
 /* Closes the connection, and any file descriptors not passed on */
 void session_conn_close(struct session_conn *conn);
 
 /*
- * Queues a message (with 'fd', unless -1), and sends what can be sent
- * right away. Returns false on errors.
+ * Queues a message (with 'fd', unless -1; not on a stream), and sends
+ * what can be sent right away. Returns false on errors.
  *
  * 'fd' remains the caller's: it must stay open until the other end has
  * answered. macOS' UNIX socket garbage collection may flush a socket in
@@ -183,6 +217,17 @@ char *session_socket_path(void);
 
 /* The lock taken while connecting to footd, or starting it (and while it exits) */
 char *session_lock_path(const char *socket_path);
+
+/*
+ * Connects to the footd listening on 'path' (creating its folder). With
+ * 'spawn', starting one if there's none: 'spawn' gets a socket that
+ * listens on 'path', for footd's --listen-fd, and returns whether it's
+ * started. Under the lock above. Returns the connection (blocking), or
+ * -1 (errno set).
+ */
+int session_footd_connect(const char *path,
+                          bool (*spawn)(int listen_fd, const char *path, void *data),
+                          void *data);
 
 /*
  * The lock footd holds while it runs: a socket that refuses connections

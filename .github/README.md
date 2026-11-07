@@ -248,6 +248,30 @@ split) ends what runs in it, as before.
   redrawn hundreds of thousands of times a second, `make bench`'s
   `cursor_motion`); typing is just as fast.
 
+### Sessions on other machines
+
+Shell > New Window on (or New Tab on) opens a window whose session runs
+on another machine, over SSH: e.g. a server, or another Mac. It keeps
+running there when the connection is lost (the Mac sleeps, the network
+changes) and when foot quits; the window says so, and connects again
+when you type. After foot restarts, the window is back, as the others.
+
+* The machines offered: those used last, and those in `~/.ssh/config`;
+  Other… asks for one (`user@host`, as for ssh). This Mac: here.
+* New windows, tabs and splits open where the focused terminal runs.
+  The title starts with the machine.
+* foot runs `ssh -T -o BatchMode=yes HOST footd --bridge`: your SSH
+  configuration and keys (the agent) are used, without asking for
+  passwords. One connection per machine, for all its windows.
+* footd must be there: on a Mac, foot.app in `/Applications`; on Linux,
+  `~/.local/bin/footd` (built with `meson setup build && ninja -C build
+  macos/footd`: on Linux, only footd is built), or in `$PATH`.
+* A session there gets that machine's environment (the SSH login's),
+  its user's shell, home and `foot.ini`. `TERM` is foot's, if there's
+  terminfo for it there; else `xterm-256color`.
+* Not there yet: asking before closing a window when something runs in
+  it, and dragging files into it (their paths are this Mac's).
+
 ## Quake terminal
 
 A drop-down terminal: it slides in from an edge of the screen, over

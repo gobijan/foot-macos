@@ -41,6 +41,7 @@
 #include "log.h"
 #include "config.h"
 #include "fdm.h"
+#include "render.h"
 #include "session-protocol.h"
 #include "terminal.h"
 #include "util.h"
@@ -78,6 +79,8 @@ struct session_link {
     char *shell;
     bool login_shell;
     uint32_t scrollback_lines;
+
+    char *host;             /* On another machine (over SSH); NULL: here */
 };
 
 static struct {
@@ -93,6 +96,11 @@ static struct {
     /* sessions_attach_next() */
     uint64_t attach_id;
     bool attach_hold;
+
+    /* sessions_create_next_on() */
+    char *next_host;
+
+    uint32_t features;      /* footd's (WELCOME) */
 
     /* sessions_list(), waiting for footd's answer */
     struct session_list *list;
@@ -178,7 +186,8 @@ handle_message(uint32_t type, struct session_reader *r)
     case SESSION_MSG_WELCOME: {
         const uint32_t version = session_read_u32(r);
         const pid_t pid = session_read_i32(r);
-        LOG_INFO("footd (PID=%d, protocol %u)", pid, version);
+        client.features = session_read_more(r) ? session_read_u32(r) : 0;
+        LOG_INFO("footd (PID=%d, protocol %u, features %#x)", pid, version, client.features);
         break;
     }
 
@@ -186,6 +195,7 @@ handle_message(uint32_t type, struct session_reader *r)
         const uint64_t id = session_read_u64(r);
         const uint64_t token = session_read_u64(r);
         const pid_t pid = session_read_i32(r);
+        char *host = session_read_more(r) ? session_read_str(r) : NULL;
 
         struct session_link *link = r->ok ? find_link(id, token) : NULL;
         if (link != NULL) {
@@ -193,7 +203,16 @@ handle_message(uint32_t type, struct session_reader *r)
             link->started = true;
             link->pid = pid;
             close_footd_fd(link);
+
+            /* Where it runs: e.g. one that's restored, its title says so */
+            if (link->host == NULL && host != NULL && host[0] != '\0') {
+                link->host = host;
+                host = NULL;
+                if (link->term != NULL)
+                    render_refresh_title(link->term);
+            }
         }
+        free(host);
         break;
     }
 
@@ -369,7 +388,7 @@ footd_environment(void)
 
 /* Starts footd, listening on 'listen_fd' (it's a daemon: foot doesn't wait) */
 static bool
-spawn_footd(int listen_fd, const char *socket_path)
+spawn_footd(int listen_fd, const char *socket_path, void *data)
 {
     char *path = footd_path();
     if (path == NULL) {
@@ -424,93 +443,6 @@ spawn_footd(int listen_fd, const char *socket_path)
     return true;
 }
 
-static int
-connect_to(const char *path)
-{
-    struct sockaddr_un addr = {.sun_family = AF_UNIX};
-    if (strlen(path) >= sizeof(addr.sun_path)) {
-        errno = ENAMETOOLONG;
-        return -1;
-    }
-    strcpy(addr.sun_path, path);
-
-    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (fd < 0)
-        return -1;
-
-    if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        int saved = errno;
-        close(fd);
-        errno = saved;
-        return -1;
-    }
-    return fd;
-}
-
-static int
-listen_on(const char *path)
-{
-    struct sockaddr_un addr = {.sun_family = AF_UNIX};
-    strcpy(addr.sun_path, path);
-
-    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (fd < 0)
-        return -1;
-
-    /* Only for the user (the folder is too) */
-    const mode_t umask_before = umask(0077);
-    const bool ok = bind(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0 &&
-        listen(fd, 16) == 0;
-    umask(umask_before);
-
-    if (!ok) {
-        LOG_ERRNO("%s: failed to listen", path);
-        close(fd);
-        return -1;
-    }
-    return fd;
-}
-
-static bool
-create_parent_dir(const char *path)
-{
-    char *dir = xstrdup(path);
-    char *slash = strrchr(dir, '/');
-    if (slash == NULL || slash == dir) {
-        free(dir);
-        return true;
-    }
-    *slash = '\0';
-
-    /* Application Support exists; foot's folder in it may not */
-    bool ok = mkdir(dir, 0700) == 0 || errno == EEXIST;
-    if (!ok)
-        LOG_ERRNO("%s: failed to create", dir);
-    free(dir);
-    return ok;
-}
-
-/*
- * Whether a footd has the socket: it refuses connections when its
- * backlog is full, too (e.g. while it's busy), and then it mustn't be
- * replaced (its sessions would be gone, for windows).
- */
-static bool
-footd_running(const char *socket_path)
-{
-    char *running_path = session_running_path(socket_path);
-    int fd = open(running_path, O_RDONLY | O_CLOEXEC);
-    free(running_path);
-
-    /* None ever ran */
-    if (fd < 0)
-        return false;
-
-    const bool running = flock(fd, LOCK_SH | LOCK_NB) < 0 && errno == EWOULDBLOCK;
-    close(fd);
-    return running;
-}
-
 /*
  * Connects to footd; with 'start', starting it if there's none. Under a
  * lock, that footd also takes when it exits: either it's there (and
@@ -526,36 +458,7 @@ connect_footd(bool start)
     if (path == NULL)
         return false;
 
-    if (!create_parent_dir(path)) {
-        free(path);
-        return false;
-    }
-
-    char *lock_path = session_lock_path(path);
-    int lock = open(lock_path, O_RDWR | O_CREAT | O_CLOEXEC, 0600);
-    free(lock_path);
-    if (lock >= 0 && flock(lock, LOCK_EX) < 0) {
-        close(lock);
-        lock = -1;
-    }
-
-    int fd = connect_to(path);
-    if (fd < 0 && start && (errno == ENOENT || errno == ECONNREFUSED) &&
-        !footd_running(path))
-    {
-        /* None (or it crashed, and left its socket behind) */
-        unlink(path);
-        int listen_fd = listen_on(path);
-        if (listen_fd >= 0) {
-            if (spawn_footd(listen_fd, path))
-                fd = connect_to(path);
-            close(listen_fd);
-        }
-    }
-
-    if (lock >= 0)
-        close(lock);
-
+    int fd = session_footd_connect(path, start ? &spawn_footd : NULL, NULL);
     if (fd < 0) {
         if (start)
             LOG_ERRNO("%s: no sessions (footd)", path);
@@ -601,17 +504,25 @@ session_link_new(struct fdm *fdm, const struct config *conf, const char *cwd,
     client.attach_id = 0;
     client.attach_hold = false;
 
+    char *host = client.next_host;
+    client.next_host = NULL;
+
     /* (A session that's restored is attached to, also without macos-sessions) */
-    if (!client.enabled || (!conf->macos.sessions && attach_id == 0))
+    if (!client.enabled || (!conf->macos.sessions && attach_id == 0 && host == NULL)) {
+        free(host);
         return NULL;
+    }
 
     client.fdm = fdm;
-    if (!connect_footd(true))
+    if (!connect_footd(true)) {
+        free(host);
         return NULL;
+    }
 
     int fds[2];
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, fds) < 0) {
         LOG_ERRNO("failed to create a socket for a session");
+        free(host);
         return NULL;
     }
 
@@ -632,6 +543,7 @@ session_link_new(struct fdm *fdm, const struct config *conf, const char *cwd,
         .id = attach_id,
         .login_shell = conf->login_shell,
         .scrollback_lines = conf->scrollback.lines,
+        .host = host,
     };
 
     while (link->id == 0)
@@ -722,6 +634,7 @@ open_session(struct session_link *link)
         session_msg_u32(&msg, link->scrollback_lines);
         session_msg_strv(&msg, (const char *const *)link->argv);
         session_msg_strv(&msg, (const char *const *)link->envp);
+        session_msg_str(&msg, link->host);
     }
 
     link->sent = true;
@@ -807,7 +720,29 @@ session_link_destroy(struct session_link *link)
     free(link->conf_path);
     free(link->term_env);
     free(link->shell);
+    free(link->host);
     free(link);
+}
+
+const char *
+session_link_host(const struct session_link *link)
+{
+    return link != NULL ? link->host : NULL;
+}
+
+void
+sessions_create_next_on(const char *host)
+{
+    free(client.next_host);
+    client.next_host = host != NULL && host[0] != '\0' ? xstrdup(host) : NULL;
+}
+
+bool
+sessions_remote_supported(void)
+{
+    /* Not connected yet: the footd that's started will be ours */
+    return client.enabled &&
+        (client.conn.fd < 0 || (client.features & SESSION_FEATURE_REMOTE));
 }
 
 pid_t

@@ -12,7 +12,9 @@
 
 #include <limits.h>
 
+#include <sys/file.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/uio.h>
 #include <sys/un.h>
 
@@ -78,6 +80,13 @@ void
 session_msg_blob(struct session_msg *msg, const void *data, size_t len)
 {
     put_le(msg, len, 4);
+    if (len > 0)
+        put(msg, data, len);
+}
+
+void
+session_msg_raw(struct session_msg *msg, const void *data, size_t len)
+{
     if (len > 0)
         put(msg, data, len);
 }
@@ -169,6 +178,12 @@ session_read_blob(struct session_reader *r, size_t *len)
     return data;
 }
 
+bool
+session_read_more(const struct session_reader *r)
+{
+    return r->ok && r->p < r->end;
+}
+
 char *
 session_read_str(struct session_reader *r)
 {
@@ -231,17 +246,28 @@ session_conn_init(struct session_conn *conn, int fd)
 {
     *conn = (struct session_conn){
         .fd = fd,
+        .out_fd = fd,
         .in = {.fds = tll_init()},
         .out = {.fds = tll_init()},
     };
 }
 
 void
+session_conn_init_stream(struct session_conn *conn, int in_fd, int out_fd)
+{
+    session_conn_init(conn, in_fd);
+    conn->out_fd = out_fd;
+    conn->stream = true;
+}
+
+void
 session_conn_close(struct session_conn *conn)
 {
+    if (conn->out_fd >= 0 && conn->out_fd != conn->fd)
+        close(conn->out_fd);
     if (conn->fd >= 0)
         close(conn->fd);
-    conn->fd = -1;
+    conn->fd = conn->out_fd = -1;
 
     tll_foreach(conn->in.fds, it) {
         close(it->item);
@@ -278,9 +304,31 @@ out_consume(struct session_conn *conn, size_t count)
     }
 }
 
+/* A stream: just the bytes */
+static bool
+stream_flush(struct session_conn *conn)
+{
+    while (conn->out.len > 0) {
+        ssize_t sent = write(conn->out_fd, conn->out.data, conn->out.len);
+        if (sent < 0) {
+            if (errno == EINTR)
+                continue;
+            if (errno == EAGAIN)
+                return true;
+            LOG_ERRNO("failed to send");
+            return false;
+        }
+        out_consume(conn, sent);
+    }
+    return true;
+}
+
 bool
 session_conn_flush(struct session_conn *conn)
 {
+    if (conn->stream)
+        return stream_flush(conn);
+
     while (conn->out.len > 0) {
         /*
          * A descriptor goes with the first byte of its message; up to
@@ -345,6 +393,11 @@ session_conn_send(struct session_conn *conn, struct session_msg *msg, int fd)
 {
     finish(msg);
 
+    if (fd >= 0 && conn->stream) {
+        LOG_ERR("a stream can't pass on file descriptors");
+        return false;
+    }
+
     if (fd >= 0) {
         /* Ours is closed once it's sent; the caller's stays (see the header) */
         int copy = fcntl(fd, F_DUPFD_CLOEXEC, 0);
@@ -386,6 +439,27 @@ session_conn_read(struct session_conn *conn, bool *eof)
         if (conn->in.size - conn->in.len < 4096) {
             conn->in.size = conn->in.size > 0 ? conn->in.size * 2 : 16 * 1024;
             conn->in.data = xrealloc(conn->in.data, conn->in.size);
+        }
+
+        if (conn->stream) {
+            ssize_t count = read(conn->fd, &conn->in.data[conn->in.len],
+                                 conn->in.size - conn->in.len);
+            if (count < 0) {
+                if (errno == EINTR)
+                    continue;
+                if (errno == EAGAIN)
+                    return true;
+                LOG_ERRNO("failed to receive");
+                return false;
+            }
+            if (count == 0) {
+                *eof = true;
+                return false;
+            }
+            conn->in.len += count;
+            if (conn->in.len > 1024 * 1024)
+                return true;
+            continue;
         }
 
         struct iovec iov = {
@@ -555,4 +629,138 @@ char *
 session_running_path(const char *socket_path)
 {
     return xasprintf("%s.running", socket_path);
+}
+
+/*
+ * Connecting to footd
+ */
+
+static int
+connect_to(const char *path)
+{
+    struct sockaddr_un addr = {.sun_family = AF_UNIX};
+    if (strlen(path) >= sizeof(addr.sun_path)) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+    strcpy(addr.sun_path, path);
+
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0)
+        return -1;
+
+    if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        int saved = errno;
+        close(fd);
+        errno = saved;
+        return -1;
+    }
+    return fd;
+}
+
+static int
+listen_on(const char *path)
+{
+    struct sockaddr_un addr = {.sun_family = AF_UNIX};
+    strcpy(addr.sun_path, path);
+
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0)
+        return -1;
+
+    /* Only for the user (the folder is too) */
+    const mode_t umask_before = umask(0077);
+    const bool ok = bind(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0 &&
+        listen(fd, 16) == 0;
+    umask(umask_before);
+
+    if (!ok) {
+        LOG_ERRNO("%s: failed to listen", path);
+        close(fd);
+        return -1;
+    }
+    return fd;
+}
+
+/* The socket's folder, and those above it that are missing (only for the user) */
+static bool
+create_parent_dirs(const char *path)
+{
+    char *dir = xstrdup(path);
+    bool ok = true;
+
+    for (char *slash = strchr(dir + 1, '/'); slash != NULL; slash = strchr(slash + 1, '/')) {
+        *slash = '\0';
+        if (mkdir(dir, 0700) < 0 && errno != EEXIST) {
+            LOG_ERRNO("%s: failed to create", dir);
+            ok = false;
+            break;
+        }
+        *slash = '/';
+    }
+
+    free(dir);
+    return ok;
+}
+
+/*
+ * Whether a footd has the socket: it refuses connections when its
+ * backlog is full, too (e.g. while it's busy), and then it mustn't be
+ * replaced (its sessions would be gone, for windows).
+ */
+static bool
+footd_running(const char *socket_path)
+{
+    char *running_path = session_running_path(socket_path);
+    int fd = open(running_path, O_RDONLY | O_CLOEXEC);
+    free(running_path);
+
+    /* None ever ran */
+    if (fd < 0)
+        return false;
+
+    const bool running = flock(fd, LOCK_SH | LOCK_NB) < 0 && errno == EWOULDBLOCK;
+    close(fd);
+    return running;
+}
+
+/*
+ * Under a lock, that footd also takes when it exits: either it's there
+ * (and stays), or it's gone (and the socket with it)
+ */
+int
+session_footd_connect(const char *path,
+                      bool (*spawn)(int listen_fd, const char *path, void *data),
+                      void *data)
+{
+    if (!create_parent_dirs(path))
+        return -1;
+
+    char *lock_path = session_lock_path(path);
+    int lock = open(lock_path, O_RDWR | O_CREAT | O_CLOEXEC, 0600);
+    free(lock_path);
+    if (lock >= 0 && flock(lock, LOCK_EX) < 0) {
+        close(lock);
+        lock = -1;
+    }
+
+    int fd = connect_to(path);
+    if (fd < 0 && spawn != NULL && (errno == ENOENT || errno == ECONNREFUSED) &&
+        !footd_running(path))
+    {
+        /* None (or it crashed, and left its socket behind) */
+        unlink(path);
+        int listen_fd = listen_on(path);
+        if (listen_fd >= 0) {
+            if (spawn(listen_fd, path, data))
+                fd = connect_to(path);
+            close(listen_fd);
+        }
+    }
+
+    const int saved = errno;
+    if (lock >= 0)
+        close(lock);
+    errno = saved;
+    return fd;
 }
