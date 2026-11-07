@@ -1263,9 +1263,13 @@ term_init(const struct config *conf, struct fdm *fdm, struct reaper *reaper,
         goto close_fds;
     }
 
+    /* With a size in cells (e.g. footd's sessions: the window's), that one */
+    const bool cells = conf->size.type == CONF_SIZE_CELLS &&
+                       conf->size.width > 0 && conf->size.height > 0;
     if (isatty(ptmx) &&
         ioctl(ptmx, (unsigned int)TIOCSWINSZ,
-              &(struct winsize){.ws_row = 24, .ws_col = 80}) < 0)
+              &(struct winsize){.ws_row = cells ? conf->size.height : 24,
+                                .ws_col = cells ? conf->size.width : 80}) < 0)
     {
         LOG_ERRNO("failed to set initial TIOCSWINSZ");
         goto close_fds;

@@ -78,6 +78,10 @@ struct bytes {
 static void
 bytes_append(struct bytes *b, const void *data, size_t len)
 {
+    /* (Nothing to append: there may be no buffer yet, memcpy() takes none) */
+    if (len == 0)
+        return;
+
     if (b->len + len > b->size) {
         size_t size = b->size > 0 ? b->size : 16 * 1024;
         while (size < b->len + len)
@@ -688,8 +692,10 @@ attach(struct session *s, struct client *c, uint64_t token, int fd,
     const int buffer_size = 512 * 1024;
     setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &buffer_size, sizeof(buffer_size));
     setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &buffer_size, sizeof(buffer_size));
+#if defined(SO_NOSIGPIPE)  /* (Linux has none: SIGPIPE is ignored anyway) */
     const int on = 1;
     setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, sizeof(on));
+#endif
 
     if (s->attachment != NULL) {
         /* Another window: it's no longer attached (its terminal ends) */
@@ -859,6 +865,13 @@ session_create(uint64_t id, const char *cwd, const char *conf_path,
     /* Nothing is rendered; and holding is the window's business */
     conf->render_worker_count = 0;
     conf->hold_at_exit = false;
+
+    /* What runs in it starts with the window's size (term_init()'s TIOCSWINSZ) */
+    if (size->cols > 0 && size->rows > 0) {
+        conf->size.type = CONF_SIZE_CELLS;
+        conf->size.width = size->cols;
+        conf->size.height = size->rows;
+    }
 
     struct session *s = xmalloc(sizeof(*s));
     *s = (struct session){
@@ -1256,16 +1269,26 @@ accept_client(void)
 
     /* Only the user's own */
     uid_t uid = (uid_t)-1;
+    pid_t pid = -1;
+#if defined(__APPLE__)
     gid_t gid;
-    if (getpeereid(fd, &uid, &gid) < 0 || uid != getuid()) {
+    if (getpeereid(fd, &uid, &gid) < 0)
+        uid = (uid_t)-1;
+    socklen_t len = sizeof(pid);
+    getsockopt(fd, SOL_LOCAL, LOCAL_PEERPID, &pid, &len);
+#else
+    struct ucred cred;
+    socklen_t len = sizeof(cred);
+    if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &len) == 0) {
+        uid = cred.uid;
+        pid = cred.pid;
+    }
+#endif
+    if (uid != getuid()) {
         LOG_WARN("refusing a connection from another user (UID=%d)", (int)uid);
         close(fd);
         return true;
     }
-
-    pid_t pid = -1;
-    socklen_t len = sizeof(pid);
-    getsockopt(fd, SOL_LOCAL, LOCAL_PEERPID, &pid, &len);
 
     if (!set_nonblocking(fd)) {
         close(fd);

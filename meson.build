@@ -8,11 +8,10 @@ project('foot', 'c',
           'werror=true',
           'b_ndebug=if-release'])
 
-# The native macOS port is built by macos/meson.build
-if host_machine.system() == 'darwin'
-  subdir('macos')
-  subdir_done()
-endif
+# The native macOS port is built by macos/meson.build (elsewhere, e.g.
+# on Linux servers: its session daemon, footd, only)
+subdir('macos')
+subdir_done()
 
 is_debug_build = get_option('buildtype').startswith('debug')
 

@@ -1,6 +1,6 @@
 #pragma once
 
-#if defined(__APPLE__)
+#if defined(__APPLE__) || defined(FOOT_HEADLESS)  /* FOOT_HEADLESS: footd on Linux */
  /* The native macOS platform layer; same interface, see macos/wayland.h */
  #include "macos/wayland.h"
 #else

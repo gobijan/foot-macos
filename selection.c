@@ -30,7 +30,7 @@
 #include "vt.h"
 #include "xmalloc.h"
 
-#if !defined(__APPLE__)  /* macOS: see macos/selection-clipboard.c */
+#if !defined(__APPLE__) && !defined(FOOT_HEADLESS)  /* macOS: see macos/selection-clipboard.c */
 static const char *const mime_type_map[] = {
     [DATA_OFFER_MIME_UNSET] = NULL,
     [DATA_OFFER_MIME_TEXT_PLAIN] = "text/plain",
@@ -1656,7 +1656,7 @@ selection_cancel(struct terminal *term)
     search_selection_cancelled(term);
 }
 
-#if !defined(__APPLE__)  /* macOS: see macos/selection-clipboard.c */
+#if !defined(__APPLE__) && !defined(FOOT_HEADLESS)  /* macOS: see macos/selection-clipboard.c */
 bool
 selection_clipboard_has_data(const struct seat *seat)
 {
@@ -1813,7 +1813,7 @@ selection_stop_scroll_timer(struct terminal *term)
     term->selection.auto_scroll.direction = SELECTION_SCROLL_NOT;
 }
 
-#if !defined(__APPLE__)  /* macOS: see macos/selection-clipboard.c */
+#if !defined(__APPLE__) && !defined(FOOT_HEADLESS)  /* macOS: see macos/selection-clipboard.c */
 static void
 target(void *data, struct wl_data_source *wl_data_source, const char *mime_type)
 {

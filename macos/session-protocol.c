@@ -503,12 +503,15 @@ session_socket_path(void)
     if (env != NULL && env[0] != '\0')
         return xstrdup(env);
 
+    const size_t max = sizeof(((struct sockaddr_un *)NULL)->sun_path);
+
+#if defined(__APPLE__)
     /* A socket's path is short (sockaddr_un): else, the temporary folder */
     const char *home = getenv("HOME");
     if (home != NULL && home[0] == '/') {
         char *path = xasprintf("%s/Library/Application Support/foot/sessions-%d.sock",
                                home, SESSION_PROTOCOL_VERSION);
-        if (strlen(path) < sizeof(((struct sockaddr_un *)NULL)->sun_path))
+        if (strlen(path) < max)
             return path;
         free(path);
     }
@@ -518,7 +521,24 @@ session_socket_path(void)
         return NULL;
 
     char *path = xasprintf("%sfoot-sessions-%d.sock", tmp, SESSION_PROTOCOL_VERSION);
-    if (strlen(path) >= sizeof(((struct sockaddr_un *)NULL)->sun_path)) {
+#else
+    /*
+     * Linux: in the state folder, not the runtime one ($XDG_RUNTIME_DIR):
+     * that's removed when the user's last login ends, footd's sessions
+     * outlive it
+     */
+    const char *state = getenv("XDG_STATE_HOME");
+    const char *home = getenv("HOME");
+    char *path;
+    if (state != NULL && state[0] == '/')
+        path = xasprintf("%s/foot/sessions-%d.sock", state, SESSION_PROTOCOL_VERSION);
+    else if (home != NULL && home[0] == '/')
+        path = xasprintf("%s/.local/state/foot/sessions-%d.sock", home, SESSION_PROTOCOL_VERSION);
+    else
+        return NULL;
+#endif
+
+    if (strlen(path) >= max) {
         free(path);
         return NULL;
     }

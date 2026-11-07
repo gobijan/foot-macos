@@ -1,13 +1,13 @@
 #pragma once
 
 #include <stdbool.h>
-#if !defined(__APPLE__)
+#if !defined(__APPLE__) && !defined(FOOT_HEADLESS)
 #include <wayland-client.h>
 #endif
 
 #include "terminal.h"
 
-#if !defined(__APPLE__)
+#if !defined(__APPLE__) && !defined(FOOT_HEADLESS)
 extern const struct wl_data_device_listener data_device_listener;
 extern const struct zwp_primary_selection_device_v1_listener primary_selection_device_listener;
 #endif

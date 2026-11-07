@@ -132,13 +132,20 @@ headless_term_new(const struct config *conf, const char *cwd,
         return NULL;
     }
 
-    /* Writing replies nobody reads (any more) is no reason to die */
+    /* Writing replies nobody reads (any more) is no reason to die
+     * (Linux has no SO_NOSIGPIPE: footd ignores SIGPIPE) */
+#if defined(SO_NOSIGPIPE)
     const int on = 1;
+    const bool no_sigpipe =
+        setsockopt(reply_fds[0], SOL_SOCKET, SO_NOSIGPIPE, &on, sizeof(on)) == 0;
+#else
+    const bool no_sigpipe = true;
+#endif
 
     if (fcntl(reply_fds[0], F_SETFD, FD_CLOEXEC) < 0 ||
         fcntl(reply_fds[1], F_SETFD, FD_CLOEXEC) < 0 ||
         !set_nonblocking(reply_fds[0]) || !set_nonblocking(reply_fds[1]) ||
-        setsockopt(reply_fds[0], SOL_SOCKET, SO_NOSIGPIPE, &on, sizeof(on)) < 0)
+        !no_sigpipe)
     {
         LOG_ERRNO("failed to configure the reply socket");
         close(reply_fds[0]);

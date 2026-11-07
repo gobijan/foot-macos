@@ -3,8 +3,16 @@
 # Included from the top-level meson.build, which is otherwise left as
 # upstream has it (to keep upstream merges trivial). Sources are
 # referenced relative to the project root.
+#
+# On other systems (Linux), only footd is built, and its tests: the
+# session daemon, for machines foot reaches over SSH (e.g. servers).
 
-add_languages('objc', native: false)
+is_macos = host_machine.system() == 'darwin'
+langs = is_macos ? ['c', 'objc'] : ['c']
+
+if is_macos
+  add_languages('objc', native: false)
+endif
 
 root = meson.project_source_root()
 
@@ -14,33 +22,39 @@ cc = meson.get_compiler('c')
 
 # Newer clang versions warns when using __COUNTER__ without -std=c2y
 if cc.has_argument('-Wc2y-extensions')
-  add_project_arguments('-Wno-c2y-extensions', language: ['c', 'objc'])
+  add_project_arguments('-Wno-c2y-extensions', language: langs)
 endif
 
 # Applies to subprojects too; all dependencies are linked statically
 macos_min_version = '14.0'
-add_global_arguments('-mmacosx-version-min=@0@'.format(macos_min_version),
-                     language: ['c', 'objc'])
-add_global_link_arguments('-mmacosx-version-min=@0@'.format(macos_min_version),
-                          language: ['c', 'objc'])
+if is_macos
+  add_global_arguments('-mmacosx-version-min=@0@'.format(macos_min_version),
+                       language: ['c', 'objc'])
+  add_global_link_arguments('-mmacosx-version-min=@0@'.format(macos_min_version),
+                            language: ['c', 'objc'])
+endif
 
 # The profile (macos/pgo.sh) may be older than the sources, and it has
 # the main() of one executable only
 if get_option('b_pgo') == 'use'
   add_global_arguments('-Wno-backend-plugin', '-Wno-profile-instr-out-of-date',
-                       language: ['c', 'objc'])
+                       language: langs)
 endif
 
 # Headers Apple's libc lacks (C11 threads/uchar), plus the handful of
 # Linux constants foot uses as its own vocabulary. See macos/compat/.
-compat_dir = meson.current_source_dir() / 'compat'
+# On Linux, what the terminal core uses of macOS instead (libdispatch's
+# semaphores, timerfd_read()): see macos/compat-linux/. FOOT_HEADLESS:
+# without a window, there's the macOS layer's interface (wayland.h).
+compat_dir = meson.current_source_dir() / (is_macos ? 'compat' : 'compat-linux')
 
 add_project_arguments(
-  ['-D_DARWIN_C_SOURCE',
-   '-I' + compat_dir,
+  (is_macos
+    ? ['-D_DARWIN_C_SOURCE', '-include', compat_dir / 'compat.h']
+    : ['-D_GNU_SOURCE', '-DFOOT_HEADLESS', '-include', compat_dir / 'compat.h']) +
+  ['-I' + compat_dir,
    '-I' + meson.current_source_dir(),
    '-I' + root,
-   '-include', compat_dir / 'compat.h',
    '-DFOOT_DEFAULT_TERM="@0@"'.format(get_option('default-terminfo'))] +
   (is_debug_build
     ? ['-D_DEBUG']
@@ -55,12 +69,14 @@ add_project_arguments(
     ['-pedantic',
      '-fstrict-aliasing',
      '-Wstrict-aliasing']),
-  language: ['c', 'objc'],
+  language: langs,
 )
 
-add_project_arguments(
-  ['-fobjc-arc', '-Wno-gnu-zero-variadic-macro-arguments'],
-  language: 'objc')
+if is_macos
+  add_project_arguments(
+    ['-fobjc-arc', '-Wno-gnu-zero-variadic-macro-arguments'],
+    language: 'objc')
+endif
 
 terminfo_install_location = get_option('custom-terminfo-install-location')
 
@@ -68,7 +84,7 @@ if terminfo_install_location != ''
   add_project_arguments(
     ['-DFOOT_TERMINFO_PATH="@0@"'.format(
       join_paths(get_option('prefix'), terminfo_install_location))],
-    language: ['c', 'objc'])
+    language: langs)
 else
   terminfo_install_location = join_paths(get_option('datadir'), 'terminfo')
 endif
@@ -99,7 +115,7 @@ relative_dir = join_paths(relative_dir_parts) + '/'
 
 if cc.has_argument('-fmacro-prefix-map=/foo=')
   add_project_arguments('-fmacro-prefix-map=@0@='.format(relative_dir),
-                        language: ['c', 'objc'])
+                        language: langs)
 endif
 
 math = cc.find_library('m')
@@ -129,10 +145,17 @@ else
 endif
 
 if utf8proc.found()
-  add_project_arguments('-DFOOT_GRAPHEME_CLUSTERING=1', language: ['c', 'objc'])
+  add_project_arguments('-DFOOT_GRAPHEME_CLUSTERING=1', language: langs)
 endif
 
-add_project_arguments('-DHAVE_PIXMAN_RGBA_16', language: ['c', 'objc'])
+add_project_arguments('-DHAVE_PIXMAN_RGBA_16', language: langs)
+
+# Linux' fdm.c (upstream's), as the top-level meson.build has it
+if not is_macos and cc.has_function('sigabbrev_np',
+                                    args: ['-D_GNU_SOURCE'],
+                                    prefix: '#include <string.h>')
+  add_project_arguments('-DSIGABBREV_NP', language: 'c')
+endif
 
 tllist = dependency('tllist', version: '>=1.1.0', fallback: 'tllist')
 
@@ -157,25 +180,27 @@ xkb = subproject(
     'enable-bash-completion=false',
   ]).get_variable('dep_libxkbcommon')
 
-appkit = dependency(
-  'appleframeworks',
-  modules: ['AppKit', 'Carbon', 'CoreFoundation', 'CoreGraphics',
-            'CoreText', 'IOSurface', 'QuartzCore', 'UserNotifications'])
+if is_macos
+  appkit = dependency(
+    'appleframeworks',
+    modules: ['AppKit', 'Carbon', 'CoreFoundation', 'CoreGraphics',
+              'CoreText', 'IOSurface', 'QuartzCore', 'UserNotifications'])
 
-coretext = dependency(
-  'appleframeworks',
-  modules: ['CoreFoundation', 'CoreGraphics', 'CoreText'])
+  coretext = dependency(
+    'appleframeworks',
+    modules: ['CoreFoundation', 'CoreGraphics', 'CoreText'])
 
-# foot's font API (fcft), implemented natively on CoreText
-fcft = declare_dependency(
-  link_with: static_library(
-    'fcft-coretext',
-    'fcft.c', 'fcft/fcft.h',
-    'font-pattern.c', 'font-pattern.h',
-    dependencies: [pixman, coretext, utf8proc],
-  ),
-  dependencies: [pixman, coretext],
-)
+  # foot's font API (fcft), implemented natively on CoreText
+  fcft = declare_dependency(
+    link_with: static_library(
+      'fcft-coretext',
+      'fcft.c', 'fcft/fcft.h',
+      'font-pattern.c', 'font-pattern.h',
+      dependencies: [pixman, coretext, utf8proc],
+    ),
+    dependencies: [pixman, coretext],
+  )
+endif
 
 env = find_program('env', native: true)
 generate_version_sh = files('../generate-version.sh')
@@ -286,8 +311,7 @@ footd_core = static_library(
   '../reaper.c', '../reaper.h',
   '../slave.c', '../slave.h',
   '../user-notification.c', '../user-notification.h',
-  'fdm.c', '../fdm.h',
-  'timerfd.c', 'compat/sys/timerfd.h',
+  is_macos ? ['fdm.c', 'timerfd.c', 'compat/sys/timerfd.h'] : ['../fdm.c'], '../fdm.h',
   'default-colors.c', 'default-colors.h',
   'font-pattern.c', 'font-pattern.h',
   'headless.c', 'headless.h',
@@ -312,6 +336,26 @@ footd = executable(
   link_with: [footd_core, session_protocol],
   dependencies: [math, threads, pixman, xkb, utf8proc, tllist],
   install: true)
+
+if get_option('tests')
+  # Sessions: a terminal's state survives a snapshot (macos/snapshot.c)
+  sessions_test = executable(
+    'test-sessions',
+    'test-sessions.c',
+    link_with: footd_core,
+    dependencies: [math, threads, pixman, xkb, utf8proc, tllist])
+
+  test('sessions', sessions_test)
+
+  # footd, driven as windows do it
+  test('footd', python, args: ['-I', files('test-footd.py'), footd], timeout: 120)
+endif
+
+# Elsewhere, that's all
+if not is_macos
+  summary({'Build tests': get_option('tests')}, bool_yn: true)
+  subdir_done()
+endif
 
 foot = executable(
   'foot',
@@ -460,18 +504,6 @@ if get_option('tests')
     dependencies: [pixman, xkb, fcft, tllist, utf8proc])
 
   test('config', config_test)
-
-  # Sessions: a terminal's state survives a snapshot (macos/snapshot.c)
-  sessions_test = executable(
-    'test-sessions',
-    'test-sessions.c',
-    link_with: footd_core,
-    dependencies: [math, threads, pixman, xkb, utf8proc, tllist])
-
-  test('sessions', sessions_test)
-
-  # footd, driven as windows do it
-  test('footd', python, args: ['-I', files('test-footd.py'), footd], timeout: 120)
 endif
 
 summary(

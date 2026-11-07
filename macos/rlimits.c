@@ -6,7 +6,9 @@
 
 #include <stdbool.h>
 #include <sys/resource.h>
-#include <sys/syslimits.h>
+#if defined(__APPLE__)
+ #include <sys/syslimits.h>
+#endif
 
 #define LOG_MODULE "rlimits"
 #define LOG_ENABLE_DBG 0
@@ -24,8 +26,12 @@ rlimits_raise_open_files(void)
         return;
     }
 
+#if defined(__APPLE__)
     /* OPEN_MAX: setrlimit() doesn't take more (nor RLIM_INFINITY) */
     const rlim_t wanted = limit.rlim_max < OPEN_MAX ? limit.rlim_max : OPEN_MAX;
+#else
+    const rlim_t wanted = limit.rlim_max;
+#endif
     if (limit.rlim_cur >= wanted)
         return;
 

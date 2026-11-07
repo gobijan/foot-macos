@@ -23,7 +23,7 @@
 #include "util.h"
 #include "xmalloc.h"
 
-#if defined(__APPLE__)
+#if defined(__APPLE__) || defined(FOOT_HEADLESS)
  #include "rlimits.h"
 #endif
 
@@ -302,7 +302,7 @@ slave_exec(int ptmx, char *argv[], char *const envp[], int err_fd,
     } else
         file = argv[0];
 
-#if defined(__APPLE__)
+#if defined(__APPLE__) || defined(FOOT_HEADLESS)
     /* footd's is raised (macos/rlimits.h) */
     rlimits_restore_open_files();
 #endif

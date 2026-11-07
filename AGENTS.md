@@ -12,6 +12,7 @@ make build      # debug build in build/ (configures it the first time)
 make test
 make smoke      # foot in real windows (macos/smoke-test.py)
 make sanitize   # the tests and the smoke test, with ASan and UBSan
+make linux      # footd on Linux: built and tested in a container (macos/linux.sh)
 make run        # ./build/macos/foot
 make release    # optimized build and foot.app in build-release/
 make pgo        # the same, with PGO like releases (macos/pgo.sh; a window opens)
@@ -41,7 +42,10 @@ uses sessions; tests enable them with `FOOT_SESSIONS_SOCKET=<path>` (a
 footd of their own). `meson test sessions` checks the snapshots
 (`test-sessions --dump COLS ROWS INPUT` shows a terminal's state),
 `meson test footd` footd itself, `macos/smoke-test.py build/macos
-sessions` the whole thing with windows.
+sessions` the whole thing with windows. footd builds on Linux too (for
+servers foot reaches over SSH): `macos/meson.build` builds only footd
+there, the core's macOS parts have stand-ins in `macos/compat-linux/`,
+and `make linux` checks it.
 
 ## Rules
 
