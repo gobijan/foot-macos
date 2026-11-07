@@ -22,7 +22,7 @@ set -eu
 echo "linux.sh: installing the build tools ($(uname -m))"
 apt-get update -qq >/dev/null
 apt-get install -y -qq --no-install-recommends \
-    build-essential meson ninja-build pkg-config python3 bison >/dev/null
+    build-essential meson ninja-build pkg-config python3 bison ca-certificates git >/dev/null
 useradd -m build
 
 for variant in release sanitize; do
