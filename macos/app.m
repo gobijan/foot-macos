@@ -961,11 +961,9 @@ create_menu(void)
         [menu addItem:[NSMenuItem separatorItem]];
         [menu addItem:menu_item(@"Quit foot", @selector(terminate:), @"q", cmd)];
 
-        /* With Option: what runs in foot ends too (as without sessions) */
-        NSMenuItem *end = menu_item(@"Quit and End Sessions", @selector(quitEndingSessions:),
-                                    @"q", cmd | NSEventModifierFlagOption);
-        end.alternate = YES;
-        [menu addItem:end];
+        /* What runs in foot ends too (as without sessions) */
+        [menu addItem:menu_item(@"Quit and End Sessions", @selector(quitEndingSessions:),
+                                @"q", cmd | NSEventModifierFlagOption)];
 
         item.submenu = menu;
         [bar addItem:item];

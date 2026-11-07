@@ -222,9 +222,21 @@ app_confirm_quit(bool end_sessions)
         session_list_free(&sessions);
     }
 
+    NSString *list = [NSListFormatter localizedStringByJoiningStrings:processes.array];
+
+    /* Everything ends, the shells too: always asked (unless macos-confirm-close=no) */
+    if (end_sessions) {
+        if (!tll_front(wayl->terms)->conf->macos.confirm_close)
+            return true;
+
+        NSAlert *alert = create_alert(@"Quit foot and end all sessions?",
+                                      processes.count > 0 ? list : @"Everything running in foot",
+                                      @"End Sessions");
+        return [alert runModal] == NSAlertFirstButtonReturn;
+    }
+
     if (processes.count == 0)
         return true;
 
-    NSString *list = [NSListFormatter localizedStringByJoiningStrings:processes.array];
     return [create_alert(@"Quit foot?", list, @"Quit") runModal] == NSAlertFirstButtonReturn;
 }
