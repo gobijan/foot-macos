@@ -264,8 +264,10 @@ when you type. After foot restarts, the window is back, as the others.
   configuration and keys (the agent) are used, without asking for
   passwords. One connection per machine, for all its windows.
 * footd must be there: on a Mac, foot.app in `/Applications`; on Linux,
-  `~/.local/bin/footd` (built with `meson setup build && ninja -C build
-  macos/footd`: on Linux, only footd is built), or in `$PATH`.
+  `~/.local/bin/footd`, or in `$PATH`. `make install-footd
+  HOST=user@host` builds it (in a container, with Docker) and copies it
+  there; or build it there: `meson setup build && ninja -C build
+  macos/footd` (on Linux, only footd is built).
 * A session there gets that machine's environment (the SSH login's),
   its user's shell, home and `foot.ini`. `TERM` is foot's, if there's
   terminfo for it there; else `xterm-256color`.

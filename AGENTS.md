@@ -13,6 +13,7 @@ make test
 make smoke      # foot in real windows (macos/smoke-test.py)
 make sanitize   # the tests and the smoke test, with ASan and UBSan
 make linux      # footd on Linux: built and tested in a container (macos/linux.sh)
+make install-footd HOST=user@host  # footd on a Linux machine, for sessions there
 make run        # ./build/macos/foot
 make release    # optimized build and foot.app in build-release/
 make pgo        # the same, with PGO like releases (macos/pgo.sh; a window opens)

@@ -106,6 +106,11 @@ sanitize: $(SANITIZE_DIR)/build.ninja ## All of the above, with AddressSanitizer
 linux: ## Build footd for Linux and run its tests, in a container (Docker; PLATFORM=linux/amd64)
 	macos/linux.sh $(PLATFORM)
 
+.PHONY: install-footd
+install-footd: ## Install footd on another machine (Linux), for sessions there (HOST=user@host)
+	@test -n "$(HOST)" || { echo 'make install-footd HOST=user@host'; exit 1; }
+	macos/install-footd.sh '$(HOST)'
+
 .PHONY: check-config
 check-config: build ## Check your foot.ini (or CONFIG=path)
 	./$(DEBUG_DIR)/macos/foot --check-config $(if $(CONFIG),--config='$(CONFIG)')
