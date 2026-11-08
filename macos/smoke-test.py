@@ -457,6 +457,16 @@ class Tests:
                 if other is not None and other.poll() is None:
                     other.kill()
                     other.communicate()
+
+            # (Until footd has caught up with its backlog, it refuses connections)
+            def accepting():
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
+                    try:
+                        conn.connect(t.sock)
+                        return True
+                    except ConnectionRefusedError:
+                        return False
+            t.wait('footd accepting again', accepting, foot)
             if os.stat(t.sock).st_ino != inode or [s['pid'] for s in t.sessions()] != [shell]:
                 raise Failure(f'footd was replaced: {t.sessions()}')
 
