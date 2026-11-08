@@ -106,6 +106,16 @@ void sessions_create_next_on(const char *host);
 const char *session_link_host(const struct session_link *link);
 bool sessions_remote_supported(void);
 
+/*
+ * footd is removed from 'host' (where foot installed it, when a window
+ * was opened there): its sessions there end, and their windows close.
+ * 'done' is called once it's done ('error' NULL: removed). False:
+ * footd can't (an older one), or isn't connected.
+ */
+bool sessions_uninstall(const char *host,
+                        void (*done)(const char *host, const char *error, void *data),
+                        void *data);
+
 /* foot exits: the connection to footd is closed (once the terminals are gone) */
 void sessions_fini(void);
 

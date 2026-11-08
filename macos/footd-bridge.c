@@ -63,8 +63,8 @@ static struct {
  * Starting footd
  */
 
-static char *
-own_path(void)
+char *
+footd_own_path(void)
 {
 #if defined(__APPLE__)
     char buf[PATH_MAX];
@@ -81,7 +81,7 @@ own_path(void)
 static bool
 spawn_footd(int listen_fd, const char *socket_path, void *data)
 {
-    char *path = own_path();
+    char *path = footd_own_path();
     if (path == NULL) {
         LOG_ERRNO("failed to find footd's executable");
         return false;

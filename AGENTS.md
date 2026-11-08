@@ -13,7 +13,7 @@ make test
 make smoke      # foot in real windows (macos/smoke-test.py)
 make sanitize   # the tests and the smoke test, with ASan and UBSan
 make linux      # footd on Linux: built and tested in a container (macos/linux.sh)
-make install-footd HOST=user@host  # footd on a Linux machine, for sessions there
+make install-footd HOST=user@host  # footd on a Linux machine by hand (foot.app installs it itself)
 make run        # ./build/macos/foot
 make release    # optimized build and foot.app in build-release/
 make pgo        # the same, with PGO like releases (macos/pgo.sh; a window opens)
@@ -50,7 +50,10 @@ and `make linux` checks it. Sessions on other machines: CREATE has a
 host; footd then runs `ssh HOST footd --bridge` (`macos/footd-bridge.c`)
 and relays the windows' sockets as channels over that stream
 (`macos/session-mux.c`). `meson test footd` covers it with a second
-footd and a script for ssh (`$FOOTD_SSH`).
+footd and a script for ssh (`$FOOTD_SSH`). If footd isn't there, footd
+installs it over SSH (asking in the window first): foot.app has it for
+Linux, linked statically, built by `macos/footd-linux.sh` (Docker; `make
+release` runs it, `make dist` needs it).
 
 ## Rules
 

@@ -90,6 +90,7 @@ static struct {
     NSMenuItem *close_item;
     NSMenu *window_hosts_menu;  /* Shell > New Window on */
     NSMenu *tab_hosts_menu;     /* Shell > New Tab on */
+    NSMenuItem *uninstall_item; /* Shell > Remove footd from (the focused terminal's machine) */
 
     FootAppDelegate *delegate;
 } app;
@@ -1005,6 +1006,11 @@ create_menu(void)
         app.tab_hosts_menu.delegate = app.delegate;
         [menu addItem:tab_on];
 
+        /* Shown in a window on another machine (menuNeedsUpdate:) */
+        app.uninstall_item = menu_item(@"Remove footd…", @selector(removeFootd:), @"", 0);
+        app.uninstall_item.hidden = YES;
+        [menu addItem:app.uninstall_item];
+
         app.quake_item = menu_item(quake_item_title(), @selector(toggleQuakeTerminal:), @"", 0);
         [menu addItem:app.quake_item];
         [menu addItem:[NSMenuItem separatorItem]];
@@ -1210,8 +1216,9 @@ ask_host(bool tab)
 {
     NSAlert *alert = [[NSAlert alloc] init];
     alert.messageText = tab ? @"New Tab on Another Machine" : @"New Window on Another Machine";
-    alert.informativeText = @"As for ssh: user@host, or a host in ~/.ssh/config. "
-        "foot's footd must be installed there (e.g. ~/.local/bin/footd).";
+    alert.informativeText = @"As for ssh: user@host, or a host in ~/.ssh/config, "
+        "with your SSH key. foot needs its footd there: if it's missing, the window "
+        "offers to install it (~/.local/bin/footd, no sudo).";
     [alert addButtonWithTitle:@"Connect"];
     [alert addButtonWithTitle:@"Cancel"];
 
@@ -1334,6 +1341,62 @@ fill_hosts_menu(NSMenu *menu, bool tab)
 
     app.close_item.title = NSApp.keyWindow.tabbedWindows.count > 1
         ? @"Close Tab" : @"Close";
+
+    const char *host = main_window_host();
+    app.uninstall_item.hidden = host == NULL;
+    if (host != NULL) {
+        app.uninstall_item.title = [NSString stringWithFormat:@"Remove footd from %s…", host];
+        app.uninstall_item.representedObject = @(host);
+    }
+}
+
+/* footd has answered (in its connection's callback: the alert comes after) */
+static void
+footd_uninstalled(const char *host, const char *error, void *data)
+{
+    NSString *h = @(host);
+    NSString *e = error != NULL ? @(error) : nil;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSAlert *alert = [[NSAlert alloc] init];
+        alert.messageText = e == nil
+            ? [NSString stringWithFormat:@"footd was removed from %@", h]
+            : [NSString stringWithFormat:@"Failed to remove footd from %@", h];
+        alert.informativeText = e == nil
+            ? @"A new window there installs it again (after asking)." : e;
+        if (e != nil)
+            alert.alertStyle = NSAlertStyleWarning;
+        [alert runModal];
+    });
+}
+
+/*
+ * Shell > Remove footd from: footd is removed from the focused
+ * terminal's machine (where foot installed it); its sessions there end
+ */
+- (void)removeFootd:(NSMenuItem *)sender
+{
+    NSString *host = sender.representedObject;
+    if (host == nil)
+        return;
+
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = [NSString stringWithFormat:@"Remove footd from %@?", host];
+    alert.informativeText = @"foot's footd (~/.local/bin/footd) is removed there. All "
+        "sessions there end, also those of other computers, and their windows close.";
+    alert.alertStyle = NSAlertStyleWarning;
+    [alert addButtonWithTitle:@"Remove"];
+    [alert addButtonWithTitle:@"Cancel"];
+    if ([alert runModal] != NSAlertFirstButtonReturn)
+        return;
+
+    if (!sessions_uninstall(host.UTF8String, &footd_uninstalled, NULL)) {
+        NSAlert *old = [[NSAlert alloc] init];
+        old.messageText = @"Removing footd needs a newer footd";
+        old.informativeText = @"The footd running now was started by an older foot. "
+            "It keeps running until its sessions have ended: Quit and End Sessions "
+            "(Option+Cmd+Q) ends them, and the next foot starts a new footd.";
+        [old runModal];
+    }
 }
 
 /* The Dock's menu isn't a window's: in the home directory */

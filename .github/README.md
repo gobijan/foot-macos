@@ -270,12 +270,17 @@ is sent while the windows are idle.
   The title starts with the machine.
 * foot runs `ssh -T -o BatchMode=yes HOST footd --bridge`: your SSH
   configuration and keys (the agent) are used, without asking for
-  passwords. One connection per machine, for all its windows.
-* footd must be there: on a Mac, foot.app in `/Applications`; on Linux,
-  `~/.local/bin/footd`, or in `$PATH`. `make install-footd
-  HOST=user@host` builds it (in a container, with Docker) and copies it
-  there; or build it there: `meson setup build && ninja -C build
-  macos/footd` (on Linux, only footd is built).
+  passwords. One connection per machine, for all its windows. A
+  machine's key is trusted the first time (added to
+  `~/.ssh/known_hosts`), not when it has changed.
+* footd must be there. If it isn't, the window offers to install it:
+  Enter copies it to `~/.local/bin/footd` there (one file, no sudo).
+  foot.app has it for Linux (x86_64 and aarch64, linked statically: any
+  distribution) and macOS. An older one there is replaced without
+  asking. Also used: foot.app in `/Applications` (on a Mac), and footd
+  in `$PATH`.
+* Shell > Remove footd from (in a window on that machine) removes it
+  again; the sessions there end.
 * A session there gets that machine's environment (the SSH login's),
   its user's shell, home and `foot.ini`. `TERM` is foot's, if there's
   terminfo for it there; else `xterm-256color`.

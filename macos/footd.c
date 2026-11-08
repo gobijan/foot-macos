@@ -24,6 +24,7 @@
 #include <getopt.h>
 #include <locale.h>
 #include <signal.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -44,6 +45,8 @@
 #include <sys/stat.h>
 #include <sys/timerfd.h>
 #include <sys/un.h>
+#include <sys/utsname.h>
+#include <sys/wait.h>
 
 #if defined(__APPLE__)
  /* The system's, not foot's notify.h (as spawn.h above) */
@@ -187,6 +190,19 @@ struct remote {
     unsigned tries;             /* To connect again (since it was lost) */
     int64_t tried_at;           /* When it connected last */
     int timer;                  /* A check's timeout, or the next try; -1: none yet */
+
+    /*
+     * footd isn't there, or is too old (the remote command says so): it's
+     * installed once a window says so, or right away to replace an old one
+     */
+    char *install;              /* "SYSTEM MACHINE" (uname); NULL: not needed (as far as known) */
+    bool outdated;              /* There's one, too old */
+    bool asking;                /* The windows ask whether to install it */
+    pid_t installer;            /* ssh, installing it; 0: none */
+
+    /* UNINSTALL: ssh removing it, and the window's client that asked (NULL: gone) */
+    pid_t uninstaller;
+    struct client *uninstalling;
 };
 
 struct remote_session {
@@ -1018,11 +1034,41 @@ session_kill(struct session *s)
  * nothing came for a while. Nothing is sent while it's idle.
  */
 
-/* Run by ssh on the other machine: where footd is, as a user installs it */
-static const char remote_command[] =
-    "sh -c 'for f in \"$HOME/.local/bin/footd\" "
-    "/Applications/foot.app/Contents/MacOS/footd; do "
-    "[ -x \"$f\" ] && exec \"$f\" --bridge; done; exec footd --bridge'";
+/*
+ * Run by ssh on the other machine: footd --bridge, where a user installs
+ * footd, unless it's older than this one's bridge (FOOTD_BRIDGE_LEVEL).
+ * Else it says so (INSTALL_MARK, uname, and the old one's path or
+ * "none"), and fails: footd is installed (remote_install()).
+ */
+#define INSTALL_MARK "footd-install: "
+
+static char *
+remote_command(void)
+{
+    return xasprintf(
+        "sh -c 'for f in \"$HOME/.local/bin/footd\" "
+        "/Applications/foot.app/Contents/MacOS/footd $(command -v footd); do "
+        "[ -x \"$f\" ] || continue; "
+        "[ \"$(\"$f\" --bridge-level 2>/dev/null)\" -ge %d ] 2>/dev/null && exec \"$f\" --bridge; "
+        "old=$f; done; "
+        "echo \"" INSTALL_MARK "$(uname -s) $(uname -m) ${old:-none}\" >&2; exit 3'",
+        FOOTD_BRIDGE_LEVEL);
+}
+
+/* footd (stdin) to ~/.local/bin/footd, if it runs there */
+static const char install_command[] =
+    "sh -c 'umask 022; d=\"$HOME/.local/bin\"; mkdir -p \"$d\" && "
+    "cat >\"$d/footd.new\" && chmod 755 \"$d/footd.new\" && "
+    "\"$d/footd.new\" --bridge-level >/dev/null && mv -f \"$d/footd.new\" \"$d/footd\" || "
+    "{ rm -f \"$d/footd.new\"; exit 1; }'";
+
+/* ~/.local/bin/footd is removed, and its sessions end (footd's, and the bridges') */
+static const char uninstall_command[] =
+    "sh -c 'f=\"$HOME/.local/bin/footd\"; "
+    "[ -e \"$f\" ] || { echo \"there is no ~/.local/bin/footd\" >&2; exit 1; }; "
+    "pkill -TERM -u \"$(id -u)\" -f \"/[.]local/bin/footd( |$)\"; rm -f \"$f\"; "
+    "s=\"${XDG_STATE_HOME:-$HOME/.local/state}/foot\"; rm -f \"$s\"/sessions-*; "
+    "rmdir \"$s\" 2>/dev/null; exit 0'";
 
 /* A check is answered within this (milliseconds), or the connection is lost */
 #define CHECK_TIMEOUT 5000
@@ -1049,6 +1095,7 @@ static const int retry_after[] = {1000, 4000, 10000, 20000, 30000, 60000};
 
 static void remote_disconnected(struct remote *r);
 static bool remote_connect(struct remote *r);
+static void remote_install_needed(struct remote *r);
 
 static int64_t
 now_ms(void)
@@ -1174,6 +1221,8 @@ remote_send(struct remote *r, struct session_msg *msg)
 
 static bool fdm_disconnected_window(struct fdm *fdm, int fd, int events, void *data);
 static void notify_disconnected(struct remote_session *rs);
+static void ask_install(struct remote_session *rs);
+static void remote_install(struct remote *r);
 
 /* The window's socket 'fd' (taken) is kept, until it's connected again */
 static void
@@ -1182,6 +1231,8 @@ keep_disconnected(struct remote_session *rs, int fd)
     rs->channel = 0;
     rs->fd = fd;
     notify_disconnected(rs);
+    if (rs->remote->asking)
+        ask_install(rs);
     if (!fdm_add(footd.fdm, fd, EPOLLIN, &fdm_disconnected_window, rs)) {
         close(fd);
         rs->fd = -1;
@@ -1254,35 +1305,69 @@ fdm_disconnected_window(struct fdm *fdm, int fd, int events, void *data)
         return true;
     }
 
-    rs->remote->tries = 0;
-    remote_reconnect(rs->remote);
+    /* Installing footd there: Enter, once asked; meanwhile, nothing */
+    struct remote *r = rs->remote;
+    if (r->asking) {
+        if (memchr(buf, '\r', n) != NULL || memchr(buf, '\n', n) != NULL)
+            remote_install(r);
+        return true;
+    }
+    if (r->installer > 0 || r->uninstaller > 0)
+        return true;
+
+    r->tries = 0;
+    remote_reconnect(r);
     return true;
 }
 
-/* Tells the window (disconnected): the connection is lost, or it can't connect (and why) */
-static void
-tell_window(struct remote_session *rs, bool lost, const char *then)
+/* Tells a window that's disconnected (a line of its own) */
+static void PRINTF(2)
+tell_window(struct remote_session *rs, const char *fmt, ...)
 {
-    const struct remote *r = rs->remote;
-    char *text = lost
-        ? xasprintf("\r\n\033[0;7m foot: the connection to %s is lost; %s \033[m\r\n",
-                    r->host, then)
-        : xasprintf("\r\n\033[0;7m foot: can't connect to %s%s%s; %s \033[m\r\n",
-                    r->host, r->error != NULL ? ": " : "",
-                    r->error != NULL ? r->error : "", then);
+    va_list va;
+    va_start(va, fmt);
+    char *what = xvasprintf(fmt, va);
+    va_end(va);
+
+    char *text = xasprintf("\r\n\033[0;7m foot: %s \033[m\r\n", what);
     if (write(rs->fd, text, strlen(text)) < 0)
-        LOG_ERRNO("%s: failed to tell a window", r->host);
+        LOG_ERRNO("%s: failed to tell a window", rs->remote->host);
     free(text);
+    free(what);
 }
 
-/* Once, until it's attached again */
+/* Tells the windows that wait for it */
+static void PRINTF(2)
+tell_windows(struct remote *r, const char *fmt, ...)
+{
+    va_list va;
+    va_start(va, fmt);
+    char *what = xvasprintf(fmt, va);
+    va_end(va);
+
+    tll_foreach(footd.remote_sessions, it) {
+        if (it->item->remote == r && it->item->fd >= 0)
+            tell_window(it->item, "%s", what);
+    }
+    free(what);
+}
+
+/* Why it can't connect, as ssh said: ": ERROR", or "" (for "%s%s") */
+#define WHY(r) (r)->error != NULL ? ": " : "", (r)->error != NULL ? (r)->error : ""
+
+/* Once, until it's attached again (not while footd is to be installed there: that's asked) */
 static void
 notify_disconnected(struct remote_session *rs)
 {
-    if (rs->told)
+    const struct remote *r = rs->remote;
+    if (rs->told || r->install != NULL || r->installer > 0)
         return;
     rs->told = true;
-    tell_window(rs, rs->started, rs->started ? "connecting again…" : "trying again…");
+
+    if (rs->started)
+        tell_window(rs, "the connection to %s is lost; connecting again…", r->host);
+    else
+        tell_window(rs, "can't connect to %s%s%s; trying again…", r->host, WHY(r));
 }
 
 /* From the other footd */
@@ -1464,11 +1549,7 @@ remote_retry(struct remote *r)
         return;
     }
 
-    tll_foreach(footd.remote_sessions, it) {
-        struct remote_session *rs = it->item;
-        if (rs->remote == r && rs->fd >= 0)
-            tell_window(rs, false, "type to try again");
-    }
+    tell_windows(r, "can't connect to %s%s%s; type to try again", r->host, WHY(r));
 }
 
 /* The connection is lost (or couldn't be made): its windows are told, and kept */
@@ -1509,7 +1590,11 @@ remote_disconnected(struct remote *r)
     if (r->ssh > 0)
         kill(r->ssh, SIGTERM);
 
-    remote_retry(r);
+    /* footd isn't there (or is too old): not tried again, but installed */
+    if (r->install != NULL)
+        remote_install_needed(r);
+    else
+        remote_retry(r);
 }
 
 static void
@@ -1518,6 +1603,264 @@ ssh_exited(struct reaper *reaper, pid_t pid, int status, void *data)
     struct remote *r = data;
     if (r->ssh == pid)
         r->ssh = 0;
+}
+
+/*
+ * Installing footd there (the remote command said it isn't, or is too
+ * old: 'install'). It's copied over SSH, to ~/.local/bin/footd: foot.app
+ * has it for Linux (x86_64, aarch64; linked statically), and for macOS
+ * (this footd, which is universal). Replacing an old one isn't asked;
+ * else the windows ask first.
+ */
+
+/* footd for 'install' ("SYSTEM MACHINE", as uname says), or NULL ('*error') */
+static char *
+footd_for(const char *install, const char **error)
+{
+    char system[32], machine[32];
+    if (sscanf(install, "%31s %31s", system, machine) != 2) {
+        *error = "unknown system";
+        return NULL;
+    }
+
+    const char *arch =
+        strcmp(machine, "x86_64") == 0 || strcmp(machine, "amd64") == 0 ? "x86_64" :
+        strcmp(machine, "aarch64") == 0 || strcmp(machine, "arm64") == 0 ? "aarch64" : NULL;
+    if (arch == NULL || (strcmp(system, "Linux") != 0 && strcmp(system, "Darwin") != 0)) {
+        *error = "foot has no footd for it";
+        return NULL;
+    }
+
+    char *self = footd_own_path();
+    if (self == NULL) {
+        *error = "this footd's executable isn't found";
+        return NULL;
+    }
+
+    /* This one, for a machine like this one (on macOS: universal) */
+    struct utsname here;
+    if (uname(&here) == 0 && strcmp(here.sysname, system) == 0 &&
+        (strcmp(system, "Darwin") == 0 ||
+         strcmp(here.machine, machine) == 0 ||
+         (strcmp(arch, "aarch64") == 0 && strcmp(here.machine, "arm64") == 0)))
+    {
+        return self;
+    }
+
+    /* foot.app's: Contents/Resources (this one is in Contents/MacOS) */
+    char *slash = strrchr(self, '/');
+    if (slash != NULL)
+        *slash = '\0';
+    char *path = xasprintf("%s/../Resources/footd-%s-%s", self,
+                           strcmp(system, "Linux") == 0 ? "linux" : "macos", arch);
+    free(self);
+
+    if (access(path, R_OK) < 0) {
+        *error = "this foot has no footd for it (foot.app has, when built with Docker)";
+        free(path);
+        return NULL;
+    }
+    return path;
+}
+
+/* The windows ask (Enter installs it: fdm_disconnected_window()) */
+static void
+ask_install(struct remote_session *rs)
+{
+    const struct remote *r = rs->remote;
+    tell_window(rs, "foot's footd isn't on %s (%s) yet. Press Enter to install it: "
+                "one file, ~/.local/bin/footd, no sudo. Or close this window.",
+                r->host, r->install);
+}
+
+static void
+remote_install_needed(struct remote *r)
+{
+    timer_set(r->timer, 0);
+
+    /* Nobody waits for it (any more) */
+    if (!remote_awaited(r)) {
+        free(r->install);
+        r->install = NULL;
+        return;
+    }
+
+    if (r->outdated) {
+        remote_install(r);
+        return;
+    }
+
+    r->asking = true;
+    tll_foreach(footd.remote_sessions, it) {
+        if (it->item->remote == r && it->item->fd >= 0)
+            ask_install(it->item);
+    }
+}
+
+static pid_t spawn_ssh(struct remote *r, int in, int out, const char *command,
+                       reaper_cb exited);
+
+/* ssh has installed it (or failed to): connected, for the windows */
+static void
+installer_exited(struct reaper *reaper, pid_t pid, int status, void *data)
+{
+    struct remote *r = data;
+    if (r->installer != pid)
+        return;
+
+    r->installer = 0;
+    ssh_log_read(r);
+    free(r->install);
+    r->install = NULL;
+
+    if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+        LOG_INFO("%s: footd installed", r->host);
+        if (remote_awaited(r))
+            remote_connect(r);
+        return;
+    }
+
+    LOG_WARN("%s: failed to install footd", r->host);
+    tell_windows(r, "failed to install footd on %s%s%s; type to try again", r->host, WHY(r));
+}
+
+static void
+remote_install(struct remote *r)
+{
+    r->asking = false;
+
+    const char *error = NULL;
+    char *path = footd_for(r->install, &error);
+    const int fd = path != NULL ? open(path, O_RDONLY | O_CLOEXEC) : -1;
+    if (fd < 0) {
+        if (error == NULL)
+            error = strerror(errno);
+        LOG_ERR("%s: can't install footd (%s): %s", r->host, r->install, error);
+        tell_windows(r, "can't install footd on %s (%s): %s; type to try again",
+                     r->host, r->install, error);
+        free(path);
+        free(r->install);
+        r->install = NULL;
+        return;
+    }
+
+    LOG_INFO("%s: installing %s", r->host, path);
+    tell_windows(r, "%s footd on %s…", r->outdated ? "updating" : "installing", r->host);
+
+    free(r->error);
+    r->error = NULL;
+    const int null = open("/dev/null", O_WRONLY | O_CLOEXEC);
+    r->installer = spawn_ssh(r, fd, null, install_command, &installer_exited);
+    close(fd);
+    if (null >= 0)
+        close(null);
+    free(path);
+
+    if (r->installer == 0) {
+        free(r->install);
+        r->install = NULL;
+        tell_windows(r, "failed to install footd on %s; type to try again", r->host);
+    }
+}
+
+/* UNINSTALL's answer ('error' NULL: it's removed) */
+static void
+send_uninstalled(struct client *c, const char *host, const char *error)
+{
+    struct session_msg msg = {0};
+    session_msg_begin(&msg, SESSION_MSG_UNINSTALLED);
+    session_msg_str(&msg, host);
+    session_msg_str(&msg, error);
+    client_send(c, &msg, -1);
+    session_msg_free(&msg);
+}
+
+static void
+uninstaller_exited(struct reaper *reaper, pid_t pid, int status, void *data)
+{
+    struct remote *r = data;
+    if (r->uninstaller != pid)
+        return;
+
+    r->uninstaller = 0;
+    ssh_log_read(r);
+
+    const bool ok = WIFEXITED(status) && WEXITSTATUS(status) == 0;
+    if (ok)
+        LOG_INFO("%s: footd removed", r->host);
+    else
+        LOG_WARN("%s: failed to remove footd", r->host);
+
+    if (r->uninstalling != NULL) {
+        send_uninstalled(r->uninstalling, r->host,
+                         ok ? NULL : r->error != NULL ? r->error : "failed");
+    }
+    r->uninstalling = NULL;
+
+    /* Windows opened there meanwhile: connected (footd is installed again, once asked) */
+    if (remote_awaited(r))
+        remote_connect(r);
+}
+
+/* UNINSTALL: footd is removed there, its sessions end, and their windows here close */
+static void
+remote_uninstall(struct remote *r, struct client *c)
+{
+    if (r->uninstaller > 0) {
+        send_uninstalled(c, r->host, "it's being removed already");
+        return;
+    }
+
+    LOG_INFO("%s: removing footd", r->host);
+
+    tll_foreach(footd.remote_sessions, it) {
+        struct remote_session *rs = it->item;
+        if (rs->remote != r)
+            continue;
+        if (rs->client != NULL)
+            send_failed(rs->client, rs->id, rs->token, "footd was removed there");
+        remote_session_free(rs);
+    }
+
+    /* Nothing goes on there any more */
+    timer_set(r->timer, 0);
+    session_mux_destroy(r->mux);
+    r->mux = NULL;
+    if (r->ssh > 0)
+        kill(r->ssh, SIGTERM);
+    if (r->installer > 0)
+        kill(r->installer, SIGTERM);
+    r->connected = r->checking = r->asking = false;
+    free(r->install);
+    r->install = NULL;
+    free(r->error);
+    r->error = NULL;
+
+    const int null = open("/dev/null", O_RDWR | O_CLOEXEC);
+    r->uninstaller = spawn_ssh(r, null, null, uninstall_command, &uninstaller_exited);
+    if (null >= 0)
+        close(null);
+
+    if (r->uninstaller > 0)
+        r->uninstalling = c;
+    else
+        send_uninstalled(c, r->host, "failed to run ssh");
+}
+
+/* The remote command says footd isn't there, or is too old: "SYSTEM MACHINE OLD" (or "none") */
+static void
+install_mark(struct remote *r, const char *what)
+{
+    LOG_INFO("%s: footd: %s", r->host, what);
+
+    const char *old = strrchr(what, ' ');
+    free(r->install);
+    r->install = old != NULL ? xstrndup(what, old - what) : xstrdup(what);
+    r->outdated = old != NULL && strcmp(old + 1, "none") != 0;
+
+    /* (Said after the connection was gone) */
+    if (r->mux == NULL && r->installer == 0 && !r->asking)
+        remote_install_needed(r);
 }
 
 /* ssh's errors, in the log; the last one is kept (e.g. why it couldn't connect) */
@@ -1534,6 +1877,10 @@ ssh_log_read(struct remote *r)
             continue;
         buf[n] = '\0';
         for (char *line = strtok(buf, "\r\n"); line != NULL; line = strtok(NULL, "\r\n")) {
+            if (strncmp(line, INSTALL_MARK, strlen(INSTALL_MARK)) == 0) {
+                install_mark(r, line + strlen(INSTALL_MARK));
+                continue;
+            }
             LOG_WARN("%s: %s", r->host, line);
             free(r->error);
             r->error = xstrdup(line);
@@ -1553,14 +1900,22 @@ fdm_ssh_log(struct fdm *fdm, int fd, int events, void *data)
     return true;
 }
 
-/* ssh to the other machine, running footd --bridge: its stdin and stdout are 'stream' */
-static bool
-spawn_ssh(struct remote *r, int stream)
+/*
+ * ssh to the other machine, running 'command' with 'in' and 'out' (its
+ * stderr is logged: ssh_log_read()). New hosts are trusted the first
+ * time (their key is added to ~/.ssh/known_hosts), as ssh asks then;
+ * not if their key has changed. 0: failed.
+ */
+static pid_t
+spawn_ssh(struct remote *r, int in, int out, const char *command, reaper_cb exited)
 {
+    if (in < 0 || out < 0)
+        return 0;
+
     int log[2];
     if (pipe(log) < 0) {
         LOG_ERRNO("%s: failed to create a pipe", r->host);
-        return false;
+        return 0;
     }
     fcntl(log[0], F_SETFD, FD_CLOEXEC);
     fcntl(log[1], F_SETFD, FD_CLOEXEC);
@@ -1571,14 +1926,14 @@ spawn_ssh(struct remote *r, int stream)
         ssh = "ssh";
 
     char *const argv[] = {
-        (char *)ssh, "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "--", r->host,
-        (char *)remote_command, NULL,
+        (char *)ssh, "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+        "-o", "StrictHostKeyChecking=accept-new", "--", r->host, (char *)command, NULL,
     };
 
     posix_spawn_file_actions_t actions;
     posix_spawn_file_actions_init(&actions);
-    posix_spawn_file_actions_adddup2(&actions, stream, STDIN_FILENO);
-    posix_spawn_file_actions_adddup2(&actions, stream, STDOUT_FILENO);
+    posix_spawn_file_actions_adddup2(&actions, in, STDIN_FILENO);
+    posix_spawn_file_actions_adddup2(&actions, out, STDOUT_FILENO);
     posix_spawn_file_actions_adddup2(&actions, log[1], STDERR_FILENO);
 
     posix_spawnattr_t attr;
@@ -1607,11 +1962,10 @@ spawn_ssh(struct remote *r, int stream)
         errno = err;
         LOG_ERRNO("%s: failed to run %s", r->host, ssh);
         close(log[0]);
-        return false;
+        return 0;
     }
 
-    r->ssh = pid;
-    reaper_add(footd.reaper, pid, &ssh_exited, r);
+    reaper_add(footd.reaper, pid, exited, r);
 
     if (r->ssh_log >= 0)
         fdm_del(footd.fdm, r->ssh_log);
@@ -1620,7 +1974,7 @@ spawn_ssh(struct remote *r, int stream)
         close(log[0]);
         r->ssh_log = -1;
     }
-    return true;
+    return pid;
 }
 
 /* Connects (if it isn't), and attaches the windows that were disconnected */
@@ -1630,10 +1984,16 @@ remote_connect(struct remote *r)
     if (r->mux != NULL)
         return true;
 
+    /* footd is being installed there (or the windows ask), or removed: later */
+    if (r->asking || r->installer > 0 || r->uninstaller > 0)
+        return true;
+
     LOG_INFO("%s: connecting", r->host);
     r->tried_at = now_ms();
     free(r->error);
     r->error = NULL;
+    free(r->install);
+    r->install = NULL;
     if (r->timer < 0)
         r->timer = timer_new(&fdm_remote_timer, r);
     timer_set(r->timer, 0);
@@ -1647,9 +2007,11 @@ remote_connect(struct remote *r)
     fcntl(fds[0], F_SETFD, FD_CLOEXEC);
     fcntl(fds[1], F_SETFD, FD_CLOEXEC);
 
-    const bool spawned = spawn_ssh(r, fds[1]);
+    char *command = remote_command();
+    r->ssh = spawn_ssh(r, fds[1], fds[1], command, &ssh_exited);
+    free(command);
     close(fds[1]);
-    if (!spawned) {
+    if (r->ssh == 0) {
         close(fds[0]);
         remote_retry(r);
         return false;
@@ -1795,10 +2157,16 @@ remote_free(struct remote *r)
         reaper_del(footd.reaper, r->ssh);
         kill(r->ssh, SIGTERM);
     }
+    /* (Installing or removing footd there goes on) */
+    if (r->installer > 0)
+        reaper_del(footd.reaper, r->installer);
+    if (r->uninstaller > 0)
+        reaper_del(footd.reaper, r->uninstaller);
     if (r->ssh_log >= 0)
         fdm_del(footd.fdm, r->ssh_log);
     if (r->timer >= 0)
         fdm_del(footd.fdm, r->timer);
+    free(r->install);
     free(r->error);
     free(r->host);
     free(r);
@@ -2059,7 +2427,7 @@ handle_message(struct client *c, uint32_t type, struct session_reader *r)
         session_msg_begin(&msg, SESSION_MSG_WELCOME);
         session_msg_u32(&msg, SESSION_PROTOCOL_VERSION);
         session_msg_i32(&msg, getpid());
-        session_msg_u32(&msg, SESSION_FEATURE_REMOTE);
+        session_msg_u32(&msg, SESSION_FEATURE_REMOTE | SESSION_FEATURE_UNINSTALL);
         client_send(c, &msg, -1);
         session_msg_free(&msg);
         return true;
@@ -2162,6 +2530,17 @@ handle_message(struct client *c, uint32_t type, struct session_reader *r)
         footd.layout_len = len;
         return true;
     }
+
+    case SESSION_MSG_UNINSTALL: {
+        char *host = session_read_str(r);
+        if (!r->ok || host == NULL || host[0] == '\0') {
+            free(host);
+            return false;
+        }
+        remote_uninstall(remote_get(host), c);
+        free(host);
+        return true;
+    }
     }
 
     LOG_WARN("client (PID=%d): unknown message type %u", c->pid, type);
@@ -2227,6 +2606,10 @@ client_free(struct client *c)
             it->item->client = NULL;
         if (it->item->last_client == c)
             it->item->last_client = NULL;
+    }
+    tll_foreach(footd.remotes, it) {
+        if (it->item->uninstalling == c)
+            it->item->uninstalling = NULL;
     }
 
     tll_foreach(footd.clients, it) {
@@ -2422,6 +2805,7 @@ print_usage(const char *prog)
         "  -l,--log-to-stderr       log to stderr, not the system log\n"
         "  -b,--bridge              for footd on another machine, over SSH: its\n"
         "                           sessions on the footd here (stdin, stdout)\n"
+        "     --bridge-level        what --bridge can do (a number), for that footd\n"
         "  -v,--version             show the version number and quit\n",
         prog);
 }
@@ -2435,6 +2819,7 @@ main(int argc, char *const *argv)
         {"log-level",     required_argument, NULL, 'd'},
         {"log-to-stderr", no_argument,       NULL, 'l'},
         {"bridge",        no_argument,       NULL, 'b'},
+        {"bridge-level",  no_argument,       NULL, 'L'},
         {"version",       no_argument,       NULL, 'v'},
         {"help",          no_argument,       NULL, 'h'},
         {NULL,            no_argument,       NULL, 0},
@@ -2474,6 +2859,10 @@ main(int argc, char *const *argv)
         case 'b':
             bridge = true;
             break;
+
+        case 'L':
+            printf("%d\n", FOOTD_BRIDGE_LEVEL);
+            return EXIT_SUCCESS;
 
         case 'v':
             printf("footd version %s\n", FOOT_VERSION);

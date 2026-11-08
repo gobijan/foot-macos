@@ -15,3 +15,13 @@
  * 'socket_path': footd's (NULL: the default). Returns the exit code.
  */
 int footd_bridge(const char *socket_path);
+
+/*
+ * What this footd --bridge can do: `footd --bridge-level` prints it.
+ * footd on the other machine is replaced (installed anew) when its
+ * level is lower, or it has none (see footd.c).
+ */
+#define FOOTD_BRIDGE_LEVEL 1
+
+/* This footd's executable (NULL: unknown) */
+char *footd_own_path(void);

@@ -63,6 +63,7 @@ build: $(DEBUG_DIR)/build.ninja ## Build the debug version into build/
 
 .PHONY: release
 release: $(RELEASE_DIR)/build.ninja ## Build the optimized version and foot.app into build-release/
+	macos/footd-linux.sh $(RELEASE_DIR)/footd-linux
 	$(NINJA) -C $(RELEASE_DIR)
 
 .PHONY: pgo
@@ -107,7 +108,7 @@ linux: ## Build footd for Linux and run its tests, in a container (Docker; PLATF
 	macos/linux.sh $(PLATFORM)
 
 .PHONY: install-footd
-install-footd: ## Install footd on another machine (Linux), for sessions there (HOST=user@host)
+install-footd: ## Install footd on another machine (Linux) by hand (foot.app does it itself)
 	@test -n "$(HOST)" || { echo 'make install-footd HOST=user@host'; exit 1; }
 	macos/install-footd.sh '$(HOST)'
 

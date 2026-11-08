@@ -21,9 +21,10 @@ import time
 
 VERSION = 1
 
-HELLO, CREATE, ATTACH, RESIZE, KILL, LIST, LAYOUT = range(1, 8)
-WELCOME, STARTED, FAILED, DETACHED, SESSIONS = range(100, 105)
+HELLO, CREATE, ATTACH, RESIZE, KILL, LIST, LAYOUT, UNINSTALL = range(1, 9)
+WELCOME, STARTED, FAILED, DETACHED, SESSIONS, UNINSTALLED = range(100, 106)
 FEATURE_REMOTE = 1 << 0
+FEATURE_UNINSTALL = 1 << 1
 
 TIMEOUT = 20
 
@@ -238,12 +239,27 @@ def test_remote(footd, tmp):
     """Sessions on another machine: footd --bridge to a second footd, a script for ssh"""
     remote_path = os.path.join(tmp, 'r.sock')
     ssh = os.path.join(tmp, 'ssh')
+    newhost = os.path.join(tmp, 'newhost')
+    os.mkdir(newhost)
     with open(ssh, 'w') as f:
-        # ssh's arguments: OPTIONS -- HOST COMMAND
+        # ssh's arguments: OPTIONS -- HOST COMMAND. newhost: footd isn't
+        # there (its "old" file: an old one is); what the commands do
         f.write('#!/bin/sh\n'
                 'while [ "$1" != -- ]; do shift; done\n'
-                '[ "$2" = testhost ] || { echo "no such host: $2" >&2; exit 255; }\n'
-                'exec "$TEST_FOOTD" --bridge --socket="$TEST_REMOTE" --log-to-stderr\n')
+                'case $2 in\n'
+                'testhost) exec "$TEST_FOOTD" --bridge --socket="$TEST_REMOTE" --log-to-stderr ;;\n'
+                'newhost)\n'
+                '    d=$TEST_NEWHOST\n'
+                '    case $3 in\n'
+                '    *footd.new*) cat >"$d/footd" && chmod 755 "$d/footd" && rm -f "$d/old" ;;\n'
+                '    *pkill*) rm "$d/footd" && pkill -f "$d/s.sock"; exit 0 ;;\n'
+                '    *)  m="footd-install: $(uname -s) $(uname -m)"\n'
+                '        [ -e "$d/old" ] && { echo "$m /old/footd" >&2; exit 3; }\n'
+                '        [ -x "$d/footd" ] || { echo "$m none" >&2; exit 3; }\n'
+                '        exec "$d/footd" --bridge --socket="$d/s.sock" --log-to-stderr ;;\n'
+                '    esac ;;\n'
+                '*) echo "no such host: $2" >&2; exit 255 ;;\n'
+                'esac\n')
     os.chmod(ssh, 0o755)
 
     # A check (of a connection nothing came over for twice that long) times out after this
@@ -251,7 +267,7 @@ def test_remote(footd, tmp):
 
     path = os.path.join(tmp, 'l.sock')
     env = dict(os.environ, FOOTD_SSH=ssh, TEST_FOOTD=os.path.abspath(footd),
-               TEST_REMOTE=remote_path, REMOTE_MARK='there', HOME=tmp,
+               TEST_REMOTE=remote_path, TEST_NEWHOST=newhost, REMOTE_MARK='there', HOME=tmp,
                FOOTD_CHECK_TIMEOUT=str(int(check_timeout * 1000)))
     proc = subprocess.Popen([footd, f'--socket={path}', '--log-to-stderr', '--log-level=warning'],
                             env=env)
@@ -264,8 +280,8 @@ def test_remote(footd, tmp):
 
         c = Client(path)
         c.hello()
-        if not c.features & FEATURE_REMOTE:
-            raise Failure('no remote sessions (features)')
+        if not c.features & FEATURE_REMOTE or not c.features & FEATURE_UNINSTALL:
+            raise Failure(f'no remote sessions (features: {c.features})')
 
         # There: the window's size; that machine's environment, not the window's
         global ENV
@@ -340,6 +356,46 @@ def test_remote(footd, tmp):
         if sessions:
             raise Failure(f'remote: one that could not be created is left: {sessions}')
 
+        # footd isn't there: the window asks, and Enter installs it (this one: a machine like this)
+        win, _ = create(c, 104, 6, ['/bin/sh', '-c', 'echo up; read x'], host='newhost', started=False)
+        win.read_until(b"footd isn't on newhost")
+        win.sent()
+        win.write(b'y')
+        time.sleep(.3)
+        if os.path.exists(os.path.join(newhost, 'footd')):
+            raise Failure('remote: installed without Enter')
+        win.write(b'\r')
+        win.read_until(b'installing footd on newhost')
+        if c.expect(STARTED).u64() != 104:
+            raise Failure('remote: STARTED for another session')
+        win.read_until(b'up')
+        with open(footd, 'rb') as a, open(os.path.join(newhost, 'footd'), 'rb') as b:
+            if a.read() != b.read():
+                raise Failure('remote: what was installed is not footd')
+
+        # Removed: its sessions end, their windows close, and the window that asked is told
+        c.send(UNINSTALL, string('newhost'))
+        if c.expect(FAILED).u64() != 104:
+            raise Failure('remote: FAILED for another session')
+        r = c.expect(UNINSTALLED)
+        host, error = r.str(), r.str()
+        if host != 'newhost' or error:
+            raise Failure(f'remote: UNINSTALLED {host!r} {error!r}')
+        win.read_eof()
+        if os.path.exists(os.path.join(newhost, 'footd')):
+            raise Failure('remote: not removed')
+
+        # An old one there: replaced, without asking
+        open(os.path.join(newhost, 'old'), 'w').close()
+        win, _ = create(c, 105, 7, ['/bin/sh', '-c', 'echo up; read x'], host='newhost', started=False)
+        win.read_until(b'updating footd on newhost')
+        win.sent()
+        if c.expect(STARTED).u64() != 105:
+            raise Failure('remote: STARTED for another session')
+        win.read_until(b'up')
+        win.close()
+        c.send(KILL, u64(105) + u64(7))
+
         # Closing a window (its socket, then KILL) ends its session, there too
         win, _ = create(c, 102, 4, ['/bin/sh', '-c', 'echo up; sleep 100'], host='testhost')
         win.read_until(b'up')
@@ -359,9 +415,9 @@ def test_remote(footd, tmp):
         if wait_exit(proc) != 0:
             raise Failure('remote: footd failed')
         deadline = time.time() + TIMEOUT
-        while os.path.exists(remote_path):
+        while os.path.exists(remote_path) or os.path.exists(os.path.join(newhost, 's.sock')):
             if time.time() > deadline:
-                raise Failure('remote: the other footd did not exit')
+                raise Failure('remote: the other footds did not exit')
             time.sleep(.05)
     finally:
         if proc.poll() is None:

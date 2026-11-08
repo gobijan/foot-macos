@@ -102,6 +102,10 @@ static struct {
 
     uint32_t features;      /* footd's (WELCOME) */
 
+    /* sessions_uninstall(): told once footd has answered */
+    void (*uninstalled)(const char *host, const char *error, void *data);
+    void *uninstalled_data;
+
     /* sessions_list(), waiting for footd's answer */
     struct session_list *list;
     bool list_done;
@@ -242,6 +246,18 @@ handle_message(uint32_t type, struct session_reader *r)
         struct session_link *link = r->ok ? find_link(id, token) : NULL;
         if (link != NULL)
             link->detached = true;
+        break;
+    }
+
+    case SESSION_MSG_UNINSTALLED: {
+        char *host = session_read_str(r);
+        char *error = session_read_str(r);
+        if (r->ok && client.uninstalled != NULL) {
+            client.uninstalled(host, error != NULL && error[0] != '\0' ? error : NULL,
+                               client.uninstalled_data);
+        }
+        free(host);
+        free(error);
         break;
     }
 
@@ -735,6 +751,25 @@ sessions_create_next_on(const char *host)
 {
     free(client.next_host);
     client.next_host = host != NULL && host[0] != '\0' ? xstrdup(host) : NULL;
+}
+
+bool
+sessions_uninstall(const char *host,
+                   void (*done)(const char *host, const char *error, void *data),
+                   void *data)
+{
+    if (client.conn.fd < 0 || !(client.features & SESSION_FEATURE_UNINSTALL))
+        return false;
+
+    client.uninstalled = done;
+    client.uninstalled_data = data;
+
+    struct session_msg msg = {0};
+    session_msg_begin(&msg, SESSION_MSG_UNINSTALL);
+    session_msg_str(&msg, host);
+    const bool ok = send_msg(&msg, -1);
+    session_msg_free(&msg);
+    return ok;
 }
 
 bool

@@ -18,6 +18,13 @@ cp "$icns" "$app/Contents/Resources/foot.icns"
 cp -R "$terminfo" "$app/Contents/Resources/terminfo"
 cp -R "$themes" "$app/Contents/Resources/themes"
 cp "$macos_themes"/* "$app/Contents/Resources/themes/"
+
+# footd for Linux, to install on other machines (built by footd-linux.sh,
+# next to macos/ in the build directory; release builds only)
+for footd_linux in "$(dirname "$app")"/../footd-linux/footd-linux-*; do
+    case $footd_linux in *.key|*'*'*) continue ;; esac
+    cp "$footd_linux" "$app/Contents/Resources/"
+done
 printf 'APPL????' > "$app/Contents/PkgInfo"
 
 # Ad-hoc signature (required on Apple Silicon); replace with a real

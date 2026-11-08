@@ -49,6 +49,8 @@ enum session_msg_type {
     SESSION_MSG_KILL,        /* u64 id, u64 token (0: not attached; and ID 0: all) */
     SESSION_MSG_LIST,        /* - */
     SESSION_MSG_LAYOUT,      /* blob: the windows' layout, kept for the next one */
+    SESSION_MSG_UNINSTALL,   /* str host: footd is removed there (its sessions end);
+                                UNINSTALLED answers */
 
     /* footd -> window */
     SESSION_MSG_WELCOME = 100,  /* u32 version, i32 pid, u32 features (optional) */
@@ -58,6 +60,7 @@ enum session_msg_type {
     SESSION_MSG_DETACHED,       /* u64 id, u64 token: another window attached */
     SESSION_MSG_SESSIONS,       /* u32 count, {u64 id, u8 attached, i32 shell PID,
                                    str title, str cwd} * count, blob layout */
+    SESSION_MSG_UNINSTALLED,    /* str host, str error (empty: removed) */
 
     /*
      * Over a stream (footd --bridge), both ways: the windows' sockets, as
@@ -71,7 +74,8 @@ enum session_msg_type {
 };
 
 /* WELCOME's features */
-#define SESSION_FEATURE_REMOTE (1u << 0)  /* CREATE's host */
+#define SESSION_FEATURE_REMOTE (1u << 0)     /* CREATE's host */
+#define SESSION_FEATURE_UNINSTALL (1u << 1)  /* UNINSTALL */
 
 /* A terminal's size: what the PTY gets (TIOCSWINSZ) */
 struct session_size {

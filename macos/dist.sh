@@ -74,6 +74,11 @@ fi
 
 meson_options=(--native-file macos/native.ini -Dgrapheme-clustering=enabled --buildtype=release)
 
+# footd for Linux (in foot.app: it installs it on other machines)
+echo "==> Building footd for Linux"
+docker info >/dev/null 2>&1 || fail "Docker must run: foot.app has footd for Linux (footd-linux.sh)"
+macos/footd-linux.sh build-release/footd-linux
+
 echo "==> Building (Apple silicon)"
 macos/pgo.sh build-release "${meson_options[@]}"
 
@@ -91,6 +96,9 @@ ditto build-release/macos/foot.app "$app"
 
 for exe in foot footclient footd; do
     lipo -create build-release/macos/$exe build-x86_64/macos/$exe -output "$app/Contents/MacOS/$exe"
+done
+for arch in x86_64 aarch64; do
+    [[ -f $app/Contents/Resources/footd-linux-$arch ]] || fail "foot.app has no footd for Linux $arch"
 done
 
 # CFBundleVersion: a number that grows with every release (Sparkle
