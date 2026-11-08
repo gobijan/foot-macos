@@ -256,6 +256,8 @@ fdm_channel(struct fdm *fdm, int fd, int events, void *data)
             session_msg_blob(&msg, buf, n);
             session_mux_send(mux, &msg);
             session_msg_free(&msg);
+            if (mux->cb->input != NULL)
+                mux->cb->input(mux, ch->id, mux->data);
             return true;
         }
 
@@ -429,8 +431,11 @@ fdm_stream(struct fdm *fdm, int fd, int events, void *data)
     }
 
     if ((events & (EPOLLIN | EPOLLHUP)) && fd == mux->conn.fd) {
+        const size_t before = mux->conn.in.len - mux->conn.in.consumed;
         bool eof;
         bool ok = session_conn_read(&mux->conn, &eof);
+        if (mux->conn.in.len > before && mux->cb->received != NULL)
+            mux->cb->received(mux, mux->data);
 
         uint32_t type;
         struct session_reader r;

@@ -253,8 +253,16 @@ split) ends what runs in it, as before.
 Shell > New Window on (or New Tab on) opens a window whose session runs
 on another machine, over SSH: e.g. a server, or another Mac. It keeps
 running there when the connection is lost (the Mac sleeps, the network
-changes) and when foot quits; the window says so, and connects again
-when you type. After foot restarts, the window is back, as the others.
+changes) and when foot quits. After foot restarts, the window is back,
+as the others.
+
+When the connection is lost, the window says so, and foot connects
+again: after a second, then a few more times during two minutes; after
+that, when the network changes, or when you type. A connection that
+hangs (e.g. after sleep, or on another Wi-Fi) is noticed when the
+network changes, or when you type after a quiet while: it's checked,
+and if nothing answers within 5 seconds, it's connected anew. Nothing
+is sent while the windows are idle.
 
 * The machines offered: those used last, and those in `~/.ssh/config`;
   Other… asks for one (`user@host`, as for ssh). This Mac: here.

@@ -11,6 +11,7 @@
 
 import os
 import select
+import signal
 import socket
 import struct
 import subprocess
@@ -147,6 +148,11 @@ class Window:
                 self.output += data
         return self.output
 
+    def read_past(self, needle):
+        """Until 'needle'; what came before it (and it) is dropped"""
+        self.read_until(needle)
+        self.output = self.output[self.output.index(needle) + len(needle):]
+
     def read_eof(self):
         deadline = time.time() + TIMEOUT
         while True:
@@ -166,7 +172,7 @@ class Window:
         self.ours.close()
 
 
-def create(client, id, token, argv, cols=80, rows=24, cwd='/', host=None):
+def create(client, id, token, argv, cols=80, rows=24, cwd='/', host=None, started=True):
     win = Window()
     payload = (u64(id) + u64(token) + size(cols, rows) + string(cwd) +
                string(CONFIG) + string('xterm-256color') + string('/bin/sh') + u8(0) +
@@ -174,6 +180,9 @@ def create(client, id, token, argv, cols=80, rows=24, cwd='/', host=None):
     if host is not None:
         payload += string(host)
     client.send(CREATE, payload, win.give())
+    if not started:
+        # (Not yet: the caller calls win.sent() once footd has it)
+        return win, None
     r = client.expect(STARTED)
     win.sent()
     if r.u64() != id or r.u64() != token:
@@ -230,15 +239,20 @@ def test_remote(footd, tmp):
     remote_path = os.path.join(tmp, 'r.sock')
     ssh = os.path.join(tmp, 'ssh')
     with open(ssh, 'w') as f:
-        # ssh's arguments: -T -o BatchMode=yes -- HOST COMMAND
+        # ssh's arguments: OPTIONS -- HOST COMMAND
         f.write('#!/bin/sh\n'
-                '[ "$5" = testhost ] || { echo "host: $5" >&2; exit 1; }\n'
+                'while [ "$1" != -- ]; do shift; done\n'
+                '[ "$2" = testhost ] || { echo "no such host: $2" >&2; exit 255; }\n'
                 'exec "$TEST_FOOTD" --bridge --socket="$TEST_REMOTE" --log-to-stderr\n')
     os.chmod(ssh, 0o755)
 
+    # A check (of a connection nothing came over for twice that long) times out after this
+    check_timeout = .3
+
     path = os.path.join(tmp, 'l.sock')
     env = dict(os.environ, FOOTD_SSH=ssh, TEST_FOOTD=os.path.abspath(footd),
-               TEST_REMOTE=remote_path, REMOTE_MARK='there', HOME=tmp)
+               TEST_REMOTE=remote_path, REMOTE_MARK='there', HOME=tmp,
+               FOOTD_CHECK_TIMEOUT=str(int(check_timeout * 1000)))
     proc = subprocess.Popen([footd, f'--socket={path}', '--log-to-stderr', '--log-level=warning'],
                             env=env)
     try:
@@ -284,20 +298,47 @@ def test_remote(footd, tmp):
         if sessions:
             raise Failure(f'remote: an ended session is left: {sessions}')
 
-        # The connection is lost: the window stays, is told, and typing connects again
-        win, _ = create(c, 101, 3, ['/bin/sh', '-c', 'echo up; read x; echo "got $x"'],
-                        host='testhost')
+        # The connection is lost: the window stays, is told, and it's connected again
+        script = 'echo up; read x; echo "got $x"; read y; echo "got $y"'
+        win, _ = create(c, 101, 3, ['/bin/sh', '-c', script], host='testhost')
         win.read_until(b'up')
         for pid in children(proc.pid):
-            os.kill(pid, 9)
-        win.read_until(b'connection to testhost is lost')
-        win.output = b''
-        win.write(b'\n')
+            os.kill(pid, signal.SIGKILL)
+        win.read_past(b'connection to testhost is lost')
         win.read_until(b'up')       # Its state, anew
         c.expect(STARTED)
-        win.write(b'again\n')
-        win.read_until(b'got again')
+        win.write(b'one\n')
+        win.read_until(b'got one')
+
+        # Nothing comes (e.g. the Mac slept): input after a quiet while checks it, finds it lost
+        stalled = children(proc.pid)
+        for pid in stalled:
+            os.kill(pid, signal.SIGSTOP)
+        time.sleep(2 * check_timeout + .1)
+        win.output = b''
+        win.write(b'x')             # (Lost with the connection)
+        win.read_past(b'connection to testhost is lost')
+        win.read_until(b'got one')
+        c.expect(STARTED)
+        for pid in stalled:
+            try:
+                os.kill(pid, signal.SIGCONT)    # (It's been told to go)
+            except ProcessLookupError:
+                pass
+        win.write(b'two\n')
+        win.read_until(b'two')
         win.read_eof()
+
+        # It can't connect: the window is told why, and it's created once it can
+        win, _ = create(c, 103, 5, ['/bin/sh', '-c', 'echo up'], host='otherhost', started=False)
+        win.read_until(b"can't connect to otherhost: no such host: otherhost; trying again")
+        win.sent()
+        win.close()
+        c.send(KILL, u64(103) + u64(5))
+        time.sleep(.3)
+        sessions, _ = list_sessions(c)
+        if sessions:
+            raise Failure(f'remote: one that could not be created is left: {sessions}')
 
         # Closing a window (its socket, then KILL) ends its session, there too
         win, _ = create(c, 102, 4, ['/bin/sh', '-c', 'echo up; sleep 100'], host='testhost')

@@ -33,6 +33,12 @@ struct session_mux_callbacks {
 
     /* The stream is gone (an error, or its end); destroy the mux */
     void (*closed)(struct session_mux *mux, void *data);
+
+    /* Optional: something came over the stream (before it's handled) */
+    void (*received)(struct session_mux *mux, void *data);
+
+    /* Optional: a channel's socket was read (e.g. a window's input), for the other side */
+    void (*input)(struct session_mux *mux, uint32_t channel, void *data);
 };
 
 /* Over 'in_fd' and 'out_fd' (may be the same; both are taken) */

@@ -42,7 +42,14 @@
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/timerfd.h>
 #include <sys/un.h>
+
+#if defined(__APPLE__)
+ /* The system's, not foot's notify.h (as spawn.h above) */
+ #include <sys/../notify.h>
+ #include <notify_keys.h>
+#endif
 
 #include <tllist.h>
 
@@ -169,8 +176,17 @@ struct remote {
     char *host;
     pid_t ssh;                  /* 0: none */
     int ssh_log;                /* Its stderr; -1: none */
+    char *error;                /* Its last line (e.g. why it failed); NULL: none */
     struct session_mux *mux;    /* NULL: not connected */
     uint32_t next_channel;
+
+    bool connected;             /* WELCOME: the other footd is there */
+    int64_t connected_at;       /* (now_ms()) */
+    int64_t heard_at;           /* When something came from there last */
+    bool checking;              /* A LIST was sent: anything from there answers it */
+    unsigned tries;             /* To connect again (since it was lost) */
+    int64_t tried_at;           /* When it connected last */
+    int timer;                  /* A check's timeout, or the next try; -1: none yet */
 };
 
 struct remote_session {
@@ -182,6 +198,9 @@ struct remote_session {
     int fd;                     /* The window's socket, while disconnected; else -1 */
     struct session_size size;
     bool detached;              /* DETACHED: a window elsewhere has it now */
+    bool started;               /* STARTED: it's there */
+    struct session_msg create;  /* Its CREATE, until then (sent again if it couldn't connect) */
+    bool told;                  /* The window was told it's disconnected (until attached) */
 
     /* The window that was attached last (as for sessions here) */
     struct client *last_client;
@@ -205,6 +224,9 @@ static struct {
     /* Sessions on other machines */
     tll(struct remote *) remotes;
     tll(struct remote_session *) remote_sessions;
+    int network_fd;         /* Its changes (notify(3)); -1: not watched */
+    int network_token;
+    int network_timer;      /* Until they've settled; -1: none */
 
     /* The windows' layout, from the last window to tell */
     void *layout;
@@ -214,7 +236,7 @@ static struct {
     int running_lock;   /* Held while footd runs (see session_running_path()) */
 
     volatile sig_atomic_t quit;
-} footd = {.listen_fd = -1, .running_lock = -1};
+} footd = {.listen_fd = -1, .running_lock = -1, .network_fd = -1, .network_timer = -1};
 
 extern char **environ;
 
@@ -984,10 +1006,16 @@ session_kill(struct session *s)
  * channels (session-mux.h). They're that footd's sessions: here, only
  * their ID, machine, and window are known.
  *
- * When a connection is lost (e.g. the Mac slept), its windows stay,
- * and are told so. It's connected again when one of them gets input,
- * or a window wants another session there: then they're attached again
- * (and get the state anew). Nothing is tried meanwhile.
+ * When a connection is lost, its windows stay, and are told so; they're
+ * attached again (and get the state anew) once it's connected again:
+ * right away, then after a while, a few times; after that, once one of
+ * them gets input, or the network changes. A session that couldn't be
+ * created (no connection) is, then.
+ *
+ * A connection that's gone unnoticed (e.g. the Mac slept, or changed
+ * networks: SSH's TCP connection hangs) is found by checking it: when
+ * the network changes, and when a window's input goes there after
+ * nothing came for a while. Nothing is sent while it's idle.
  */
 
 /* Run by ssh on the other machine: where footd is, as a user installs it */
@@ -996,8 +1024,85 @@ static const char remote_command[] =
     "/Applications/foot.app/Contents/MacOS/footd; do "
     "[ -x \"$f\" ] && exec \"$f\" --bridge; done; exec footd --bridge'";
 
+/* A check is answered within this (milliseconds), or the connection is lost */
+#define CHECK_TIMEOUT 5000
+
+/* Connecting takes at most this (milliseconds; ssh's ConnectTimeout is for the TCP connection only) */
+#define CONNECT_TIMEOUT 30000
+
+/*
+ * Connecting again: after these (milliseconds); then on input, or a
+ * network change. Not more often: servers limit how often one may
+ * connect (e.g. ufw's limit: 6 in 30 seconds), and refuse for longer
+ * then.
+ */
+static const int retry_after[] = {1000, 4000, 10000, 20000, 30000, 60000};
+
+/* Tries to connect (again) are at least this far apart (milliseconds; at most 5 in 30 seconds) */
+#define MIN_GAP 7000
+
+/* A connection that lasted this long was fine: once lost, it's tried anew (milliseconds) */
+#define LASTED 30000
+
+/* The network's changes come in bursts: it's checked once they've settled (milliseconds) */
+#define NETWORK_SETTLE 1500
+
 static void remote_disconnected(struct remote *r);
 static bool remote_connect(struct remote *r);
+
+static int64_t
+now_ms(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+/* $FOOTD_CHECK_TIMEOUT (milliseconds): e.g. tests' */
+static int
+check_timeout(void)
+{
+    const char *value = getenv("FOOTD_CHECK_TIMEOUT");
+    const int ms = value != NULL ? atoi(value) : 0;
+    return ms > 0 ? ms : CHECK_TIMEOUT;
+}
+
+/* Arms 'timer' (a timerfd) to expire in 'ms'; 0: disarms it */
+static void
+timer_set(int timer, int ms)
+{
+    if (timer < 0)
+        return;
+    struct itimerspec spec = {
+        .it_value = {.tv_sec = ms / 1000, .tv_nsec = (long)(ms % 1000) * 1000000},
+    };
+    if (timerfd_settime(timer, 0, &spec, NULL) < 0)
+        LOG_ERRNO("failed to set a timer");
+}
+
+/* A timerfd, in the FDM; -1: failed */
+static int
+timer_new(fdm_fd_handler_t handler, void *data)
+{
+    int timer = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
+    if (timer < 0) {
+        LOG_ERRNO("failed to create a timer");
+        return -1;
+    }
+    if (!fdm_add(footd.fdm, timer, EPOLLIN, handler, data)) {
+        close(timer);
+        return -1;
+    }
+    return timer;
+}
+
+/* Whether it expired (rather than being read in vain) */
+static bool
+timer_expired(int timer)
+{
+    uint64_t expirations;
+    return timerfd_read(timer, &expirations) > 0 && expirations > 0;
+}
 
 static struct remote_session *
 remote_session_find(uint64_t id)
@@ -1046,7 +1151,19 @@ remote_session_free(struct remote_session *rs)
             break;
         }
     }
+    session_msg_free(&rs->create);
     free(rs);
+}
+
+/* Windows wait for it (disconnected): it's connected again for them */
+static bool
+remote_awaited(const struct remote *r)
+{
+    tll_foreach(footd.remote_sessions, it) {
+        if (it->item->remote == r && it->item->fd >= 0)
+            return true;
+    }
+    return false;
 }
 
 static bool
@@ -1102,6 +1219,19 @@ attach_msg(struct session_msg *msg, const struct remote_session *rs)
     session_msg_size(msg, &rs->size);
 }
 
+/* Connects again (for the windows that wait): now, unless it was tried just before; then soon */
+static void
+remote_reconnect(struct remote *r)
+{
+    if (r->mux != NULL)
+        return;
+    const int64_t wait = r->tried_at + MIN_GAP - now_ms();
+    if (wait > 0)
+        timer_set(r->timer, (int)wait);
+    else
+        remote_connect(r);
+}
+
 /* A window that's disconnected: its input connects again */
 static bool
 fdm_disconnected_window(struct fdm *fdm, int fd, int events, void *data)
@@ -1113,26 +1243,46 @@ fdm_disconnected_window(struct fdm *fdm, int fd, int events, void *data)
     if (n == 0 || (n < 0 && errno != EAGAIN && errno != EINTR) ||
         ((events & EPOLLHUP) && !(events & EPOLLIN)))
     {
-        /* The window is gone: the session runs on, there */
+        /* The window is gone: the session runs on, there (if it was created) */
+        if (!rs->started) {
+            remote_session_free(rs);
+            return true;
+        }
         fdm_del(footd.fdm, rs->fd);
         rs->fd = -1;
         rs->client = NULL;
         return true;
     }
 
-    remote_connect(rs->remote);
+    rs->remote->tries = 0;
+    remote_reconnect(rs->remote);
     return true;
 }
 
+/* Tells the window (disconnected): the connection is lost, or it can't connect (and why) */
+static void
+tell_window(struct remote_session *rs, bool lost, const char *then)
+{
+    const struct remote *r = rs->remote;
+    char *text = lost
+        ? xasprintf("\r\n\033[0;7m foot: the connection to %s is lost; %s \033[m\r\n",
+                    r->host, then)
+        : xasprintf("\r\n\033[0;7m foot: can't connect to %s%s%s; %s \033[m\r\n",
+                    r->host, r->error != NULL ? ": " : "",
+                    r->error != NULL ? r->error : "", then);
+    if (write(rs->fd, text, strlen(text)) < 0)
+        LOG_ERRNO("%s: failed to tell a window", r->host);
+    free(text);
+}
+
+/* Once, until it's attached again */
 static void
 notify_disconnected(struct remote_session *rs)
 {
-    char *text = xasprintf(
-        "\r\n\033[0;7m foot: the connection to %s is lost; "
-        "type to connect again \033[m\r\n", rs->remote->host);
-    if (write(rs->fd, text, strlen(text)) < 0)
-        LOG_ERRNO("%s: failed to tell a window", rs->remote->host);
-    free(text);
+    if (rs->told)
+        return;
+    rs->told = true;
+    tell_window(rs, rs->started, rs->started ? "connecting again…" : "trying again…");
 }
 
 /* From the other footd */
@@ -1144,6 +1294,10 @@ remote_message(struct session_mux *mux, uint32_t type, struct session_reader *r,
 
     if (type == SESSION_MSG_WELCOME) {
         LOG_INFO("%s: connected", remote->host);
+        remote->connected = true;
+        remote->connected_at = remote->heard_at = now_ms();
+        free(remote->error);
+        remote->error = NULL;
         return true;
     }
 
@@ -1164,6 +1318,10 @@ remote_message(struct session_mux *mux, uint32_t type, struct session_reader *r,
 
     switch (type) {
     case SESSION_MSG_STARTED:
+        rs->started = true;
+        rs->told = false;
+        session_msg_free(&rs->create);
+
         /* Its PID is the other machine's: none here */
         if (rs->client != NULL) {
             struct session_msg msg = {0};
@@ -1228,27 +1386,121 @@ remote_closed(struct session_mux *mux, void *data)
     remote_disconnected(data);
 }
 
+/* Is it still there? Anything that comes answers (a LIST); nothing, in time: it's lost */
+static void
+remote_check(struct remote *r)
+{
+    if (r->mux == NULL || !r->connected || r->checking)
+        return;
+
+    LOG_INFO("%s: checking the connection", r->host);
+    struct session_msg msg = {0};
+    session_msg_begin(&msg, SESSION_MSG_LIST);
+    remote_send(r, &msg);
+    session_msg_free(&msg);
+
+    r->checking = true;
+    timer_set(r->timer, check_timeout());
+}
+
+/* Something came from there */
+static void
+remote_received(struct session_mux *mux, void *data)
+{
+    struct remote *r = data;
+    r->heard_at = now_ms();
+    if (r->checking) {
+        r->checking = false;
+        timer_set(r->timer, 0);
+    }
+}
+
+/* A window's input goes there: if nothing came for a while, is it still there? */
+static void
+remote_input(struct session_mux *mux, uint32_t channel, void *data)
+{
+    struct remote *r = data;
+    if (r->connected && !r->checking && now_ms() - r->heard_at >= 2 * check_timeout())
+        remote_check(r);
+}
+
 static const struct session_mux_callbacks remote_callbacks = {
     .message = &remote_message,
     .channel_closed = &remote_channel_closed,
     .closed = &remote_closed,
+    .received = &remote_received,
+    .input = &remote_input,
 };
 
-/* The connection is lost: its windows are told, and kept */
-static void
-remote_disconnected(struct remote *r)
+/* A check wasn't answered, or it's time to connect again */
+static bool
+fdm_remote_timer(struct fdm *fdm, int fd, int events, void *data)
 {
-    LOG_WARN("%s: disconnected", r->host);
+    struct remote *r = data;
+    if (!timer_expired(fd))
+        return true;
+
+    if (r->checking) {
+        LOG_WARN("%s: not answering", r->host);
+        r->checking = false;
+        remote_disconnected(r);
+    } else if (remote_awaited(r))
+        remote_reconnect(r);
+    return true;
+}
+
+static void ssh_log_read(struct remote *r);
+
+/* Connecting again, for the windows: after a while; then they're told it's up to them */
+static void
+remote_retry(struct remote *r)
+{
+    timer_set(r->timer, 0);
+    if (!remote_awaited(r))
+        return;
+
+    if (r->tries < sizeof(retry_after) / sizeof(retry_after[0])) {
+        timer_set(r->timer, retry_after[r->tries++]);
+        return;
+    }
 
     tll_foreach(footd.remote_sessions, it) {
         struct remote_session *rs = it->item;
-        if (rs->remote != r || rs->channel == 0)
+        if (rs->remote == r && rs->fd >= 0)
+            tell_window(rs, false, "type to try again");
+    }
+}
+
+/* The connection is lost (or couldn't be made): its windows are told, and kept */
+static void
+remote_disconnected(struct remote *r)
+{
+    /* (Why, if ssh said so) */
+    ssh_log_read(r);
+
+    if (r->connected) {
+        LOG_WARN("%s: disconnected", r->host);
+        if (now_ms() - r->connected_at >= LASTED)
+            r->tries = 0;
+    } else
+        LOG_WARN("%s: failed to connect", r->host);
+    r->connected = r->checking = false;
+
+    tll_foreach(footd.remote_sessions, it) {
+        struct remote_session *rs = it->item;
+        if (rs->remote != r)
             continue;
 
-        const int fd = session_mux_take(r->mux, rs->channel);
-        rs->channel = 0;
-        if (fd >= 0)
-            keep_disconnected(rs, fd);
+        if (rs->channel != 0) {
+            const int fd = session_mux_take(r->mux, rs->channel);
+            rs->channel = 0;
+            if (fd >= 0)
+                keep_disconnected(rs, fd);
+        }
+
+        /* Not created there, and its window is gone: nobody wants it */
+        if (!rs->started && rs->fd < 0)
+            remote_session_free(rs);
     }
 
     session_mux_destroy(r->mux);
@@ -1256,6 +1508,8 @@ remote_disconnected(struct remote *r)
 
     if (r->ssh > 0)
         kill(r->ssh, SIGTERM);
+
+    remote_retry(r);
 }
 
 static void
@@ -1266,25 +1520,36 @@ ssh_exited(struct reaper *reaper, pid_t pid, int status, void *data)
         r->ssh = 0;
 }
 
-/* ssh's errors, in the log */
+/* ssh's errors, in the log; the last one is kept (e.g. why it couldn't connect) */
+static void
+ssh_log_read(struct remote *r)
+{
+    if (r->ssh_log < 0)
+        return;
+
+    char buf[1024];
+    ssize_t n;
+    while ((n = read(r->ssh_log, buf, sizeof(buf) - 1)) > 0 || (n < 0 && errno == EINTR)) {
+        if (n <= 0)
+            continue;
+        buf[n] = '\0';
+        for (char *line = strtok(buf, "\r\n"); line != NULL; line = strtok(NULL, "\r\n")) {
+            LOG_WARN("%s: %s", r->host, line);
+            free(r->error);
+            r->error = xstrdup(line);
+        }
+    }
+
+    if (n == 0 || errno != EAGAIN) {
+        fdm_del(footd.fdm, r->ssh_log);
+        r->ssh_log = -1;
+    }
+}
+
 static bool
 fdm_ssh_log(struct fdm *fdm, int fd, int events, void *data)
 {
-    struct remote *r = data;
-
-    char buf[1024];
-    ssize_t n = read(fd, buf, sizeof(buf) - 1);
-    if (n > 0) {
-        buf[n] = '\0';
-        for (char *line = strtok(buf, "\r\n"); line != NULL; line = strtok(NULL, "\r\n"))
-            LOG_WARN("%s: %s", r->host, line);
-        return true;
-    }
-
-    if (n == 0 || (errno != EAGAIN && errno != EINTR)) {
-        fdm_del(footd.fdm, fd);
-        r->ssh_log = -1;
-    }
+    ssh_log_read(data);
     return true;
 }
 
@@ -1306,7 +1571,7 @@ spawn_ssh(struct remote *r, int stream)
         ssh = "ssh";
 
     char *const argv[] = {
-        (char *)ssh, "-T", "-o", "BatchMode=yes", "--", r->host,
+        (char *)ssh, "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "--", r->host,
         (char *)remote_command, NULL,
     };
 
@@ -1366,10 +1631,17 @@ remote_connect(struct remote *r)
         return true;
 
     LOG_INFO("%s: connecting", r->host);
+    r->tried_at = now_ms();
+    free(r->error);
+    r->error = NULL;
+    if (r->timer < 0)
+        r->timer = timer_new(&fdm_remote_timer, r);
+    timer_set(r->timer, 0);
 
     int fds[2];
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, fds) < 0) {
         LOG_ERRNO("%s: failed to create a socket", r->host);
+        remote_retry(r);
         return false;
     }
     fcntl(fds[0], F_SETFD, FD_CLOEXEC);
@@ -1379,12 +1651,19 @@ remote_connect(struct remote *r)
     close(fds[1]);
     if (!spawned) {
         close(fds[0]);
+        remote_retry(r);
         return false;
     }
 
     r->mux = session_mux_new(footd.fdm, fds[0], fds[0], &remote_callbacks, r);
-    if (r->mux == NULL)
+    if (r->mux == NULL) {
+        remote_retry(r);
         return false;
+    }
+
+    /* (As a check: the other footd's WELCOME answers it) */
+    r->checking = true;
+    timer_set(r->timer, CONNECT_TIMEOUT);
 
     struct session_msg msg = {0};
     session_msg_begin(&msg, SESSION_MSG_HELLO);
@@ -1402,12 +1681,94 @@ remote_connect(struct remote *r)
         rs->fd = -1;
         fdm_del_no_close(footd.fdm, fd);
 
-        attach_msg(&msg, rs);
-        remote_send_with_window(rs, &msg, fd);
-        session_msg_free(&msg);
+        /* (Created, if it couldn't be) */
+        if (!rs->started && rs->create.len > 0)
+            remote_send_with_window(rs, &rs->create, fd);
+        else {
+            attach_msg(&msg, rs);
+            remote_send_with_window(rs, &msg, fd);
+            session_msg_free(&msg);
+        }
     }
 
     return r->mux != NULL;
+}
+
+/*
+ * The network changed (e.g. another Wi-Fi, or the Mac woke up): the
+ * connections are checked, and those lost are tried again (macOS; a
+ * notify(3) file descriptor). Watched once there are sessions on other
+ * machines.
+ */
+#if defined(__APPLE__)
+static bool
+fdm_network_settled(struct fdm *fdm, int fd, int events, void *data)
+{
+    if (!timer_expired(fd))
+        return true;
+
+    LOG_INFO("the network changed");
+    tll_foreach(footd.remotes, it) {
+        struct remote *r = it->item;
+        r->tries = 0;
+        if (r->mux != NULL)
+            remote_check(r);
+        else if (remote_awaited(r))
+            remote_reconnect(r);
+    }
+    return true;
+}
+
+static bool
+fdm_network(struct fdm *fdm, int fd, int events, void *data)
+{
+    int token;
+    while (read(fd, &token, sizeof(token)) == sizeof(token))
+        ;
+    timer_set(footd.network_timer, NETWORK_SETTLE);
+    return true;
+}
+#endif
+
+static void
+network_watch(void)
+{
+#if defined(__APPLE__)
+    if (footd.network_fd >= 0)
+        return;
+
+    int fd = -1;
+    if (notify_register_file_descriptor(kNotifySCNetworkChange, &fd, 0,
+                                        &footd.network_token) != NOTIFY_STATUS_OK)
+    {
+        LOG_WARN("failed to watch the network");
+        return;
+    }
+    if (!set_nonblocking(fd) ||
+        (footd.network_timer = timer_new(&fdm_network_settled, NULL)) < 0 ||
+        !fdm_add(footd.fdm, fd, EPOLLIN, &fdm_network, NULL))
+    {
+        LOG_WARN("failed to watch the network");
+        notify_cancel(footd.network_token);
+        return;
+    }
+    footd.network_fd = fd;
+#endif
+}
+
+static void
+network_unwatch(void)
+{
+#if defined(__APPLE__)
+    if (footd.network_fd >= 0) {
+        fdm_del_no_close(footd.fdm, footd.network_fd);
+        notify_cancel(footd.network_token);
+        footd.network_fd = -1;
+    }
+#endif
+    if (footd.network_timer >= 0)
+        fdm_del(footd.fdm, footd.network_timer);
+    footd.network_timer = -1;
 }
 
 static struct remote *
@@ -1418,8 +1779,10 @@ remote_get(const char *host)
             return it->item;
     }
 
+    network_watch();
+
     struct remote *r = xmalloc(sizeof(*r));
-    *r = (struct remote){.host = xstrdup(host), .ssh_log = -1};
+    *r = (struct remote){.host = xstrdup(host), .ssh_log = -1, .timer = -1};
     tll_push_back(footd.remotes, r);
     return r;
 }
@@ -1434,14 +1797,20 @@ remote_free(struct remote *r)
     }
     if (r->ssh_log >= 0)
         fdm_del(footd.fdm, r->ssh_log);
+    if (r->timer >= 0)
+        fdm_del(footd.fdm, r->timer);
+    free(r->error);
     free(r->host);
     free(r);
 }
 
-/* A window wants 'rs': it's attached there, with its socket 'fd' */
+/*
+ * A window wants 'rs': it's attached there, with its socket 'fd' (or
+ * it's created there: its CREATE is kept, until it's started)
+ */
 static void
 remote_attach_window(struct remote_session *rs, struct client *c, uint64_t token,
-                     const struct session_size *size, struct session_msg *msg, int fd)
+                     const struct session_size *size, int fd)
 {
     /* Another window here had it: it's no longer attached (its terminal ends) */
     if (rs->client != NULL && (rs->client != c || rs->token != token)) {
@@ -1466,19 +1835,24 @@ remote_attach_window(struct remote_session *rs, struct client *c, uint64_t token
         return;
     }
 
-    if (msg == NULL) {
+    if (!rs->started && rs->create.len > 0)
+        remote_send_with_window(rs, &rs->create, fd);
+    else {
         struct session_msg attach = {0};
         attach_msg(&attach, rs);
         remote_send_with_window(rs, &attach, fd);
         session_msg_free(&attach);
-    } else
-        remote_send_with_window(rs, msg, fd);
+    }
 }
 
 /* Ends what's left of it, as it would end there: those no window here has (KILL 0) */
 static void
 remote_kill(struct remote_session *rs, uint64_t token)
 {
+    /* Never created there (it couldn't connect): nothing to end */
+    if (!rs->started && rs->remote->mux == NULL)
+        return;
+
     struct session_msg msg = {0};
     session_msg_begin(&msg, SESSION_MSG_KILL);
     session_msg_u64(&msg, rs->id);
@@ -1531,12 +1905,12 @@ handle_create(struct client *c, struct session_reader *r)
         session_msg_strv(&msg, (const char *const *)envp);
 
         struct remote_session *rs = xmalloc(sizeof(*rs));
-        *rs = (struct remote_session){.id = id, .remote = remote_get(host), .fd = -1};
+        *rs = (struct remote_session){
+            .id = id, .remote = remote_get(host), .fd = -1, .create = msg};
         tll_push_back(footd.remote_sessions, rs);
         LOG_INFO("session %016llx: on %s", (unsigned long long)id, host);
 
-        remote_attach_window(rs, c, token, &size, &msg, fd);
-        session_msg_free(&msg);
+        remote_attach_window(rs, c, token, &size, fd);
         fd = -1;
     } else {
         const char *error = NULL;
@@ -1588,7 +1962,7 @@ handle_attach(struct client *c, struct session_reader *r)
     struct session *s = session_find(id);
     struct remote_session *rs = s == NULL ? remote_session_find(id) : NULL;
     if (rs != NULL) {
-        remote_attach_window(rs, c, token, &size, NULL, fd);
+        remote_attach_window(rs, c, token, &size, fd);
         return true;
     }
 
@@ -2245,6 +2619,7 @@ out:
         remote_free(it->item);
         tll_remove(footd.remotes, it);
     }
+    network_unwatch();
 
     headless_fini();
     reaper_destroy(footd.reaper);
