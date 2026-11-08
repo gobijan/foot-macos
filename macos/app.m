@@ -7,7 +7,6 @@
 #import <QuartzCore/QuartzCore.h>
 
 #include <crt_externs.h>
-#include <glob.h>
 #include <libproc.h>
 #include <limits.h>
 #include <locale.h>
@@ -1005,6 +1004,8 @@ create_menu(void)
         app.tab_hosts_menu = tab_on.submenu = [[NSMenu alloc] initWithTitle:@"New Tab on"];
         app.tab_hosts_menu.delegate = app.delegate;
         [menu addItem:tab_on];
+        [menu addItem:menu_item(@"Connections…", @selector(showConnections:), @"K",
+                                cmd | NSEventModifierFlagShift)];
 
         /* Shown in a window on another machine (menuNeedsUpdate:) */
         app.uninstall_item = menu_item(@"Remove footd…", @selector(removeFootd:), @"", 0);
@@ -1114,101 +1115,8 @@ create_menu(void)
 
 /*
  * Other machines, for sessions there (Shell > New Window on, New Tab
- * on): those in ~/.ssh/config (and its includes), and those used last
+ * on, Connections): see connections.m
  */
-
-static NSString *const recent_hosts_key = @"RecentHosts";
-#define MAX_RECENT_HOSTS 8
-
-static void
-ssh_config_hosts(const char *path, NSMutableOrderedSet<NSString *> *hosts, int depth)
-{
-    FILE *f = depth < 8 ? fopen(path, "r") : NULL;
-    if (f == NULL)
-        return;
-
-    const char *home = getenv("HOME");
-    char *line = NULL;
-    size_t size = 0;
-
-    while (getline(&line, &size, f) > 0) {
-        char *p = line;
-        char *key = strsep(&p, " \t=");
-        while (key != NULL && key[0] == '\0')
-            key = strsep(&p, " \t=");
-        if (key == NULL || p == NULL)
-            continue;
-
-        const bool host = strcasecmp(key, "Host") == 0;
-        if (!host && strcasecmp(key, "Include") != 0)
-            continue;
-
-        for (char *word; (word = strsep(&p, " \t\r\n")) != NULL;) {
-            if (word[0] == '#')
-                break;
-            if (word[0] == '\0')
-                continue;
-
-            if (host) {
-                /* Patterns aren't machines */
-                if (strpbrk(word, "*?!\"") == NULL)
-                    [hosts addObject:@(word)];
-                continue;
-            }
-
-            /* Relative to ~/.ssh, or the home's */
-            char *pattern = word[0] == '~' && home != NULL
-                ? xasprintf("%s%s", home, word + 1)
-                : word[0] != '/' && home != NULL
-                ? xasprintf("%s/.ssh/%s", home, word) : xstrdup(word);
-
-            glob_t g;
-            if (glob(pattern, 0, NULL, &g) == 0) {
-                for (size_t i = 0; i < g.gl_pathc; i++)
-                    ssh_config_hosts(g.gl_pathv[i], hosts, depth + 1);
-                globfree(&g);
-            }
-            free(pattern);
-        }
-    }
-
-    free(line);
-    fclose(f);
-}
-
-static NSArray<NSString *> *
-known_hosts(void)
-{
-    NSMutableOrderedSet<NSString *> *hosts = [NSMutableOrderedSet orderedSet];
-    NSArray *recent = [NSUserDefaults.standardUserDefaults arrayForKey:recent_hosts_key];
-    for (id host in recent) {
-        if ([host isKindOfClass:[NSString class]])
-            [hosts addObject:host];
-    }
-
-    const char *home = getenv("HOME");
-    if (home != NULL) {
-        char *path = xasprintf("%s/.ssh/config", home);
-        ssh_config_hosts(path, hosts, 0);
-        free(path);
-    }
-    return hosts.array;
-}
-
-static void
-remember_host(NSString *host)
-{
-    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
-    NSMutableArray *recent = [NSMutableArray arrayWithObject:host];
-    for (id other in [defaults arrayForKey:recent_hosts_key]) {
-        if ([other isKindOfClass:[NSString class]] && ![other isEqual:host] &&
-            recent.count < MAX_RECENT_HOSTS)
-        {
-            [recent addObject:other];
-        }
-    }
-    [defaults setObject:recent forKey:recent_hosts_key];
-}
 
 /* As for ssh: [user@]host, or a name from ~/.ssh/config (no options) */
 static NSString *
@@ -1230,20 +1138,11 @@ ask_host(bool tab)
 
     if ([alert runModal] != NSAlertFirstButtonReturn)
         return nil;
-
-    NSString *host = [field.stringValue stringByTrimmingCharactersInSet:
-        NSCharacterSet.whitespaceAndNewlineCharacterSet];
-    if (host.length == 0 || [host hasPrefix:@"-"] ||
-        [host rangeOfCharacterFromSet:NSCharacterSet.whitespaceAndNewlineCharacterSet].location != NSNotFound)
-    {
-        return nil;
-    }
-    return host;
+    return connections_address(field.stringValue);
 }
 
-/* NULL: this machine */
-static void
-open_on(NSString *host, bool tab)
+void
+app_open_on(NSString *host, bool tab)
 {
     if (host != nil && !sessions_remote_supported()) {
         NSAlert *alert = [[NSAlert alloc] init];
@@ -1256,7 +1155,7 @@ open_on(NSString *host, bool tab)
     }
 
     if (host != nil)
-        remember_host(host);
+        connections_remember(host);
 
     sessions_create_next_on(host.UTF8String);
     if (tab)
@@ -1276,10 +1175,12 @@ fill_hosts_menu(NSMenu *menu, bool tab)
     [menu addItem:here];
     [menu addItem:[NSMenuItem separatorItem]];
 
-    for (NSString *host in known_hosts()) {
-        NSMenuItem *item = menu_item(host, tab ? @selector(newTabOn:) : @selector(newWindowOn:),
-                                     @"", 0);
+    for (NSString *host in connections_addresses()) {
+        NSMenuItem *item = menu_item(connections_title(host),
+                                     tab ? @selector(newTabOn:) : @selector(newWindowOn:), @"", 0);
         item.representedObject = host;
+        if (connections_name(host) != nil)
+            item.toolTip = host;
         [menu addItem:item];
     }
 
@@ -1309,26 +1210,31 @@ fill_hosts_menu(NSMenu *menu, bool tab)
 
 - (void)newWindowOn:(NSMenuItem *)sender
 {
-    open_on(sender.representedObject, false);
+    app_open_on(sender.representedObject, false);
 }
 
 - (void)newTabOn:(NSMenuItem *)sender
 {
-    open_on(sender.representedObject, true);
+    app_open_on(sender.representedObject, true);
 }
 
 - (void)newWindowOnOther:(id)sender
 {
     NSString *host = ask_host(false);
     if (host != nil)
-        open_on(host, false);
+        app_open_on(host, false);
 }
 
 - (void)newTabOnOther:(id)sender
 {
     NSString *host = ask_host(true);
     if (host != nil)
-        open_on(host, true);
+        app_open_on(host, true);
+}
+
+- (void)showConnections:(id)sender
+{
+    connections_show();
 }
 
 /* Close (Cmd+W): a split (see FootSplitView), a tab, or else the window */
@@ -1343,10 +1249,12 @@ fill_hosts_menu(NSMenu *menu, bool tab)
         ? @"Close Tab" : @"Close";
 
     const char *host = main_window_host();
-    app.uninstall_item.hidden = host == NULL;
-    if (host != NULL) {
-        app.uninstall_item.title = [NSString stringWithFormat:@"Remove footd from %s…", host];
-        app.uninstall_item.representedObject = @(host);
+    NSString *address = host != NULL ? [NSString stringWithUTF8String:host] : nil;
+    app.uninstall_item.hidden = address == nil;
+    if (address != nil) {
+        app.uninstall_item.title = [NSString stringWithFormat:@"Remove footd from %@…",
+                                    connections_title(address)];
+        app.uninstall_item.representedObject = address;
     }
 }
 
@@ -1376,11 +1284,16 @@ footd_uninstalled(const char *host, const char *error, void *data)
 - (void)removeFootd:(NSMenuItem *)sender
 {
     NSString *host = sender.representedObject;
-    if (host == nil)
-        return;
+    if (host != nil)
+        app_remove_footd(host);
+}
 
+/* (Also Connections') */
+void
+app_remove_footd(NSString *host)
+{
     NSAlert *alert = [[NSAlert alloc] init];
-    alert.messageText = [NSString stringWithFormat:@"Remove footd from %@?", host];
+    alert.messageText = [NSString stringWithFormat:@"Remove footd from %@?", connections_title(host)];
     alert.informativeText = @"foot's footd (~/.local/bin/footd) is removed there. All "
         "sessions there end, also those of other computers, and their windows close.";
     alert.alertStyle = NSAlertStyleWarning;

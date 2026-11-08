@@ -172,6 +172,7 @@ struct client {
     pid_t pid;
     bool greeted;
     bool writing;
+    bool watching;  /* WATCH: told about the other machines (REMOTES) */
 };
 
 /* Another machine, over SSH (see "Sessions on other machines" below) */
@@ -190,6 +191,7 @@ struct remote {
     unsigned tries;             /* To connect again (since it was lost) */
     int64_t tried_at;           /* When it connected last */
     int timer;                  /* A check's timeout, or the next try; -1: none yet */
+    bool stuck;                 /* Not tried again before the windows' input */
 
     /*
      * footd isn't there, or is too old (the remote command says so): it's
@@ -243,6 +245,7 @@ static struct {
     int network_fd;         /* Its changes (notify(3)); -1: not watched */
     int network_token;
     int network_timer;      /* Until they've settled; -1: none */
+    struct session_msg remotes_told;  /* The last REMOTES (to those who WATCH) */
 
     /* The windows' layout, from the last window to tell */
     void *layout;
@@ -1188,6 +1191,8 @@ remote_session_close_window(struct remote_session *rs)
     rs->client = NULL;
 }
 
+static void remotes_changed(void);
+
 static void
 remote_session_free(struct remote_session *rs)
 {
@@ -1200,6 +1205,7 @@ remote_session_free(struct remote_session *rs)
     }
     session_msg_free(&rs->create);
     free(rs);
+    remotes_changed();
 }
 
 /* Windows wait for it (disconnected): it's connected again for them */
@@ -1211,6 +1217,72 @@ remote_awaited(const struct remote *r)
             return true;
     }
     return false;
+}
+
+/* How it is, for REMOTES */
+static enum session_remote_state
+remote_state(const struct remote *r)
+{
+    if (r->uninstaller > 0)
+        return SESSION_REMOTE_REMOVING;
+    if (r->installer > 0)
+        return SESSION_REMOTE_INSTALLING;
+    if (r->asking)
+        return SESSION_REMOTE_ASKING;
+    if (r->mux != NULL)
+        return r->connected ? SESSION_REMOTE_CONNECTED : SESSION_REMOTE_CONNECTING;
+    if (!remote_awaited(r))
+        return SESSION_REMOTE_IDLE;
+    return r->stuck ? SESSION_REMOTE_FAILED : SESSION_REMOTE_RETRYING;
+}
+
+/*
+ * The other machines changed (how they're connected, their sessions):
+ * those who WATCH are told, if it's not what they were told last
+ */
+static void
+remotes_changed(void)
+{
+    bool watched = false;
+    tll_foreach(footd.clients, it)
+        watched |= it->item->watching;
+    if (!watched)
+        return;
+
+    struct session_msg msg = {0};
+    session_msg_begin(&msg, SESSION_MSG_REMOTES);
+    session_msg_u32(&msg, tll_length(footd.remotes));
+    tll_foreach(footd.remotes, it) {
+        const struct remote *r = it->item;
+        const enum session_remote_state state = remote_state(r);
+
+        uint32_t sessions = 0;
+        tll_foreach(footd.remote_sessions, rs) {
+            if (rs->item->remote == r)
+                sessions++;
+        }
+
+        session_msg_str(&msg, r->host);
+        session_msg_u8(&msg, state);
+        session_msg_u32(&msg, sessions);
+        session_msg_str(&msg, state == SESSION_REMOTE_ASKING ? r->install
+                              : state == SESSION_REMOTE_RETRYING ||
+                                state == SESSION_REMOTE_FAILED ? r->error : NULL);
+    }
+
+    /* (The header's payload size is set when it's sent) */
+    const struct session_msg *told = &footd.remotes_told;
+    if (told->len == msg.len && memcmp(told->data + 8, msg.data + 8, msg.len - 8) == 0) {
+        session_msg_free(&msg);
+        return;
+    }
+
+    tll_foreach(footd.clients, it) {
+        if (it->item->watching)
+            client_send(it->item, &msg, -1);
+    }
+    session_msg_free(&footd.remotes_told);
+    footd.remotes_told = msg;
 }
 
 static bool
@@ -1276,11 +1348,13 @@ remote_reconnect(struct remote *r)
 {
     if (r->mux != NULL)
         return;
+    r->stuck = false;
     const int64_t wait = r->tried_at + MIN_GAP - now_ms();
     if (wait > 0)
         timer_set(r->timer, (int)wait);
     else
         remote_connect(r);
+    remotes_changed();
 }
 
 /* A window that's disconnected: its input connects again */
@@ -1383,6 +1457,7 @@ remote_message(struct session_mux *mux, uint32_t type, struct session_reader *r,
         remote->connected_at = remote->heard_at = now_ms();
         free(remote->error);
         remote->error = NULL;
+        remotes_changed();
         return true;
     }
 
@@ -1541,15 +1616,15 @@ static void
 remote_retry(struct remote *r)
 {
     timer_set(r->timer, 0);
-    if (!remote_awaited(r))
-        return;
-
-    if (r->tries < sizeof(retry_after) / sizeof(retry_after[0])) {
-        timer_set(r->timer, retry_after[r->tries++]);
-        return;
+    if (remote_awaited(r)) {
+        if (r->tries < sizeof(retry_after) / sizeof(retry_after[0]))
+            timer_set(r->timer, retry_after[r->tries++]);
+        else {
+            r->stuck = true;
+            tell_windows(r, "can't connect to %s%s%s; type to try again", r->host, WHY(r));
+        }
     }
-
-    tell_windows(r, "can't connect to %s%s%s; type to try again", r->host, WHY(r));
+    remotes_changed();
 }
 
 /* The connection is lost (or couldn't be made): its windows are told, and kept */
@@ -1595,6 +1670,7 @@ remote_disconnected(struct remote *r)
         remote_install_needed(r);
     else
         remote_retry(r);
+    remotes_changed();
 }
 
 static void
@@ -1682,6 +1758,7 @@ remote_install_needed(struct remote *r)
     if (!remote_awaited(r)) {
         free(r->install);
         r->install = NULL;
+        remotes_changed();
         return;
     }
 
@@ -1695,6 +1772,7 @@ remote_install_needed(struct remote *r)
         if (it->item->remote == r && it->item->fd >= 0)
             ask_install(it->item);
     }
+    remotes_changed();
 }
 
 static pid_t spawn_ssh(struct remote *r, int in, int out, const char *command,
@@ -1721,7 +1799,9 @@ installer_exited(struct reaper *reaper, pid_t pid, int status, void *data)
     }
 
     LOG_WARN("%s: failed to install footd", r->host);
+    r->stuck = true;
     tell_windows(r, "failed to install footd on %s%s%s; type to try again", r->host, WHY(r));
+    remotes_changed();
 }
 
 static void
@@ -1741,6 +1821,8 @@ remote_install(struct remote *r)
         free(path);
         free(r->install);
         r->install = NULL;
+        r->stuck = true;
+        remotes_changed();
         return;
     }
 
@@ -1759,8 +1841,10 @@ remote_install(struct remote *r)
     if (r->installer == 0) {
         free(r->install);
         r->install = NULL;
+        r->stuck = true;
         tell_windows(r, "failed to install footd on %s; type to try again", r->host);
     }
+    remotes_changed();
 }
 
 /* UNINSTALL's answer ('error' NULL: it's removed) */
@@ -1800,6 +1884,7 @@ uninstaller_exited(struct reaper *reaper, pid_t pid, int status, void *data)
     /* Windows opened there meanwhile: connected (footd is installed again, once asked) */
     if (remote_awaited(r))
         remote_connect(r);
+    remotes_changed();
 }
 
 /* UNINSTALL: footd is removed there, its sessions end, and their windows here close */
@@ -1845,6 +1930,7 @@ remote_uninstall(struct remote *r, struct client *c)
         r->uninstalling = c;
     else
         send_uninstalled(c, r->host, "failed to run ssh");
+    remotes_changed();
 }
 
 /* The remote command says footd isn't there, or is too old: "SYSTEM MACHINE OLD" (or "none") */
@@ -1990,6 +2076,7 @@ remote_connect(struct remote *r)
 
     LOG_INFO("%s: connecting", r->host);
     r->tried_at = now_ms();
+    r->stuck = false;
     free(r->error);
     r->error = NULL;
     free(r->install);
@@ -2053,6 +2140,7 @@ remote_connect(struct remote *r)
         }
     }
 
+    remotes_changed();
     return r->mux != NULL;
 }
 
@@ -2277,6 +2365,7 @@ handle_create(struct client *c, struct session_reader *r)
             .id = id, .remote = remote_get(host), .fd = -1, .create = msg};
         tll_push_back(footd.remote_sessions, rs);
         LOG_INFO("session %016llx: on %s", (unsigned long long)id, host);
+        remotes_changed();
 
         remote_attach_window(rs, c, token, &size, fd);
         fd = -1;
@@ -2427,7 +2516,8 @@ handle_message(struct client *c, uint32_t type, struct session_reader *r)
         session_msg_begin(&msg, SESSION_MSG_WELCOME);
         session_msg_u32(&msg, SESSION_PROTOCOL_VERSION);
         session_msg_i32(&msg, getpid());
-        session_msg_u32(&msg, SESSION_FEATURE_REMOTE | SESSION_FEATURE_UNINSTALL);
+        session_msg_u32(&msg, SESSION_FEATURE_REMOTE | SESSION_FEATURE_UNINSTALL |
+                              SESSION_FEATURE_WATCH);
         client_send(c, &msg, -1);
         session_msg_free(&msg);
         return true;
@@ -2539,6 +2629,21 @@ handle_message(struct client *c, uint32_t type, struct session_reader *r)
         }
         remote_uninstall(remote_get(host), c);
         free(host);
+        return true;
+    }
+
+    case SESSION_MSG_WATCH: {
+        const bool on = session_read_u8(r);
+        if (!r->ok)
+            return false;
+
+        /* Told now, even if it's what the others were told last */
+        c->watching = false;
+        if (on) {
+            session_msg_free(&footd.remotes_told);
+            c->watching = true;
+            remotes_changed();
+        }
         return true;
     }
     }
@@ -3015,6 +3120,7 @@ out:
     fdm_destroy(footd.fdm);
 
     free(footd.layout);
+    session_msg_free(&footd.remotes_told);
     free(footd.lock_path);
     free(footd.socket_path);
     log_deinit();

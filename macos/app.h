@@ -35,6 +35,35 @@ NSMenuItem *themes_menu_item(void);
 /* updates.m: foot > Check for Updates… (nil without Sparkle.framework) */
 NSMenuItem *updates_menu_item(void);
 
+/*
+ * A new window, or tab, on another machine ('host', as for ssh; nil:
+ * this one): a session there (macos/session.h)
+ */
+void app_open_on(NSString *host, bool tab);
+
+/* Shell > Remove footd from: footd is removed there, once confirmed */
+void app_remove_footd(NSString *host);
+
+/*
+ * connections.m: Shell > Connections, the other machines (for sessions
+ * there). They're known by their address (as for ssh: [user@]host, or
+ * a Host of ~/.ssh/config), and may have a name given there.
+ */
+void connections_show(void);
+
+/* Those for Shell > New Window on (addresses), by title */
+NSArray<NSString *> *connections_addresses(void);
+
+/* The name given (nil: none); and that, or else the address */
+NSString *connections_name(NSString *address);
+NSString *connections_title(NSString *address);
+
+/* A window was opened there (Other…): it's in the list from now on */
+void connections_remember(NSString *address);
+
+/* 'text', if it's an address (nil: it isn't, e.g. an option, or empty) */
+NSString *connections_address(NSString *text);
+
 /* While a new tab's window is created: the window it joins (else nil) */
 NSWindow *app_new_tab_parent(void);
 

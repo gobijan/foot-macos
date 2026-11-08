@@ -21,10 +21,16 @@ import time
 
 VERSION = 1
 
-HELLO, CREATE, ATTACH, RESIZE, KILL, LIST, LAYOUT, UNINSTALL = range(1, 9)
-WELCOME, STARTED, FAILED, DETACHED, SESSIONS, UNINSTALLED = range(100, 106)
+HELLO, CREATE, ATTACH, RESIZE, KILL, LIST, LAYOUT, UNINSTALL, WATCH = range(1, 10)
+WELCOME, STARTED, FAILED, DETACHED, SESSIONS, UNINSTALLED, REMOTES = range(100, 107)
 FEATURE_REMOTE = 1 << 0
 FEATURE_UNINSTALL = 1 << 1
+FEATURE_WATCH = 1 << 2
+
+# REMOTES: how the connection to another machine is
+IDLE, CONNECTING, CONNECTED, RETRYING, STUCK, ASKING, INSTALLING, REMOVING = range(8)
+STATES = ['idle', 'connecting', 'connected', 'retrying', 'stuck', 'asking', 'installing',
+          'removing']
 
 TIMEOUT = 20
 
@@ -223,6 +229,25 @@ def list_sessions(client):
     return sessions, r.blob()
 
 
+def watch_until(watcher, host, state, sessions=None):
+    """REMOTES (to a client that WATCHes), until 'host' is in 'state': (state, sessions, detail)"""
+    seen = []
+    try:
+        while True:
+            r = watcher.expect(REMOTES)
+            remotes = {}
+            for _ in range(r.u32()):
+                name = r.str()
+                remotes[name] = (r.u8(), r.u32(), r.str())
+            now = remotes.get(host)
+            seen.append(now and (STATES[now[0]], now[1], now[2]))
+            if now is not None and now[0] == state and sessions in (None, now[1]):
+                return now
+    except Failure as e:
+        raise Failure(f'remote: {host} not {STATES[state]} ({sessions} sessions): '
+                      f'{seen} ({e})')
+
+
 def wait_exit(proc):
     try:
         return proc.wait(timeout=TIMEOUT)
@@ -283,6 +308,15 @@ def test_remote(footd, tmp):
         if not c.features & FEATURE_REMOTE or not c.features & FEATURE_UNINSTALL:
             raise Failure(f'no remote sessions (features: {c.features})')
 
+        # Another client watches the connections (Shell > Connections): none yet
+        watcher = Client(path)
+        watcher.hello()
+        if not watcher.features & FEATURE_WATCH:
+            raise Failure(f'no WATCH (features: {watcher.features})')
+        watcher.send(WATCH, u8(1))
+        if watcher.expect(REMOTES).u32() != 0:
+            raise Failure('remote: REMOTES before any')
+
         # There: the window's size; that machine's environment, not the window's
         global ENV
         ENV = dict(ENV, WINDOW_MARK='here')
@@ -290,6 +324,7 @@ def test_remote(footd, tmp):
                   'read x; echo "got $x"; read y; echo bye')
         win, _ = create(c, 100, 1, ['/bin/sh', '-c', script], cols=90, rows=20, host='testhost')
         out = win.read_until(b'ready')
+        watch_until(watcher, 'testhost', CONNECTED, 1)
         if b'20 90' not in out:
             raise Failure(f'remote: stty size: {out!r}')
         if b'w= r=there' not in out:
@@ -323,6 +358,8 @@ def test_remote(footd, tmp):
         win.read_past(b'connection to testhost is lost')
         win.read_until(b'up')       # Its state, anew
         c.expect(STARTED)
+        watch_until(watcher, 'testhost', RETRYING, 1)
+        watch_until(watcher, 'testhost', CONNECTED, 1)
         win.write(b'one\n')
         win.read_until(b'got one')
 
@@ -349,6 +386,9 @@ def test_remote(footd, tmp):
         win, _ = create(c, 103, 5, ['/bin/sh', '-c', 'echo up'], host='otherhost', started=False)
         win.read_until(b"can't connect to otherhost: no such host: otherhost; trying again")
         win.sent()
+        detail = watch_until(watcher, 'otherhost', RETRYING, 1)[2]
+        if detail != 'no such host: otherhost':
+            raise Failure(f'remote: why otherhost can not be reached: {detail!r}')
         win.close()
         c.send(KILL, u64(103) + u64(5))
         time.sleep(.3)
@@ -360,6 +400,9 @@ def test_remote(footd, tmp):
         win, _ = create(c, 104, 6, ['/bin/sh', '-c', 'echo up; read x'], host='newhost', started=False)
         win.read_until(b"footd isn't on newhost")
         win.sent()
+        detail = watch_until(watcher, 'newhost', ASKING, 1)[2]
+        if detail != f'{os.uname().sysname} {os.uname().machine}':
+            raise Failure(f'remote: newhost is {detail!r}')
         win.write(b'y')
         time.sleep(.3)
         if os.path.exists(os.path.join(newhost, 'footd')):
@@ -368,6 +411,8 @@ def test_remote(footd, tmp):
         win.read_until(b'installing footd on newhost')
         if c.expect(STARTED).u64() != 104:
             raise Failure('remote: STARTED for another session')
+        watch_until(watcher, 'newhost', INSTALLING)
+        watch_until(watcher, 'newhost', CONNECTED, 1)
         win.read_until(b'up')
         with open(footd, 'rb') as a, open(os.path.join(newhost, 'footd'), 'rb') as b:
             if a.read() != b.read():
@@ -384,6 +429,8 @@ def test_remote(footd, tmp):
         win.read_eof()
         if os.path.exists(os.path.join(newhost, 'footd')):
             raise Failure('remote: not removed')
+        watch_until(watcher, 'newhost', REMOVING, 0)
+        watch_until(watcher, 'newhost', IDLE, 0)
 
         # An old one there: replaced, without asking
         open(os.path.join(newhost, 'old'), 'w').close()
@@ -411,6 +458,8 @@ def test_remote(footd, tmp):
         there.close()
 
         # Without sessions and windows, both footds exit (the remote one: its bridge gone)
+        watcher.send(WATCH, u8(0))
+        watcher.close()
         c.close()
         if wait_exit(proc) != 0:
             raise Failure('remote: footd failed')

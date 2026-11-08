@@ -390,6 +390,7 @@ foot = executable(
   'app.m', 'app.h',
   'window.m',
   'close.m',
+  'connections.m',
   'notifications.m',
   'view.m', 'view.h',
   'split-view.m', 'split-view.h',

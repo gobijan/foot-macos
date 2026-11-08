@@ -101,6 +101,11 @@ static struct {
     char *next_host;
 
     uint32_t features;      /* footd's (WELCOME) */
+    bool welcomed;
+
+    /* sessions_watch_remotes() */
+    void (*remotes_changed)(const struct session_remote *remotes, size_t count, void *data);
+    void *remotes_data;
 
     /* sessions_uninstall(): told once footd has answered */
     void (*uninstalled)(const char *host, const char *error, void *data);
@@ -183,6 +188,57 @@ send_msg(struct session_msg *msg, int fd)
     return true;
 }
 
+/* WATCH (if footd can) */
+static void
+send_watch(bool on)
+{
+    if (!client.welcomed || !(client.features & SESSION_FEATURE_WATCH))
+        return;
+
+    struct session_msg msg = {0};
+    session_msg_begin(&msg, SESSION_MSG_WATCH);
+    session_msg_u8(&msg, on);
+    send_msg(&msg, -1);
+    session_msg_free(&msg);
+}
+
+static void
+handle_remotes(struct session_reader *r)
+{
+    const uint32_t count = session_read_u32(r);
+    if (!r->ok || count > SESSION_MAX_PAYLOAD / 8 || client.remotes_changed == NULL)
+        return;
+
+    struct session_remote *remotes = xcalloc(count > 0 ? count : 1, sizeof(remotes[0]));
+    size_t n = 0;
+    for (uint32_t i = 0; i < count && r->ok; i++) {
+        struct session_remote *remote = &remotes[n];
+        remote->host = session_read_str(r);
+        remote->state = session_read_u8(r);
+        remote->sessions = session_read_u32(r);
+        remote->detail = session_read_str(r);
+        if (remote->detail != NULL && remote->detail[0] == '\0') {
+            free(remote->detail);
+            remote->detail = NULL;
+        }
+        if (r->ok)
+            n++;
+        else {
+            free(remote->host);
+            free(remote->detail);
+        }
+    }
+
+    if (r->ok)
+        client.remotes_changed(remotes, n, client.remotes_data);
+
+    for (size_t i = 0; i < n; i++) {
+        free(remotes[i].host);
+        free(remotes[i].detail);
+    }
+    free(remotes);
+}
+
 static void
 handle_message(uint32_t type, struct session_reader *r)
 {
@@ -191,9 +247,17 @@ handle_message(uint32_t type, struct session_reader *r)
         const uint32_t version = session_read_u32(r);
         const pid_t pid = session_read_i32(r);
         client.features = session_read_more(r) ? session_read_u32(r) : 0;
+        client.welcomed = true;
         LOG_INFO("footd (PID=%d, protocol %u, features %#x)", pid, version, client.features);
+
+        if (client.remotes_changed != NULL)
+            send_watch(true);
         break;
     }
+
+    case SESSION_MSG_REMOTES:
+        handle_remotes(r);
+        break;
 
     case SESSION_MSG_STARTED: {
         const uint64_t id = session_read_u64(r);
@@ -353,6 +417,11 @@ disconnect(void)
     fdm_del_no_close(client.fdm, client.conn.fd);
     session_conn_close(&client.conn);
     client.writing = false;
+    client.welcomed = false;
+
+    /* (Its connections to other machines are gone with it) */
+    if (client.remotes_changed != NULL)
+        client.remotes_changed(NULL, 0, client.remotes_data);
 
     tll_foreach(client.links, it) {
         struct session_link *link = it->item;
@@ -770,6 +839,32 @@ sessions_uninstall(const char *host,
     const bool ok = send_msg(&msg, -1);
     session_msg_free(&msg);
     return ok;
+}
+
+void
+sessions_watch_remotes(
+    struct fdm *fdm,
+    void (*changed)(const struct session_remote *remotes, size_t count, void *data),
+    void *data)
+{
+    const bool watching = client.remotes_changed != NULL;
+    client.remotes_changed = changed;
+    client.remotes_data = data;
+
+    if (changed == NULL) {
+        if (watching)
+            send_watch(false);
+        return;
+    }
+    if (!client.enabled)
+        return;
+
+    /* Without footd, there's nothing yet: told once it's started (WELCOME) */
+    if (client.fdm == NULL)
+        client.fdm = fdm;
+    if (client.conn.fd < 0 && !connect_footd(false))
+        return;
+    send_watch(true);
 }
 
 bool

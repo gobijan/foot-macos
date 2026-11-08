@@ -762,9 +762,15 @@ wayl_win_request_frame(struct wl_window *win)
 void
 wayl_win_set_title(struct wl_window *win, const char *title)
 {
-    /* On another machine: which one, first (its host, without the user) */
+    /*
+     * On another machine: which one, first (its name in Shell >
+     * Connections, or else its host, without the user)
+     */
     const char *host = win->term != NULL ? session_link_host(win->term->session) : NULL;
-    if (host != NULL && strchr(host, '@') != NULL)
+    NSString *name = host != NULL ? connections_name([NSString stringWithUTF8String:host]) : nil;
+    if (name != nil)
+        host = name.UTF8String;
+    else if (host != NULL && strchr(host, '@') != NULL)
         host = strchr(host, '@') + 1;
 
     free(win->title);

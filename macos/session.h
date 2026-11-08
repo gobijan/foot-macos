@@ -116,6 +116,26 @@ bool sessions_uninstall(const char *host,
                         void (*done)(const char *host, const char *error, void *data),
                         void *data);
 
+/*
+ * The other machines footd has had sessions on, and how its connections
+ * to them are (Shell > Connections)
+ */
+struct session_remote {
+    char *host;
+    uint8_t state;      /* enum session_remote_state (session-protocol.h) */
+    uint32_t sessions;
+    char *detail;       /* Why it can't connect, or the machine's system; NULL: none */
+};
+
+/*
+ * 'changed' gets them now (if footd runs), and whenever they change;
+ * none once footd is gone. NULL: no longer. Not with an older footd.
+ */
+void sessions_watch_remotes(
+    struct fdm *fdm,
+    void (*changed)(const struct session_remote *remotes, size_t count, void *data),
+    void *data);
+
 /* foot exits: the connection to footd is closed (once the terminals are gone) */
 void sessions_fini(void);
 

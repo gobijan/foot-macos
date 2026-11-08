@@ -51,6 +51,7 @@ enum session_msg_type {
     SESSION_MSG_LAYOUT,      /* blob: the windows' layout, kept for the next one */
     SESSION_MSG_UNINSTALL,   /* str host: footd is removed there (its sessions end);
                                 UNINSTALLED answers */
+    SESSION_MSG_WATCH,       /* u8 on: REMOTES now, and whenever it changes (until off) */
 
     /* footd -> window */
     SESSION_MSG_WELCOME = 100,  /* u32 version, i32 pid, u32 features (optional) */
@@ -61,6 +62,9 @@ enum session_msg_type {
     SESSION_MSG_SESSIONS,       /* u32 count, {u64 id, u8 attached, i32 shell PID,
                                    str title, str cwd} * count, blob layout */
     SESSION_MSG_UNINSTALLED,    /* str host, str error (empty: removed) */
+    SESSION_MSG_REMOTES,        /* u32 count, {str host, u8 state (session_remote_state),
+                                   u32 sessions, str detail} * count: the other
+                                   machines footd has had sessions on */
 
     /*
      * Over a stream (footd --bridge), both ways: the windows' sockets, as
@@ -76,6 +80,19 @@ enum session_msg_type {
 /* WELCOME's features */
 #define SESSION_FEATURE_REMOTE (1u << 0)     /* CREATE's host */
 #define SESSION_FEATURE_UNINSTALL (1u << 1)  /* UNINSTALL */
+#define SESSION_FEATURE_WATCH (1u << 2)      /* WATCH */
+
+/* REMOTES: how footd's connection to another machine is */
+enum session_remote_state {
+    SESSION_REMOTE_IDLE,        /* Not connected: no window waits for it */
+    SESSION_REMOTE_CONNECTING,
+    SESSION_REMOTE_CONNECTED,
+    SESSION_REMOTE_RETRYING,    /* Lost, or it couldn't connect: tried again soon (detail: why) */
+    SESSION_REMOTE_FAILED,      /* Not tried again before the windows' input (detail: why) */
+    SESSION_REMOTE_ASKING,      /* footd isn't there: the windows ask (detail: its uname) */
+    SESSION_REMOTE_INSTALLING,
+    SESSION_REMOTE_REMOVING,
+};
 
 /* A terminal's size: what the PTY gets (TIOCSWINSZ) */
 struct session_size {

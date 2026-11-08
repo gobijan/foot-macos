@@ -264,10 +264,19 @@ network changes, or when you type after a quiet while: it's checked,
 and if nothing answers within 5 seconds, it's connected anew. Nothing
 is sent while the windows are idle.
 
-* The machines offered: those used last, and those in `~/.ssh/config`;
-  Other… asks for one (`user@host`, as for ssh). This Mac: here.
+* Shell > Connections (Shift+Cmd+K) lists the machines, and how
+  they're connected: connected (with how many sessions), connecting,
+  can't connect (and why), footd being installed. There, + adds one
+  (an address as for ssh: `user@host`, or a host in `~/.ssh/config`;
+  and a name, if you like), − removes it from the list, and New Window
+  or New Tab (or a double-click) opens one there. Its menu: edit it,
+  remove footd from it.
+* The machines offered: those in Connections (those Other… was used
+  for too), and those in `~/.ssh/config`. Other… asks for one
+  (`user@host`, as for ssh). This Mac: here.
 * New windows, tabs and splits open where the focused terminal runs.
-  The title starts with the machine.
+  The title starts with the machine: its name in Connections, or else
+  its host.
 * foot runs `ssh -T -o BatchMode=yes HOST footd --bridge`: your SSH
   configuration and keys (the agent) are used, without asking for
   passwords. One connection per machine, for all its windows. A
