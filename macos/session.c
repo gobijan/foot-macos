@@ -107,6 +107,12 @@ static struct {
     void (*remotes_changed)(const struct session_remote *remotes, size_t count, void *data);
     void *remotes_data;
 
+    /* sessions_set_login() */
+    void (*ask)(uint64_t id, const char *host, const char *prompt, bool confirm, bool again,
+                void *data);
+    void (*asked)(uint64_t id, void *data);
+    void *login_data;
+
     /* sessions_uninstall(): told once footd has answered */
     void (*uninstalled)(const char *host, const char *error, void *data);
     void *uninstalled_data;
@@ -258,6 +264,28 @@ handle_message(uint32_t type, struct session_reader *r)
     case SESSION_MSG_REMOTES:
         handle_remotes(r);
         break;
+
+    case SESSION_MSG_ASK: {
+        const uint64_t id = session_read_u64(r);
+        char *host = session_read_str(r);
+        char *prompt = session_read_str(r);
+        const bool confirm = session_read_u8(r);
+        const bool again = session_read_u8(r);
+        if (r->ok && client.ask != NULL)
+            client.ask(id, host, prompt, confirm, again, client.login_data);
+        else if (r->ok)
+            sessions_answer(id, false, NULL);
+        free(host);
+        free(prompt);
+        break;
+    }
+
+    case SESSION_MSG_ASKED: {
+        const uint64_t id = session_read_u64(r);
+        if (r->ok && client.asked != NULL)
+            client.asked(id, client.login_data);
+        break;
+    }
 
     case SESSION_MSG_STARTED: {
         const uint64_t id = session_read_u64(r);
@@ -570,6 +598,7 @@ connect_footd(bool start)
     session_msg_begin(&msg, SESSION_MSG_HELLO);
     session_msg_u32(&msg, SESSION_PROTOCOL_VERSION);
     session_msg_i32(&msg, getpid());
+    session_msg_u32(&msg, SESSION_CLIENT_ASK);
     const bool ok = send_msg(&msg, -1);
     session_msg_free(&msg);
     return ok;
@@ -865,6 +894,33 @@ sessions_watch_remotes(
     if (client.conn.fd < 0 && !connect_footd(false))
         return;
     send_watch(true);
+}
+
+void
+sessions_set_login(
+    void (*ask)(uint64_t id, const char *host, const char *prompt, bool confirm, bool again,
+                void *data),
+    void (*asked)(uint64_t id, void *data),
+    void *data)
+{
+    client.ask = ask;
+    client.asked = asked;
+    client.login_data = data;
+}
+
+void
+sessions_answer(uint64_t id, bool ok, const char *answer)
+{
+    struct session_msg msg = {0};
+    session_msg_begin(&msg, SESSION_MSG_ANSWER);
+    session_msg_u64(&msg, id);
+    session_msg_u8(&msg, ok);
+    session_msg_str(&msg, ok ? answer : NULL);
+    send_msg(&msg, -1);
+
+    /* (The password, in the message) */
+    memset(msg.data, 0, msg.len);
+    session_msg_free(&msg);
 }
 
 bool

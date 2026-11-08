@@ -518,6 +518,11 @@ status_text(FootServerStatus *s, NSString **symbol, NSColor **color)
     case SESSION_REMOTE_REMOVING:
         *symbol = @"trash.circle";
         return @"Removing footd…";
+
+    case SESSION_REMOTE_LOGIN:
+        *symbol = @"key.fill";
+        *color = NSColor.systemBlueColor;
+        return @"Logging in: its window asks";
     }
     return @"";
 }
@@ -542,8 +547,9 @@ status_text(FootServerStatus *s, NSString **symbol, NSColor **color)
     NSAlert *alert = [[NSAlert alloc] init];
     alert.messageText = server == nil ? @"Add a Server" : @"Edit Server";
     alert.informativeText = @"The address is as for ssh: user@host, or a host in "
-        "~/.ssh/config. foot connects with your SSH key, and installs its footd there "
-        "if it's missing (asking first). The color marks its windows and tabs.";
+        "~/.ssh/config. foot connects with your SSH key, or asks for the password, and "
+        "installs its footd there if it's missing (asking first). The color marks its "
+        "windows and tabs.";
     _ok = [alert addButtonWithTitle:server == nil ? @"Add" : @"Save"];
     [alert addButtonWithTitle:@"Cancel"];
     _alert = alert;
@@ -668,9 +674,9 @@ remotes_changed(const struct session_remote *remotes, size_t count, void *data);
 
     NSTextField *empty = [NSTextField wrappingLabelWithString:
         @"No servers yet: add one with +.\n\n"
-        "foot connects with SSH, with your SSH key, and installs its footd there (one "
-        "file, no sudo). Your sessions there keep running when the connection is lost, "
-        "or foot quits."];
+        "foot connects with SSH (with your SSH key, or a password), and installs its "
+        "footd there (one file, no sudo). Your sessions there keep running when the "
+        "connection is lost, or foot quits."];
     empty.alignment = NSTextAlignmentCenter;
     empty.textColor = NSColor.secondaryLabelColor;
     empty.translatesAutoresizingMaskIntoConstraints = NO;

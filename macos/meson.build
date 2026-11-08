@@ -184,7 +184,7 @@ if is_macos
   appkit = dependency(
     'appleframeworks',
     modules: ['AppKit', 'Carbon', 'CoreFoundation', 'CoreGraphics',
-              'CoreText', 'IOSurface', 'QuartzCore', 'UserNotifications'])
+              'CoreText', 'IOSurface', 'QuartzCore', 'Security', 'UserNotifications'])
 
   coretext = dependency(
     'appleframeworks',
@@ -332,6 +332,7 @@ session_protocol = static_library(
 footd = executable(
   'footd',
   'footd.c',
+  'footd-askpass.c',
   'footd-bridge.c', 'footd-bridge.h',
   'session-mux.c', 'session-mux.h',
   version,
@@ -391,6 +392,7 @@ foot = executable(
   'window.m',
   'close.m',
   'connections.m',
+  'login.m',
   'notifications.m',
   'view.m', 'view.h',
   'split-view.m', 'split-view.h',

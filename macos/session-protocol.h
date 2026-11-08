@@ -38,7 +38,8 @@
 
 enum session_msg_type {
     /* Window (foot) -> footd */
-    SESSION_MSG_HELLO = 1,   /* u32 version, i32 pid */
+    SESSION_MSG_HELLO = 1,   /* u32 version, i32 pid, u32 the client's features
+                                (optional: SESSION_CLIENT_*) */
     SESSION_MSG_CREATE,      /* u64 id, u64 token, size, str cwd, str config path,
                                 str TERM, str shell, u8 login shell, u32 scrollback
                                 lines, strv argv, strv envp, str host (optional:
@@ -52,6 +53,9 @@ enum session_msg_type {
     SESSION_MSG_UNINSTALL,   /* str host: footd is removed there (its sessions end);
                                 UNINSTALLED answers */
     SESSION_MSG_WATCH,       /* u8 on: REMOTES now, and whenever it changes (until off) */
+    SESSION_MSG_ASKPASS,     /* u64 token, str prompt, u8 confirm: ssh asks (footd --askpass,
+                                for the ssh with that token); ANSWERED answers */
+    SESSION_MSG_ANSWER,      /* u64 id, u8 ok, str answer: to an ASK (ok 0: refused) */
 
     /* footd -> window */
     SESSION_MSG_WELCOME = 100,  /* u32 version, i32 pid, u32 features (optional) */
@@ -65,6 +69,11 @@ enum session_msg_type {
     SESSION_MSG_REMOTES,        /* u32 count, {str host, u8 state (session_remote_state),
                                    u32 sessions, str detail} * count: the other
                                    machines footd has had sessions on */
+    SESSION_MSG_ASK,            /* u64 id, str host, str prompt, u8 confirm (else: a secret,
+                                   e.g. a password), u8 again (the last answer was
+                                   wrong): ssh asks; ANSWER answers */
+    SESSION_MSG_ASKED,          /* u64 id: the ASK isn't to be answered any more */
+    SESSION_MSG_ANSWERED,       /* u8 ok, str answer: to ASKPASS */
 
     /*
      * Over a stream (footd --bridge), both ways: the windows' sockets, as
@@ -82,6 +91,9 @@ enum session_msg_type {
 #define SESSION_FEATURE_UNINSTALL (1u << 1)  /* UNINSTALL */
 #define SESSION_FEATURE_WATCH (1u << 2)      /* WATCH */
 
+/* HELLO's client features */
+#define SESSION_CLIENT_ASK (1u << 0)         /* It answers ASK */
+
 /* REMOTES: how footd's connection to another machine is */
 enum session_remote_state {
     SESSION_REMOTE_IDLE,        /* Not connected: no window waits for it */
@@ -92,6 +104,7 @@ enum session_remote_state {
     SESSION_REMOTE_ASKING,      /* footd isn't there: the windows ask (detail: its uname) */
     SESSION_REMOTE_INSTALLING,
     SESSION_REMOTE_REMOVING,
+    SESSION_REMOTE_LOGIN,       /* ssh asks (e.g. for a password): foot's windows do */
 };
 
 /* A terminal's size: what the PTY gets (TIOCSWINSZ) */
@@ -157,6 +170,9 @@ void session_strv_free(char **strv);
 
 /* Points into the message (not copied) */
 const void *session_read_blob(struct session_reader *r, size_t *len);
+
+/* Overwrites 's' (e.g. a password), and frees it (NULL: nothing) */
+void session_erase(char *s);
 
 /* Whether there's more: optional fields, added later (see above) */
 bool session_read_more(const struct session_reader *r);

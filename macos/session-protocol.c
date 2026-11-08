@@ -228,6 +228,18 @@ session_read_strv(struct session_reader *r)
 }
 
 void
+session_erase(char *s)
+{
+    if (s == NULL)
+        return;
+
+    /* (Not optimized away, as a memset() before free() may be) */
+    for (volatile char *p = s; *p != '\0'; p++)
+        *p = '\0';
+    free(s);
+}
+
+void
 session_strv_free(char **strv)
 {
     if (strv == NULL)

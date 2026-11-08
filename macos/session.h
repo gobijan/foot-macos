@@ -136,6 +136,20 @@ void sessions_watch_remotes(
     void (*changed)(const struct session_remote *remotes, size_t count, void *data),
     void *data);
 
+/*
+ * Logging in to other machines: ssh asks (e.g. for a password; footd
+ * passes it on). 'ask' asks ('confirm': yes or no, else a secret;
+ * 'again': the last answer was wrong), and sessions_answer() answers
+ * ('ok' false: refused). 'asked': it isn't to be answered any more
+ * (e.g. ssh gave up). Without them, nothing is answered.
+ */
+void sessions_set_login(
+    void (*ask)(uint64_t id, const char *host, const char *prompt, bool confirm, bool again,
+                void *data),
+    void (*asked)(uint64_t id, void *data),
+    void *data);
+void sessions_answer(uint64_t id, bool ok, const char *answer);
+
 /* foot exits: the connection to footd is closed (once the terminals are gone) */
 void sessions_fini(void);
 

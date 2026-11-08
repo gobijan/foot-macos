@@ -521,6 +521,7 @@ wayl_prepare_environment(void)
     const char *sessions_socket = getenv("FOOT_SESSIONS_SOCKET");
     sessions_enable(app.launched_as_app ||
                     (sessions_socket != NULL && sessions_socket[0] != '\0'));
+    login_init();
 
     @autoreleasepool {
         /* Started through a symlink to foot.app's executable (e.g.
@@ -1125,8 +1126,8 @@ ask_host(bool tab)
     NSAlert *alert = [[NSAlert alloc] init];
     alert.messageText = tab ? @"New Tab on Another Machine" : @"New Window on Another Machine";
     alert.informativeText = @"As for ssh: user@host, or a host in ~/.ssh/config, "
-        "with your SSH key. foot needs its footd there: if it's missing, the window "
-        "offers to install it (~/.local/bin/footd, no sudo).";
+        "with your SSH key (or foot asks for the password). foot needs its footd there: "
+        "if it's missing, the window offers to install it (~/.local/bin/footd, no sudo).";
     [alert addButtonWithTitle:@"Connect"];
     [alert addButtonWithTitle:@"Cancel"];
 

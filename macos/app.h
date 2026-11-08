@@ -70,6 +70,12 @@ void connections_remember(NSString *address);
 /* 'text', if it's an address (nil: it isn't, e.g. an option, or empty) */
 NSString *connections_address(NSString *text);
 
+/*
+ * login.m: logging in to other machines: what ssh asks (e.g. a
+ * password) is asked in a window there (and may be kept in the Keychain)
+ */
+void login_init(void);
+
 /* While a new tab's window is created: the window it joins (else nil) */
 NSWindow *app_new_tab_parent(void);
 

@@ -25,3 +25,10 @@ int footd_bridge(const char *socket_path);
 
 /* This footd's executable (NULL: unknown) */
 char *footd_own_path(void);
+
+/*
+ * footd as ssh's SSH_ASKPASS (footd-askpass.c): asks footd (listening on
+ * 'socket_path') for what ssh's 'prompt' asks, for the ssh footd gave
+ * 'token' (hex). Prints the answer. Returns the exit code.
+ */
+int footd_askpass(const char *socket_path, const char *token, const char *prompt);

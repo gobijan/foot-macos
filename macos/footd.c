@@ -22,6 +22,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <getopt.h>
+#include <inttypes.h>
 #include <locale.h>
 #include <signal.h>
 #include <stdarg.h>
@@ -173,6 +174,14 @@ struct client {
     bool greeted;
     bool writing;
     bool watching;  /* WATCH: told about the other machines (REMOTES) */
+    bool asks;      /* It answers ASK (foot, with windows; HELLO) */
+};
+
+/* An answer to ssh's prompt, and the ssh (its token) it was given to last */
+struct secret {
+    char *prompt;
+    char *answer;
+    uint64_t token;
 };
 
 /* Another machine, over SSH (see "Sessions on other machines" below) */
@@ -206,6 +215,27 @@ struct remote {
     /* UNINSTALL: ssh removing it, and the window's client that asked (NULL: gone) */
     pid_t uninstaller;
     struct client *uninstalling;
+
+    /*
+     * Logging in: ssh asks (SSH_ASKPASS: footd --askpass, with the token
+     * of the ssh run last), e.g. for a password. What foot's windows
+     * answered is kept, for the next time (reconnecting); refused, it's
+     * not tried again before the windows' input.
+     */
+    uint64_t token;
+    tll(struct secret) secrets;
+    bool refused;
+};
+
+/* ssh's question (footd --askpass), asked in a window (foot) */
+struct ask {
+    uint64_t id;
+    struct remote *remote;
+    struct client *helper;      /* footd --askpass, waiting for the answer */
+    struct client *window;      /* foot, asked */
+    uint64_t token;
+    char *prompt;
+    bool confirm;               /* Yes or no; else a secret (e.g. a password) */
 };
 
 struct remote_session {
@@ -220,6 +250,7 @@ struct remote_session {
     bool started;               /* STARTED: it's there */
     struct session_msg create;  /* Its CREATE, until then (sent again if it couldn't connect) */
     bool told;                  /* The window was told it's disconnected (until attached) */
+    bool killed;                /* KILL: it's ended, once its window's socket is closed */
 
     /* The window that was attached last (as for sessions here) */
     struct client *last_client;
@@ -247,6 +278,8 @@ static struct {
     int network_token;
     int network_timer;      /* Until they've settled; -1: none */
     struct session_msg remotes_told;  /* The last REMOTES (to those who WATCH) */
+    tll(struct ask *) asks;
+    uint64_t next_id;       /* The asks', and ssh's tokens */
 
     /* The windows' layout, from the last window to tell */
     void *layout;
@@ -1107,6 +1140,7 @@ static const int retry_after[] = {1000, 4000, 10000, 20000, 30000, 60000};
 static void remote_disconnected(struct remote *r);
 static bool remote_connect(struct remote *r);
 static void remote_install_needed(struct remote *r);
+static void asks_withdraw(struct remote *r, struct client *gone);
 
 static int64_t
 now_ms(void)
@@ -1282,9 +1316,21 @@ remote_maybe_idle(struct remote *r)
 }
 
 /* How it is, for REMOTES */
+static bool
+remote_asks(const struct remote *r)
+{
+    tll_foreach(footd.asks, it) {
+        if (it->item->remote == r)
+            return true;
+    }
+    return false;
+}
+
 static enum session_remote_state
 remote_state(const struct remote *r)
 {
+    if (remote_asks(r))
+        return SESSION_REMOTE_LOGIN;
     if (r->uninstaller > 0)
         return SESSION_REMOTE_REMOVING;
     if (r->installer > 0)
@@ -1411,7 +1457,7 @@ remote_reconnect(struct remote *r)
     if (r->mux != NULL)
         return;
     r->stuck = false;
-    const int64_t wait = r->tried_at + MIN_GAP - now_ms();
+    const int64_t wait = r->tried_at + ms_from_env("FOOTD_MIN_GAP", MIN_GAP) - now_ms();
     if (wait > 0)
         timer_set(r->timer, (int)wait);
     else
@@ -1598,8 +1644,11 @@ remote_channel_closed(struct session_mux *mux, uint32_t channel, bool theirs, vo
     rs->channel = 0;
     rs->client = NULL;
 
-    /* There: the session has ended, unless a window elsewhere has it */
-    if (theirs && !rs->detached)
+    /*
+     * There: the session has ended, unless a window elsewhere has it.
+     * Here (the window closed): if it was ended (its KILL came first)
+     */
+    if ((theirs && !rs->detached) || rs->killed)
         remote_session_free(rs);
     else
         remote_maybe_idle(data);
@@ -1682,7 +1731,10 @@ remote_retry(struct remote *r)
 {
     timer_set(r->timer, 0);
     if (remote_awaited(r)) {
-        if (r->tries < sizeof(retry_after) / sizeof(retry_after[0]))
+        if (r->refused) {
+            r->stuck = true;
+            tell_windows(r, "logging in to %s was canceled; type to try again", r->host);
+        } else if (r->tries < sizeof(retry_after) / sizeof(retry_after[0]))
             timer_set(r->timer, retry_after[r->tries++]);
         else {
             r->stuck = true;
@@ -1698,6 +1750,7 @@ remote_disconnected(struct remote *r)
 {
     /* (Why, if ssh said so) */
     ssh_log_read(r);
+    asks_withdraw(r, NULL);
 
     if (r->connected) {
         LOG_WARN("%s: disconnected", r->host);
@@ -1742,8 +1795,12 @@ static void
 ssh_exited(struct reaper *reaper, pid_t pid, int status, void *data)
 {
     struct remote *r = data;
-    if (r->ssh == pid)
-        r->ssh = 0;
+    if (r->ssh != pid)
+        return;
+
+    /* (What it asked isn't to be answered any more) */
+    r->ssh = 0;
+    asks_withdraw(r, NULL);
 }
 
 /*
@@ -1853,6 +1910,7 @@ installer_exited(struct reaper *reaper, pid_t pid, int status, void *data)
 
     r->installer = 0;
     ssh_log_read(r);
+    asks_withdraw(r, NULL);
     free(r->install);
     r->install = NULL;
 
@@ -1892,6 +1950,7 @@ remote_install(struct remote *r)
     }
 
     LOG_INFO("%s: installing %s", r->host, path);
+    r->refused = false;
     tell_windows(r, "%s footd on %s…", r->outdated ? "updating" : "installing", r->host);
 
     free(r->error);
@@ -1933,6 +1992,7 @@ uninstaller_exited(struct reaper *reaper, pid_t pid, int status, void *data)
 
     r->uninstaller = 0;
     ssh_log_read(r);
+    asks_withdraw(r, NULL);
 
     const bool ok = WIFEXITED(status) && WEXITSTATUS(status) == 0;
     if (ok)
@@ -1962,6 +2022,8 @@ remote_uninstall(struct remote *r, struct client *c)
     }
 
     LOG_INFO("%s: removing footd", r->host);
+    asks_withdraw(r, NULL);
+    r->refused = false;
 
     tll_foreach(footd.remote_sessions, it) {
         struct remote_session *rs = it->item;
@@ -2057,6 +2119,229 @@ fdm_ssh_log(struct fdm *fdm, int fd, int events, void *data)
  * time (their key is added to ~/.ssh/known_hosts), as ssh asks then;
  * not if their key has changed. 0: failed.
  */
+/*
+ * Logging in: ssh asks (e.g. for a password) with SSH_ASKPASS, which is
+ * footd (footd-askpass.c): it asks here. What's been answered for that
+ * machine before (for the same prompt) is the answer, unless the same
+ * ssh asks again (then it was wrong); else foot (a window there) asks.
+ * While it does, connecting isn't given up on (CONNECT_TIMEOUT).
+ */
+
+/* ssh's environment: for footd --askpass, with a token for that ssh (it's run anew) */
+static char **
+ssh_environment(struct remote *r)
+{
+    size_t count = 0;
+    while (environ[count] != NULL)
+        count++;
+
+    char **env = xcalloc(count + 5, sizeof(env[0]));
+    size_t n = 0;
+    for (size_t i = 0; i < count; i++) {
+        if (strncmp(environ[i], "SSH_ASKPASS", 11) != 0 &&
+            strncmp(environ[i], "FOOTD_ASKPASS", 13) != 0)
+        {
+            env[n++] = xstrdup(environ[i]);
+        }
+    }
+
+    r->token = ++footd.next_id;
+    char *self = footd_own_path();
+    if (self != NULL && footd.socket_path != NULL) {
+        env[n++] = xasprintf("SSH_ASKPASS=%s", self);
+        env[n++] = xstrdup("SSH_ASKPASS_REQUIRE=force");
+        env[n++] = xasprintf("FOOTD_ASKPASS=%s", footd.socket_path);
+        env[n++] = xasprintf("FOOTD_ASKPASS_TOKEN=%" PRIx64, r->token);
+    }
+    free(self);
+    return env;
+}
+
+/* ASKPASS's answer ('ok' false: none) */
+static void
+send_answered(struct client *helper, bool ok, const char *answer)
+{
+    struct session_msg msg = {0};
+    session_msg_begin(&msg, SESSION_MSG_ANSWERED);
+    session_msg_u8(&msg, ok);
+    session_msg_str(&msg, ok ? answer : NULL);
+    client_send(helper, &msg, -1);
+
+    /* (The password, in the message) */
+    memset(msg.data, 0, msg.len);
+    session_msg_free(&msg);
+}
+
+/* Connecting waits for the answers; then, it's given up on in time again */
+static void
+connect_timeout(struct remote *r)
+{
+    if (r->mux != NULL && r->checking && !r->connected)
+        timer_set(r->timer, remote_asks(r) ? 0 : CONNECT_TIMEOUT);
+}
+
+static void
+ask_free(struct ask *ask)
+{
+    tll_foreach(footd.asks, it) {
+        if (it->item == ask) {
+            tll_remove(footd.asks, it);
+            break;
+        }
+    }
+    free(ask->prompt);
+    free(ask);
+}
+
+/*
+ * Not to be answered any more: 'r''s ssh is gone (NULL: any), or a
+ * client is ('gone': the asking footd --askpass, or the window's foot)
+ */
+static void
+asks_withdraw(struct remote *r, struct client *gone)
+{
+    bool withdrawn = false;
+    tll_foreach(footd.asks, it) {
+        struct ask *ask = it->item;
+        if (ask->remote != r && ask->helper != gone && ask->window != gone)
+            continue;
+
+        if (ask->helper != gone)
+            send_answered(ask->helper, false, NULL);
+        if (ask->window != gone) {
+            struct session_msg msg = {0};
+            session_msg_begin(&msg, SESSION_MSG_ASKED);
+            session_msg_u64(&msg, ask->id);
+            client_send(ask->window, &msg, -1);
+            session_msg_free(&msg);
+        }
+
+        struct remote *remote = ask->remote;
+        ask_free(ask);
+        connect_timeout(remote);
+        withdrawn = true;
+    }
+    if (withdrawn)
+        remotes_changed();
+}
+
+/* foot, to ask: the one with a window there, else any (NULL: none) */
+static struct client *
+asking_window(const struct remote *r)
+{
+    tll_foreach(footd.remote_sessions, it) {
+        const struct remote_session *rs = it->item;
+        struct client *c = rs->client != NULL ? rs->client : rs->last_client;
+        if (rs->remote == r && c != NULL && c->asks)
+            return c;
+    }
+    tll_foreach(footd.clients, it) {
+        if (it->item->asks)
+            return it->item;
+    }
+    return NULL;
+}
+
+/* ASKPASS: ssh (that with 'token') asks, through footd --askpass ('helper') */
+static void
+handle_askpass(struct client *helper, uint64_t token, const char *prompt, bool confirm)
+{
+    struct remote *r = NULL;
+    tll_foreach(footd.remotes, it) {
+        if (token != 0 && it->item->token == token)
+            r = it->item;
+    }
+    if (r == NULL) {
+        send_answered(helper, false, NULL);
+        return;
+    }
+
+    /* Answered before: once for each ssh (asked again, it was wrong) */
+    bool again = false;
+    tll_foreach(r->secrets, it) {
+        struct secret *secret = &it->item;
+        if (confirm || strcmp(secret->prompt, prompt) != 0)
+            continue;
+
+        if (secret->token != token) {
+            LOG_INFO("%s: answered as before: %s", r->host, prompt);
+            secret->token = token;
+            send_answered(helper, true, secret->answer);
+            return;
+        }
+
+        LOG_WARN("%s: asked again: %s", r->host, prompt);
+        free(secret->prompt);
+        session_erase(secret->answer);
+        tll_remove(r->secrets, it);
+        again = true;
+    }
+
+    struct client *window = asking_window(r);
+    if (window == NULL) {
+        LOG_WARN("%s: %s: no window to ask", r->host, prompt);
+        send_answered(helper, false, NULL);
+        return;
+    }
+
+    struct ask *ask = xmalloc(sizeof(*ask));
+    *ask = (struct ask){
+        .id = ++footd.next_id, .remote = r, .helper = helper, .window = window,
+        .token = token, .prompt = xstrdup(prompt), .confirm = confirm,
+    };
+    tll_push_back(footd.asks, ask);
+    LOG_INFO("%s: asking: %s", r->host, prompt);
+
+    struct session_msg msg = {0};
+    session_msg_begin(&msg, SESSION_MSG_ASK);
+    session_msg_u64(&msg, ask->id);
+    session_msg_str(&msg, r->host);
+    session_msg_str(&msg, prompt);
+    session_msg_u8(&msg, confirm);
+    session_msg_u8(&msg, again);
+    client_send(window, &msg, -1);
+    session_msg_free(&msg);
+
+    connect_timeout(r);
+    remotes_changed();
+}
+
+/* ANSWER, from foot: to ssh; and kept (a secret), or else (refused) not tried again */
+static void
+handle_answer(struct client *window, uint64_t id, bool ok, const char *answer)
+{
+    struct ask *ask = NULL;
+    tll_foreach(footd.asks, it) {
+        if (it->item->id == id && it->item->window == window)
+            ask = it->item;
+    }
+    if (ask == NULL)
+        return;
+
+    struct remote *r = ask->remote;
+    send_answered(ask->helper, ok, answer);
+
+    if (!ok) {
+        LOG_INFO("%s: refused: %s", r->host, ask->prompt);
+        r->refused = true;
+    } else if (!ask->confirm) {
+        tll_foreach(r->secrets, it) {
+            if (strcmp(it->item.prompt, ask->prompt) == 0) {
+                free(it->item.prompt);
+                session_erase(it->item.answer);
+                tll_remove(r->secrets, it);
+            }
+        }
+        tll_push_back(r->secrets, ((struct secret){
+            .prompt = xstrdup(ask->prompt), .answer = xstrdup(answer != NULL ? answer : ""),
+            .token = ask->token}));
+    }
+
+    ask_free(ask);
+    connect_timeout(r);
+    remotes_changed();
+}
+
 static pid_t
 spawn_ssh(struct remote *r, int in, int out, const char *command, reaper_cb exited)
 {
@@ -2077,9 +2362,10 @@ spawn_ssh(struct remote *r, int in, int out, const char *command, reaper_cb exit
         ssh = "ssh";
 
     char *const argv[] = {
-        (char *)ssh, "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+        (char *)ssh, "-T", "-o", "ConnectTimeout=10",
         "-o", "StrictHostKeyChecking=accept-new", "--", r->host, (char *)command, NULL,
     };
+    char **env = ssh_environment(r);
 
     posix_spawn_file_actions_t actions;
     posix_spawn_file_actions_init(&actions);
@@ -2103,8 +2389,9 @@ spawn_ssh(struct remote *r, int in, int out, const char *command, reaper_cb exit
     posix_spawnattr_setsigdefault(&attr, &defaults);
 
     pid_t pid;
-    const int err = posix_spawnp(&pid, ssh, &actions, &attr, argv, environ);
+    const int err = posix_spawnp(&pid, ssh, &actions, &attr, argv, env);
 
+    session_strv_free(env);
     posix_spawnattr_destroy(&attr);
     posix_spawn_file_actions_destroy(&actions);
     close(log[1]);
@@ -2141,7 +2428,7 @@ remote_connect(struct remote *r)
 
     LOG_INFO("%s: connecting", r->host);
     r->tried_at = now_ms();
-    r->stuck = false;
+    r->stuck = r->refused = false;
     free(r->error);
     r->error = NULL;
     free(r->install);
@@ -2321,6 +2608,11 @@ remote_free(struct remote *r)
         fdm_del(footd.fdm, r->timer);
     if (r->idle_timer >= 0)
         fdm_del(footd.fdm, r->idle_timer);
+    tll_foreach(r->secrets, it) {
+        free(it->item.prompt);
+        session_erase(it->item.answer);
+        tll_remove(r->secrets, it);
+    }
     free(r->install);
     free(r->error);
     free(r->host);
@@ -2571,6 +2863,7 @@ handle_message(struct client *c, uint32_t type, struct session_reader *r)
     case SESSION_MSG_HELLO: {
         uint32_t version = session_read_u32(r);
         session_read_i32(r);
+        c->asks = session_read_more(r) && (session_read_u32(r) & SESSION_CLIENT_ASK);
         if (!r->ok || version != SESSION_PROTOCOL_VERSION) {
             LOG_ERR("client (PID=%d): protocol version %u (expected %d)",
                     c->pid, version, SESSION_PROTOCOL_VERSION);
@@ -2654,8 +2947,9 @@ handle_message(struct client *c, uint32_t type, struct session_reader *r)
             if (token == 0 ? rs->client == NULL
                            : rs->last_client == c && rs->last_token == token)
             {
-                /* Once it's ended there, its window's socket is closed */
+                /* Once it's ended there, or its window's socket is closed */
                 remote_kill(rs, token);
+                rs->killed = true;
                 if (rs->channel == 0)
                     remote_session_free(rs);
             }
@@ -2697,6 +2991,26 @@ handle_message(struct client *c, uint32_t type, struct session_reader *r)
         remote_uninstall(remote_get(host), c);
         free(host);
         return true;
+    }
+
+    case SESSION_MSG_ASKPASS: {
+        const uint64_t token = session_read_u64(r);
+        char *prompt = session_read_str(r);
+        const bool confirm = session_read_u8(r);
+        if (r->ok)
+            handle_askpass(c, token, prompt != NULL ? prompt : "", confirm);
+        free(prompt);
+        return r->ok;
+    }
+
+    case SESSION_MSG_ANSWER: {
+        const uint64_t id = session_read_u64(r);
+        const bool ok = session_read_u8(r);
+        char *answer = session_read_str(r);
+        if (r->ok)
+            handle_answer(c, id, ok, answer);
+        session_erase(answer);
+        return r->ok;
     }
 
     case SESSION_MSG_WATCH: {
@@ -2783,6 +3097,7 @@ client_free(struct client *c)
         if (it->item->uninstalling == c)
             it->item->uninstalling = NULL;
     }
+    asks_withdraw(NULL, c);
 
     tll_foreach(footd.clients, it) {
         if (it->item == c) {
@@ -2996,6 +3311,11 @@ main(int argc, char *const *argv)
         {"help",          no_argument,       NULL, 'h'},
         {NULL,            no_argument,       NULL, 0},
     };
+
+    /* ssh's SSH_ASKPASS (see spawn_ssh()): footd PROMPT */
+    const char *askpass = getenv("FOOTD_ASKPASS");
+    if (askpass != NULL && argc == 2 && argv[1][0] != '-')
+        return footd_askpass(askpass, getenv("FOOTD_ASKPASS_TOKEN"), argv[1]);
 
     const char *socket_path = NULL;
     int listen_fd = -1;

@@ -279,11 +279,17 @@ is sent while the windows are idle.
   its color, and its name, or else its host (e.g. `🔵 Playground — ~`).
   The color is chosen in Connections, or else picked by the address
   (never red: e.g. for production machines).
-* foot runs `ssh -T -o BatchMode=yes HOST footd --bridge`: your SSH
-  configuration and keys (the agent) are used, without asking for
-  passwords. One connection per machine, for all its windows; once
+* foot runs `ssh -T HOST footd --bridge`: your SSH configuration and
+  keys (the agent) are used. One connection per machine, for all its
+  windows; once
   none is open there any more, it's closed (after half a minute: a
-  window opened meanwhile uses it). A
+  window opened meanwhile uses it).
+* When ssh asks (a password, a key's passphrase), a window there asks
+  you (a sheet), and Remember in Keychain keeps it: the next time, it's
+  the answer. footd keeps it too, while it runs: connecting again
+  doesn't ask. A wrong one is asked for again; canceled, foot doesn't
+  try again until you type in the window. (ssh runs with
+  `SSH_ASKPASS`, footd itself, which asks foot.) A
   machine's key is trusted the first time (added to
   `~/.ssh/known_hosts`), not when it has changed.
 * footd must be there. If it isn't, the window offers to install it:

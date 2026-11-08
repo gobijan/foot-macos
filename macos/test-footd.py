@@ -21,16 +21,18 @@ import time
 
 VERSION = 1
 
-HELLO, CREATE, ATTACH, RESIZE, KILL, LIST, LAYOUT, UNINSTALL, WATCH = range(1, 10)
-WELCOME, STARTED, FAILED, DETACHED, SESSIONS, UNINSTALLED, REMOTES = range(100, 107)
+HELLO, CREATE, ATTACH, RESIZE, KILL, LIST, LAYOUT, UNINSTALL, WATCH, ASKPASS, ANSWER = range(1, 12)
+WELCOME, STARTED, FAILED, DETACHED, SESSIONS, UNINSTALLED, REMOTES, ASK, ASKED, ANSWERED = \
+    range(100, 110)
 FEATURE_REMOTE = 1 << 0
 FEATURE_UNINSTALL = 1 << 1
 FEATURE_WATCH = 1 << 2
+CLIENT_ASK = 1 << 0
 
 # REMOTES: how the connection to another machine is
-IDLE, CONNECTING, CONNECTED, RETRYING, STUCK, ASKING, INSTALLING, REMOVING = range(8)
+IDLE, CONNECTING, CONNECTED, RETRYING, STUCK, ASKING, INSTALLING, REMOVING, LOGIN = range(9)
 STATES = ['idle', 'connecting', 'connected', 'retrying', 'stuck', 'asking', 'installing',
-          'removing']
+          'removing', 'login']
 
 TIMEOUT = 20
 
@@ -113,8 +115,9 @@ class Client:
                 raise Failure(f'expected message {type}, got {t}')
             return r
 
-    def hello(self):
-        self.send(HELLO, u32(VERSION) + i32(os.getpid()))
+    def hello(self, features=None):
+        self.send(HELLO, u32(VERSION) + i32(os.getpid()) +
+                  (u32(features) if features is not None else b''))
         r = self.expect(WELCOME)
         if r.u32() != VERSION:
             raise Failure('protocol version')
@@ -263,6 +266,7 @@ def children(pid):
 def test_remote(footd, tmp):
     """Sessions on another machine: footd --bridge to a second footd, a script for ssh"""
     remote_path = os.path.join(tmp, 'r.sock')
+    pw_remote_path = os.path.join(tmp, 'p.sock')
     ssh = os.path.join(tmp, 'ssh')
     newhost = os.path.join(tmp, 'newhost')
     os.mkdir(newhost)
@@ -283,6 +287,12 @@ def test_remote(footd, tmp):
                 '        [ -x "$d/footd" ] || { echo "$m none" >&2; exit 3; }\n'
                 '        exec "$d/footd" --bridge --socket="$d/s.sock" --log-to-stderr ;;\n'
                 '    esac ;;\n'
+                'pwhost*)\n'
+                '    for i in 1 2 3; do\n'
+                '        pw=$("$SSH_ASKPASS" "$2\'s password: ") || break\n'
+                '        [ "$pw" = secret ] && exec "$TEST_FOOTD" --bridge --socket="$TEST_PWREMOTE.$2" --log-to-stderr\n'
+                '    done\n'
+                '    echo "Permission denied (password)." >&2; exit 255 ;;\n'
                 '*) echo "no such host: $2" >&2; exit 255 ;;\n'
                 'esac\n')
     os.chmod(ssh, 0o755)
@@ -292,8 +302,8 @@ def test_remote(footd, tmp):
 
     path = os.path.join(tmp, 'l.sock')
     env = dict(os.environ, FOOTD_SSH=ssh, TEST_FOOTD=os.path.abspath(footd),
-               TEST_REMOTE=remote_path, TEST_NEWHOST=newhost, REMOTE_MARK='there', HOME=tmp,
-               FOOTD_CHECK_TIMEOUT=str(int(check_timeout * 1000)), FOOTD_LINGER='300')
+               TEST_REMOTE=remote_path, TEST_PWREMOTE=pw_remote_path, TEST_NEWHOST=newhost, REMOTE_MARK='there', HOME=tmp,
+               FOOTD_CHECK_TIMEOUT=str(int(check_timeout * 1000)), FOOTD_LINGER='300', FOOTD_MIN_GAP='500')
     proc = subprocess.Popen([footd, f'--socket={path}', '--log-to-stderr', '--log-level=warning'],
                             env=env)
     try:
@@ -443,6 +453,75 @@ def test_remote(footd, tmp):
         win.close()
         c.send(KILL, u64(105) + u64(7))
 
+        # Logging in: ssh asks (for a password); a client that can (foot) is asked
+        asker = Client(path)
+        asker.hello(features=CLIENT_ASK)
+
+        def asked(host, again=0):
+            r = asker.expect(ASK)
+            id, got = r.u64(), (r.str(), r.str(), r.u8(), r.u8())
+            if got != (host, f"{host}'s password: ", 0, again):
+                raise Failure(f'remote: asked {got}')
+            return id
+
+        def answer(id, text, ok=1):
+            asker.send(ANSWER, u64(id) + u8(ok) + string(text))
+
+        win, _ = create(c, 110, 10, ['/bin/sh', '-c', 'echo in; read x'], host='pwhost',
+                        started=False)
+        id = asked('pwhost')
+        win.sent()
+        watch_until(watcher, 'pwhost', LOGIN, 1)
+        answer(id, 'wrong')
+        answer(asked('pwhost', again=1), 'secret')     # (Asked again: it was wrong)
+        if c.expect(STARTED).u64() != 110:
+            raise Failure('remote: STARTED for another session')
+        win.read_until(b'in')
+
+        # Lost: connected again with that password, without asking
+        def kill_ssh(host):
+            for pid in children(proc.pid):
+                args = subprocess.run(['ps', '-o', 'args=', '-p', str(pid)],
+                                      capture_output=True, text=True).stdout
+                if f' {host} ' in args or f'p.sock.{host} ' in args:
+                    os.kill(pid, signal.SIGKILL)
+
+        kill_ssh('pwhost')
+        win.read_past(b'connection to pwhost is lost')
+        win.read_until(b'in')
+        c.expect(STARTED)
+        if select.select([asker.sock], [], [], .3)[0]:
+            raise Failure('remote: asked again after reconnecting')
+
+        # Canceled: not tried again before the window's input
+        win2, _ = create(c, 111, 11, ['/bin/sh', '-c', 'echo two; read x'], host='pwhost2',
+                         started=False)
+        answer(asked('pwhost2'), '', ok=0)
+        win2.read_until(b'logging in to pwhost2 was canceled; type to try again')
+        win2.sent()
+        watch_until(watcher, 'pwhost2', STUCK, 1)
+        win2.write(b'x')
+        answer(asked('pwhost2'), 'secret')
+        c.expect(STARTED)
+        win2.read_until(b'two')
+
+        # ssh gives up while it asks: the window isn't asked any more (ASKED), then anew
+        win3, _ = create(c, 112, 12, ['/bin/sh', '-c', 'echo three; read x'], host='pwhost3',
+                         started=False)
+        id = asked('pwhost3')
+        win3.sent()
+        kill_ssh('pwhost3')
+        if asker.expect(ASKED).u64() != id:
+            raise Failure('remote: ASKED another')
+        answer(asked('pwhost3'), 'secret')
+        c.expect(STARTED)
+        win3.read_until(b'three')
+
+        for w, id, token in [(win, 110, 10), (win2, 111, 11), (win3, 112, 12)]:
+            w.close()
+            c.send(KILL, u64(id) + u64(token))
+        asker.close()
+
         # Closing a window (its socket, then KILL) ends its session, there too
         win, _ = create(c, 102, 4, ['/bin/sh', '-c', 'echo up; sleep 100'], host='testhost')
         win.read_until(b'up')
@@ -479,7 +558,9 @@ def test_remote(footd, tmp):
         if wait_exit(proc) != 0:
             raise Failure('remote: footd failed')
         deadline = time.time() + TIMEOUT
-        while os.path.exists(remote_path) or os.path.exists(os.path.join(newhost, 's.sock')):
+        others = [remote_path, os.path.join(newhost, 's.sock')] + \
+            [f'{pw_remote_path}.{host}' for host in ['pwhost', 'pwhost2', 'pwhost3']]
+        while any(os.path.exists(other) for other in others):
             if time.time() > deadline:
                 raise Failure('remote: the other footds did not exit')
             time.sleep(.05)

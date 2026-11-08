@@ -52,7 +52,10 @@ and relays the windows' sockets as channels over that stream
 (`macos/session-mux.c`). `meson test footd` covers it with a second
 footd and a script for ssh (`$FOOTD_SSH`). Shell > Connections
 (`macos/connections.m`) lists the machines, with footd's connections to
-them as they change (WATCH/REMOTES). If footd isn't there, footd
+them as they change (WATCH/REMOTES). Passwords: footd runs ssh with
+itself as `SSH_ASKPASS` (`macos/footd-askpass.c`), and asks foot
+(ASK/ANSWER), which asks in a window (`macos/login.m`, the Keychain).
+If footd isn't there, footd
 installs it over SSH (asking in the window first): foot.app has it for
 Linux, linked statically, built by `macos/footd-linux.sh` (Docker; `make
 release` runs it, `make dist` needs it).
