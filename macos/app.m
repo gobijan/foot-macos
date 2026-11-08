@@ -1176,11 +1176,10 @@ fill_hosts_menu(NSMenu *menu, bool tab)
     [menu addItem:[NSMenuItem separatorItem]];
 
     for (NSString *host in connections_addresses()) {
-        NSMenuItem *item = menu_item(connections_title(host),
+        NSMenuItem *item = menu_item(connections_badge(host),
                                      tab ? @selector(newTabOn:) : @selector(newWindowOn:), @"", 0);
         item.representedObject = host;
-        if (connections_name(host) != nil)
-            item.toolTip = host;
+        item.toolTip = host;
         [menu addItem:item];
     }
 

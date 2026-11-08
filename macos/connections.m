@@ -22,18 +22,41 @@
  * on, with Other…), ~/.ssh/config's, and those footd has sessions on;
  * with how footd's connections to them are, as they change
  * (sessions_watch_remotes(), while it's open). A name given there is
- * shown instead of the address: in the menus, and the windows' titles.
+ * shown instead of the address: in the menus, and the windows' titles;
+ * with a badge, a dot in the machine's color (given there, or else
+ * picked by its address).
  */
 
-/* Those in the list: {Address, Name (optional)}, in the user defaults */
+/* Those in the list: {Address, Name, Color (optional)}, in the user defaults */
 static NSString *const servers_key = @"Servers";
 
 /* Before, the machines used last (up to 8): the list, now */
 static NSString *const recent_hosts_key = @"RecentHosts";
 
+/*
+ * The badges' colors. Emoji: the titles have them, and they're in color
+ * wherever titles are (tabs, the Window menu, Mission Control…).
+ */
+static const struct {
+    const char *key;    /* Color, in the list */
+    const char *name;
+    const char *emoji;
+} badge_colors[] = {
+    {"red", "Red", "🔴"},  /* Never picked: e.g. for production machines */
+    {"orange", "Orange", "🟠"},
+    {"yellow", "Yellow", "🟡"},
+    {"green", "Green", "🟢"},
+    {"blue", "Blue", "🔵"},
+    {"purple", "Purple", "🟣"},
+    {"brown", "Brown", "🟤"},
+};
+
+#define BADGE_COLORS (sizeof(badge_colors) / sizeof(badge_colors[0]))
+
 @interface FootServer : NSObject
 @property (nonatomic, copy) NSString *address;  /* As for ssh: [user@]host, or a Host of ~/.ssh/config */
 @property (nonatomic, copy) NSString *name;     /* nil: none */
+@property (nonatomic, copy) NSString *color;    /* Its key; nil: picked by the address */
 @property (nonatomic) BOOL saved;               /* In the list */
 @property (nonatomic) BOOL ssh_config;          /* A Host of ~/.ssh/config */
 @property (nonatomic, readonly) NSString *title;  /* Its name, or else its address */
@@ -160,38 +183,49 @@ saved_servers(void)
     return servers;
 }
 
-/* The names given (by address), while the list doesn't change */
-static NSDictionary<NSString *, NSString *> *names;
+/* The list's entries, by address (while the list doesn't change) */
+static NSDictionary<NSString *, NSDictionary *> *saved_by_address;
 
 static void
 save_servers(NSArray<NSDictionary *> *servers)
 {
     [NSUserDefaults.standardUserDefaults setObject:servers forKey:servers_key];
-    names = nil;
+    saved_by_address = nil;
 
-    /* The windows' titles have the names */
+    /* The windows' titles have the names, and colors */
     tll_foreach(app_wayland()->terms, it) {
         if (session_link_host(it->item->session) != NULL)
             render_refresh_title(it->item);
     }
 }
 
-NSString *
-connections_name(NSString *address)
+static NSDictionary *
+saved_server(NSString *address)
 {
     if (address == nil)
         return nil;
 
-    if (names == nil) {
+    if (saved_by_address == nil) {
         NSMutableDictionary *all = [NSMutableDictionary dictionary];
-        for (NSDictionary *server in saved_servers()) {
-            NSString *name = server[@"Name"];
-            if ([name isKindOfClass:[NSString class]] && name.length > 0)
-                all[server[@"Address"]] = name;
-        }
-        names = all;
+        for (NSDictionary *server in saved_servers())
+            all[server[@"Address"]] = server;
+        saved_by_address = all;
     }
-    return names[address];
+    return saved_by_address[address];
+}
+
+/* A string of the list's entry (nil: none) */
+static NSString *
+saved_string(NSString *address, NSString *key)
+{
+    NSString *value = saved_server(address)[key];
+    return [value isKindOfClass:[NSString class]] && value.length > 0 ? value : nil;
+}
+
+NSString *
+connections_name(NSString *address)
+{
+    return saved_string(address, @"Name");
 }
 
 NSString *
@@ -199,6 +233,44 @@ connections_title(NSString *address)
 {
     NSString *name = connections_name(address);
     return name != nil ? name : address;
+}
+
+/* Picked by the address: always the same one (FNV-1a), not red */
+static size_t
+picked_color(NSString *address)
+{
+    uint32_t hash = 2166136261u;
+    for (const char *p = address.UTF8String; p != NULL && *p != '\0'; p++)
+        hash = (hash ^ (uint8_t)*p) * 16777619u;
+    return 1 + hash % (BADGE_COLORS - 1);
+}
+
+/* 'key''s (nil, or unknown: picked by the address) */
+static size_t
+badge_color(NSString *address, NSString *key)
+{
+    for (size_t i = 0; key != nil && i < BADGE_COLORS; i++) {
+        if (strcmp(key.UTF8String, badge_colors[i].key) == 0)
+            return i;
+    }
+    return picked_color(address);
+}
+
+NSString *
+connections_badge(NSString *address)
+{
+    if (address == nil)
+        return nil;
+
+    /* Its name, or else its host (without the user) */
+    NSString *what = connections_name(address);
+    if (what == nil) {
+        const NSRange at = [address rangeOfString:@"@" options:NSBackwardsSearch];
+        what = at.location != NSNotFound ? [address substringFromIndex:NSMaxRange(at)] : address;
+    }
+
+    const size_t color = badge_color(address, saved_string(address, @"Color"));
+    return [NSString stringWithFormat:@"%@ %@", @(badge_colors[color].emoji), what];
 }
 
 /* The list, and the address's entry in it (or NSNotFound) */
@@ -224,9 +296,9 @@ connections_remember(NSString *address)
     save_servers(servers);
 }
 
-/* 'old' (nil: none) is now 'address', called 'name' (nil: nothing) */
+/* 'old' (nil: none) is now 'address', called 'name', in 'color' (nil: none, picked) */
 static void
-save_server(NSString *old, NSString *address, NSString *name)
+save_server(NSString *old, NSString *address, NSString *name, NSString *color)
 {
     NSUInteger index;
     NSMutableArray *servers = servers_with(old != nil ? old : address, &index);
@@ -236,7 +308,11 @@ save_server(NSString *old, NSString *address, NSString *name)
         return i != index && [server[@"Address"] isEqualToString:address];
     }];
 
-    NSDictionary *server = name != nil ? @{@"Address": address, @"Name": name} : @{@"Address": address};
+    NSMutableDictionary *server = [NSMutableDictionary dictionaryWithObject:address forKey:@"Address"];
+    if (name != nil)
+        server[@"Name"] = name;
+    if (color != nil)
+        server[@"Color"] = color;
     if (index != NSNotFound)
         servers[index] = server;
     else
@@ -276,6 +352,7 @@ all_servers(NSDictionary<NSString *, FootServerStatus *> *status)
         FootServer *server = server_at(saved[@"Address"]);
         server.saved = YES;
         server.name = connections_name(server.address);
+        server.color = saved_string(server.address, @"Color");
     }
     for (NSString *host in ssh_hosts())
         server_at(host).ssh_config = YES;
@@ -314,9 +391,10 @@ connections_address(NSString *text)
  */
 
 @interface FootServerCell : NSTableCellView
-@property (nonatomic) NSImageView *dot;
+@property (nonatomic) NSTextField *badge;       /* Its color (as in the titles) */
 @property (nonatomic) NSTextField *title;
 @property (nonatomic) NSTextField *subtitle;
+@property (nonatomic) NSImageView *status_icon;
 @property (nonatomic) NSTextField *status;
 @end
 
@@ -339,16 +417,20 @@ label(CGFloat size, NSColor *color)
     if (self == nil)
         return nil;
 
-    _dot = [[NSImageView alloc] init];
-    _dot.translatesAutoresizingMaskIntoConstraints = NO;
-    _dot.symbolConfiguration = [NSImageSymbolConfiguration configurationWithPointSize:8
-                                                                               weight:NSFontWeightRegular];
+    _badge = label(NSFont.systemFontSize, NSColor.labelColor);
     _title = label(NSFont.systemFontSize, NSColor.labelColor);
     _subtitle = label(NSFont.smallSystemFontSize, NSColor.secondaryLabelColor);
     _status = label(NSFont.smallSystemFontSize, NSColor.secondaryLabelColor);
     _status.alignment = NSTextAlignmentRight;
+    _status_icon = [[NSImageView alloc] init];
+    _status_icon.translatesAutoresizingMaskIntoConstraints = NO;
+    _status_icon.symbolConfiguration =
+        [NSImageSymbolConfiguration configurationWithPointSize:NSFont.smallSystemFontSize
+                                                        weight:NSFontWeightMedium];
 
     /* The status gives way first */
+    [_badge setContentCompressionResistancePriority:NSLayoutPriorityRequired
+                                     forOrientation:NSLayoutConstraintOrientationHorizontal];
     [_title setContentCompressionResistancePriority:NSLayoutPriorityDefaultHigh
                                      forOrientation:NSLayoutConstraintOrientationHorizontal];
     [_status setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
@@ -360,19 +442,18 @@ label(CGFloat size, NSColor *color)
     text.spacing = 1;
     text.translatesAutoresizingMaskIntoConstraints = NO;
 
-    [self addSubview:_dot];
-    [self addSubview:text];
-    [self addSubview:_status];
-    self.imageView = _dot;
+    for (NSView *view in @[_badge, text, _status_icon, _status])
+        [self addSubview:view];
     self.textField = _title;
 
     [NSLayoutConstraint activateConstraints:@[
-        [_dot.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:8],
-        [_dot.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
-        [_dot.widthAnchor constraintEqualToConstant:10],
-        [text.leadingAnchor constraintEqualToAnchor:_dot.trailingAnchor constant:8],
+        [_badge.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:8],
+        [_badge.firstBaselineAnchor constraintEqualToAnchor:_title.firstBaselineAnchor],
+        [text.leadingAnchor constraintEqualToAnchor:_badge.trailingAnchor constant:6],
         [text.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
-        [_status.leadingAnchor constraintGreaterThanOrEqualToAnchor:text.trailingAnchor constant:12],
+        [_status_icon.leadingAnchor constraintGreaterThanOrEqualToAnchor:text.trailingAnchor constant:12],
+        [_status_icon.centerYAnchor constraintEqualToAnchor:_status.centerYAnchor],
+        [_status.leadingAnchor constraintEqualToAnchor:_status_icon.trailingAnchor constant:4],
         [_status.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-8],
         [_status.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
     ]];
@@ -381,11 +462,12 @@ label(CGFloat size, NSColor *color)
 
 @end
 
-/* What the status says, and its dot's color (nil: an empty one) */
+/* What the status says, and its symbol (nil: none) in 'color' */
 static NSString *
-status_text(FootServerStatus *s, NSColor **color)
+status_text(FootServerStatus *s, NSString **symbol, NSColor **color)
 {
-    *color = nil;
+    *symbol = nil;
+    *color = NSColor.secondaryLabelColor;
     if (s == nil)
         return @"";
 
@@ -397,41 +479,124 @@ status_text(FootServerStatus *s, NSColor **color)
 
     switch (s.state) {
     case SESSION_REMOTE_IDLE:
-        return s.sessions > 0 ? [NSString stringWithFormat:@"Not connected · %@", sessions] : @"";
+        if (s.sessions == 0)
+            return @"";
+        *symbol = @"pause.circle";
+        return [NSString stringWithFormat:@"Not connected · %@", sessions];
 
     case SESSION_REMOTE_CONNECTING:
-        *color = NSColor.systemOrangeColor;
+        *symbol = @"arrow.triangle.2.circlepath";
         return @"Connecting…";
 
     case SESSION_REMOTE_CONNECTED:
+        *symbol = @"checkmark.circle.fill";
         *color = NSColor.systemGreenColor;
         return s.sessions > 0 ? [NSString stringWithFormat:@"Connected · %@", sessions] : @"Connected";
 
     case SESSION_REMOTE_RETRYING:
+        *symbol = @"exclamationmark.triangle.fill";
         *color = NSColor.systemOrangeColor;
         return detail != nil
             ? [NSString stringWithFormat:@"Can't connect, trying again: %@", detail]
             : @"Connecting again…";
 
     case SESSION_REMOTE_FAILED:
+        *symbol = @"xmark.octagon.fill";
         *color = NSColor.systemRedColor;
         return detail != nil
             ? [NSString stringWithFormat:@"Can't connect: %@", detail] : @"Can't connect";
 
     case SESSION_REMOTE_ASKING:
+        *symbol = @"questionmark.circle.fill";
         *color = NSColor.systemBlueColor;
         return @"footd isn't installed: its window asks";
 
     case SESSION_REMOTE_INSTALLING:
-        *color = NSColor.systemOrangeColor;
+        *symbol = @"arrow.down.circle";
         return @"Installing footd…";
 
     case SESSION_REMOTE_REMOVING:
-        *color = NSColor.systemOrangeColor;
+        *symbol = @"trash.circle";
         return @"Removing footd…";
     }
     return @"";
 }
+
+/* Its name, address and color, in an alert (adding one: 'server' nil) */
+@interface FootServerEditor : NSObject
+@property (nonatomic) NSAlert *alert;
+@property (nonatomic) NSTextField *name;
+@property (nonatomic) NSTextField *address;
+@property (nonatomic) NSPopUpButton *color;   /* Its items' represented objects: the keys */
+@property (nonatomic) NSButton *ok;
+@end
+
+@implementation FootServerEditor
+
+- (instancetype)initWithServer:(FootServer *)server
+{
+    self = [super init];
+    if (self == nil)
+        return nil;
+
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = server == nil ? @"Add a Server" : @"Edit Server";
+    alert.informativeText = @"The address is as for ssh: user@host, or a host in "
+        "~/.ssh/config. foot connects with your SSH key, and installs its footd there "
+        "if it's missing (asking first). The color marks its windows and tabs.";
+    _ok = [alert addButtonWithTitle:server == nil ? @"Add" : @"Save"];
+    [alert addButtonWithTitle:@"Cancel"];
+    _alert = alert;
+
+    _name = [NSTextField textFieldWithString:server.name != nil ? server.name : @""];
+    _name.placeholderString = @"Optional";
+    _address = [NSTextField textFieldWithString:server != nil ? server.address : @""];
+    _address.placeholderString = @"user@host";
+
+    _color = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
+    [_color addItemWithTitle:@""];  /* Automatic (updateAutomatic) */
+    [_color.menu addItem:[NSMenuItem separatorItem]];
+    for (size_t i = 0; i < BADGE_COLORS; i++) {
+        [_color addItemWithTitle:[NSString stringWithFormat:@"%@ %@", @(badge_colors[i].emoji),
+                                  @(badge_colors[i].name)]];
+        _color.lastItem.representedObject = @(badge_colors[i].key);
+        if (server.color != nil && strcmp(server.color.UTF8String, badge_colors[i].key) == 0)
+            [_color selectItem:_color.lastItem];
+    }
+    [self updateAutomatic];
+
+    NSGridView *grid = [NSGridView gridViewWithViews:@[
+        @[[NSTextField labelWithString:@"Name:"], _name],
+        @[[NSTextField labelWithString:@"Address:"], _address],
+        @[[NSTextField labelWithString:@"Color:"], _color],
+    ]];
+    [grid columnAtIndex:0].xPlacement = NSGridCellPlacementTrailing;
+    grid.rowAlignment = NSGridRowAlignmentFirstBaseline;
+    grid.rowSpacing = 8;
+    [_name.widthAnchor constraintEqualToConstant:200].active = YES;
+    [_address.widthAnchor constraintEqualToConstant:200].active = YES;
+    grid.frame = (NSRect){.size = grid.fittingSize};
+    alert.accessoryView = grid;
+    alert.window.initialFirstResponder = server == nil ? _address : _name;
+    return self;
+}
+
+/* Automatic: the color picked by the address (as typed so far) */
+- (void)updateAutomatic
+{
+    NSString *address = connections_address(self.address.stringValue);
+    NSMenuItem *automatic = [self.color itemAtIndex:0];
+    automatic.title = [NSString stringWithFormat:@"%@ Automatic",
+                       @(badge_colors[picked_color(address != nil ? address : @"")].emoji)];
+    [self.color synchronizeTitleAndSelectedItem];
+}
+
+- (NSString *)selectedColor
+{
+    return self.color.selectedItem.representedObject;
+}
+
+@end
 
 /* The buttons below the list: +, −, and the actions' menu */
 #define BUTTON_WIDTH 28
@@ -667,13 +832,16 @@ remotes_changed(const struct session_remote *remotes, size_t count, void *data);
     cell.subtitle.stringValue = [about componentsJoinedByString:@" · "];
     cell.subtitle.hidden = about.count == 0;
 
+    cell.badge.stringValue = @(badge_colors[badge_color(server.address, server.color)].emoji);
+
+    NSString *symbol;
     NSColor *color;
-    NSString *text = status_text(status, &color);
+    NSString *text = status_text(status, &symbol, &color);
     cell.status.stringValue = text;
     cell.status.toolTip = text.length > 0 ? text : nil;
-    cell.dot.image = [NSImage imageWithSystemSymbolName:color != nil ? @"circle.fill" : @"circle"
-                               accessibilityDescription:nil];
-    cell.dot.contentTintColor = color != nil ? color : NSColor.tertiaryLabelColor;
+    cell.status_icon.image = symbol != nil
+        ? [NSImage imageWithSystemSymbolName:symbol accessibilityDescription:nil] : nil;
+    cell.status_icon.contentTintColor = color;
     return cell;
 }
 
@@ -753,44 +921,14 @@ remotes_changed(const struct session_remote *remotes, size_t count, void *data);
         app_remove_footd(server.address);
 }
 
-/* Its name and address, in an alert (adding one: 'server' nil) */
-static NSAlert *
-server_editor(FootServer *server, NSTextField **name, NSTextField **address, NSButton **ok)
-{
-    NSAlert *alert = [[NSAlert alloc] init];
-    alert.messageText = server == nil ? @"Add a Server" : @"Edit Server";
-    alert.informativeText = @"The address is as for ssh: user@host, or a host in "
-        "~/.ssh/config. foot connects with your SSH key, and installs its footd there "
-        "if it's missing (asking first).";
-    *ok = [alert addButtonWithTitle:server == nil ? @"Add" : @"Save"];
-    [alert addButtonWithTitle:@"Cancel"];
-
-    *name = [NSTextField textFieldWithString:server.name != nil ? server.name : @""];
-    (*name).placeholderString = @"Optional";
-    *address = [NSTextField textFieldWithString:server != nil ? server.address : @""];
-    (*address).placeholderString = @"user@host";
-
-    NSGridView *grid = [NSGridView gridViewWithViews:@[
-        @[[NSTextField labelWithString:@"Name:"], *name],
-        @[[NSTextField labelWithString:@"Address:"], *address],
-    ]];
-    [grid columnAtIndex:0].xPlacement = NSGridCellPlacementTrailing;
-    grid.rowAlignment = NSGridRowAlignmentFirstBaseline;
-    grid.rowSpacing = 8;
-    [(*name).widthAnchor constraintEqualToConstant:200].active = YES;
-    [(*address).widthAnchor constraintEqualToConstant:200].active = YES;
-    grid.frame = (NSRect){.size = grid.fittingSize};
-    alert.accessoryView = grid;
-    alert.window.initialFirstResponder = server == nil ? *address : *name;
-    return alert;
-}
-
-/* Adding one ('server' nil), or changing its name or address */
+/* Adding one ('server' nil), or changing its name, address or color */
 - (void)edit:(FootServer *)server
 {
-    NSTextField *name, *address;
-    NSButton *ok;
-    NSAlert *alert = server_editor(server, &name, &address, &ok);
+    FootServerEditor *editor = [[FootServerEditor alloc] initWithServer:server];
+    NSAlert *alert = editor.alert;
+    NSTextField *name = editor.name;
+    NSTextField *address = editor.address;
+    NSButton *ok = editor.ok;
 
     /* Only with an address */
     ok.enabled = connections_address(address.stringValue) != nil;
@@ -800,6 +938,7 @@ server_editor(FootServer *server, NSTextField **name, NSTextField **address, NSB
                      queue:nil
                 usingBlock:^(NSNotification *notification) {
         ok.enabled = connections_address(address.stringValue) != nil;
+        [editor updateAutomatic];
     }];
 
     [alert beginSheetModalForWindow:self.panel completionHandler:^(NSModalResponse response) {
@@ -812,7 +951,7 @@ server_editor(FootServer *server, NSTextField **name, NSTextField **address, NSB
         NSString *new_name = [name.stringValue stringByTrimmingCharactersInSet:
             NSCharacterSet.whitespaceAndNewlineCharacterSet];
         save_server(server.saved ? server.address : nil, new_address,
-                    new_name.length > 0 ? new_name : nil);
+                    new_name.length > 0 ? new_name : nil, editor.selectedColor);
         [self reloadSelecting:new_address];
     }];
 }

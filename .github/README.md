@@ -268,15 +268,17 @@ is sent while the windows are idle.
   they're connected: connected (with how many sessions), connecting,
   can't connect (and why), footd being installed. There, + adds one
   (an address as for ssh: `user@host`, or a host in `~/.ssh/config`;
-  and a name, if you like), − removes it from the list, and New Window
+  a name and a color, if you like), − removes it from the list, and New Window
   or New Tab (or a double-click) opens one there. Its menu: edit it,
   remove footd from it.
 * The machines offered: those in Connections (those Other… was used
   for too), and those in `~/.ssh/config`. Other… asks for one
   (`user@host`, as for ssh). This Mac: here.
 * New windows, tabs and splits open where the focused terminal runs.
-  The title starts with the machine: its name in Connections, or else
-  its host.
+  The title (and so the tab) starts with the machine's badge: a dot in
+  its color, and its name, or else its host (e.g. `🔵 Playground — ~`).
+  The color is chosen in Connections, or else picked by the address
+  (never red: e.g. for production machines).
 * foot runs `ssh -T -o BatchMode=yes HOST footd --bridge`: your SSH
   configuration and keys (the agent) are used, without asking for
   passwords. One connection per machine, for all its windows; once

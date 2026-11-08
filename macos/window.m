@@ -763,18 +763,14 @@ void
 wayl_win_set_title(struct wl_window *win, const char *title)
 {
     /*
-     * On another machine: which one, first (its name in Shell >
-     * Connections, or else its host, without the user)
+     * On another machine: which one, first: its badge (a dot in its color,
+     * and its name in Shell > Connections, or else its host)
      */
     const char *host = win->term != NULL ? session_link_host(win->term->session) : NULL;
-    NSString *name = host != NULL ? connections_name([NSString stringWithUTF8String:host]) : nil;
-    if (name != nil)
-        host = name.UTF8String;
-    else if (host != NULL && strchr(host, '@') != NULL)
-        host = strchr(host, '@') + 1;
+    NSString *badge = host != NULL ? connections_badge([NSString stringWithUTF8String:host]) : nil;
 
     free(win->title);
-    win->title = host != NULL ? xasprintf("%s: %s", host, title) : xstrdup(title);
+    win->title = badge != nil ? xasprintf("%s — %s", badge.UTF8String, title) : xstrdup(title);
     title = win->title;
 
     /* The window's title is its focused pane's */

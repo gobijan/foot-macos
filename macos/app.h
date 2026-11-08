@@ -58,6 +58,12 @@ NSArray<NSString *> *connections_addresses(void);
 NSString *connections_name(NSString *address);
 NSString *connections_title(NSString *address);
 
+/*
+ * Its badge, for titles and menus: a dot (an emoji) in its color, and its
+ * name, or else its host (without the user)
+ */
+NSString *connections_badge(NSString *address);
+
 /* A window was opened there (Other…): it's in the list from now on */
 void connections_remember(NSString *address);
 
