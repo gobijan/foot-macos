@@ -293,7 +293,7 @@ def test_remote(footd, tmp):
     path = os.path.join(tmp, 'l.sock')
     env = dict(os.environ, FOOTD_SSH=ssh, TEST_FOOTD=os.path.abspath(footd),
                TEST_REMOTE=remote_path, TEST_NEWHOST=newhost, REMOTE_MARK='there', HOME=tmp,
-               FOOTD_CHECK_TIMEOUT=str(int(check_timeout * 1000)))
+               FOOTD_CHECK_TIMEOUT=str(int(check_timeout * 1000)), FOOTD_LINGER='300')
     proc = subprocess.Popen([footd, f'--socket={path}', '--log-to-stderr', '--log-level=warning'],
                             env=env)
     try:
@@ -456,6 +456,21 @@ def test_remote(footd, tmp):
                 raise Failure(f'remote: not ended there: {list_sessions(there)[0]}')
             time.sleep(.05)
         there.close()
+
+        # No window needs the connection: it's hung up (after a while), the other footd exits
+        watch_until(watcher, 'testhost', IDLE, 0)
+        deadline = time.time() + TIMEOUT
+        while os.path.exists(remote_path):
+            if time.time() > deadline:
+                raise Failure('remote: not hung up')
+            time.sleep(.05)
+
+        # A window there connects again
+        win, _ = create(c, 106, 8, ['/bin/sh', '-c', 'echo again; read x'], host='testhost')
+        win.read_until(b'again')
+        watch_until(watcher, 'testhost', CONNECTED, 1)
+        win.close()
+        c.send(KILL, u64(106) + u64(8))
 
         # Without sessions and windows, both footds exit (the remote one: its bridge gone)
         watcher.send(WATCH, u8(0))

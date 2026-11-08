@@ -192,6 +192,7 @@ struct remote {
     int64_t tried_at;           /* When it connected last */
     int timer;                  /* A check's timeout, or the next try; -1: none yet */
     bool stuck;                 /* Not tried again before the windows' input */
+    int idle_timer;             /* Hung up then, if no window here needs it; -1: none yet */
 
     /*
      * footd isn't there, or is too old (the remote command says so): it's
@@ -1096,6 +1097,13 @@ static const int retry_after[] = {1000, 4000, 10000, 20000, 30000, 60000};
 /* The network's changes come in bursts: it's checked once they've settled (milliseconds) */
 #define NETWORK_SETTLE 1500
 
+/*
+ * A connection no window here needs (any more) is kept this long
+ * (milliseconds): a window opened meanwhile uses it. Then it's hung up
+ * (the sessions there run on).
+ */
+#define LINGER 30000
+
 static void remote_disconnected(struct remote *r);
 static bool remote_connect(struct remote *r);
 static void remote_install_needed(struct remote *r);
@@ -1109,12 +1117,19 @@ now_ms(void)
 }
 
 /* $FOOTD_CHECK_TIMEOUT (milliseconds): e.g. tests' */
+/* $NAME (milliseconds; e.g. shorter, for tests), or else 'ms' */
+static int
+ms_from_env(const char *name, int ms)
+{
+    const char *value = getenv(name);
+    const int from_env = value != NULL ? atoi(value) : 0;
+    return from_env > 0 ? from_env : ms;
+}
+
 static int
 check_timeout(void)
 {
-    const char *value = getenv("FOOTD_CHECK_TIMEOUT");
-    const int ms = value != NULL ? atoi(value) : 0;
-    return ms > 0 ? ms : CHECK_TIMEOUT;
+    return ms_from_env("FOOTD_CHECK_TIMEOUT", CHECK_TIMEOUT);
 }
 
 /* Arms 'timer' (a timerfd) to expire in 'ms'; 0: disarms it */
@@ -1193,9 +1208,12 @@ remote_session_close_window(struct remote_session *rs)
 
 static void remotes_changed(void);
 
+static void remote_maybe_idle(struct remote *r);
+
 static void
 remote_session_free(struct remote_session *rs)
 {
+    struct remote *r = rs->remote;
     remote_session_close_window(rs);
     tll_foreach(footd.remote_sessions, it) {
         if (it->item == rs) {
@@ -1205,6 +1223,7 @@ remote_session_free(struct remote_session *rs)
     }
     session_msg_free(&rs->create);
     free(rs);
+    remote_maybe_idle(r);
     remotes_changed();
 }
 
@@ -1217,6 +1236,49 @@ remote_awaited(const struct remote *r)
             return true;
     }
     return false;
+}
+
+/* No window here has a session there open, nor waits for one */
+static bool
+remote_unused(const struct remote *r)
+{
+    tll_foreach(footd.remote_sessions, it) {
+        const struct remote_session *rs = it->item;
+        if (rs->remote == r && (rs->channel != 0 || rs->fd >= 0))
+            return false;
+    }
+    return true;
+}
+
+/* No window here needs it any more: hung up (the sessions there run on) */
+static bool
+fdm_remote_idle(struct fdm *fdm, int fd, int events, void *data)
+{
+    struct remote *r = data;
+    if (!timer_expired(fd) || r->mux == NULL || !remote_unused(r))
+        return true;
+
+    LOG_INFO("%s: no window needs it: disconnecting", r->host);
+    timer_set(r->timer, 0);
+    session_mux_destroy(r->mux);
+    r->mux = NULL;
+    if (r->ssh > 0)
+        kill(r->ssh, SIGTERM);
+    r->connected = r->checking = false;
+    r->tries = 0;
+    remotes_changed();
+    return true;
+}
+
+/* Hung up after a while (LINGER), unless a window needs it again meanwhile */
+static void
+remote_maybe_idle(struct remote *r)
+{
+    if (r->mux == NULL || !remote_unused(r))
+        return;
+    if (r->idle_timer < 0 && (r->idle_timer = timer_new(&fdm_remote_idle, r)) < 0)
+        return;
+    timer_set(r->idle_timer, ms_from_env("FOOTD_LINGER", LINGER));
 }
 
 /* How it is, for REMOTES */
@@ -1457,6 +1519,7 @@ remote_message(struct session_mux *mux, uint32_t type, struct session_reader *r,
         remote->connected_at = remote->heard_at = now_ms();
         free(remote->error);
         remote->error = NULL;
+        remote_maybe_idle(remote);
         remotes_changed();
         return true;
     }
@@ -1538,6 +1601,8 @@ remote_channel_closed(struct session_mux *mux, uint32_t channel, bool theirs, vo
     /* There: the session has ended, unless a window elsewhere has it */
     if (theirs && !rs->detached)
         remote_session_free(rs);
+    else
+        remote_maybe_idle(data);
 }
 
 static void
@@ -2232,7 +2297,7 @@ remote_get(const char *host)
     network_watch();
 
     struct remote *r = xmalloc(sizeof(*r));
-    *r = (struct remote){.host = xstrdup(host), .ssh_log = -1, .timer = -1};
+    *r = (struct remote){.host = xstrdup(host), .ssh_log = -1, .timer = -1, .idle_timer = -1};
     tll_push_back(footd.remotes, r);
     return r;
 }
@@ -2254,6 +2319,8 @@ remote_free(struct remote *r)
         fdm_del(footd.fdm, r->ssh_log);
     if (r->timer >= 0)
         fdm_del(footd.fdm, r->timer);
+    if (r->idle_timer >= 0)
+        fdm_del(footd.fdm, r->idle_timer);
     free(r->install);
     free(r->error);
     free(r->host);

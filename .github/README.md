@@ -279,7 +279,9 @@ is sent while the windows are idle.
   its host.
 * foot runs `ssh -T -o BatchMode=yes HOST footd --bridge`: your SSH
   configuration and keys (the agent) are used, without asking for
-  passwords. One connection per machine, for all its windows. A
+  passwords. One connection per machine, for all its windows; once
+  none is open there any more, it's closed (after half a minute: a
+  window opened meanwhile uses it). A
   machine's key is trusted the first time (added to
   `~/.ssh/known_hosts`), not when it has changed.
 * footd must be there. If it isn't, the window offers to install it:
