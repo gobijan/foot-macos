@@ -270,9 +270,13 @@ def test_remote(footd, tmp):
     ssh = os.path.join(tmp, 'ssh')
     newhost = os.path.join(tmp, 'newhost')
     os.mkdir(newhost)
+    login = os.path.join(tmp, 'login')
+    os.mkdir(login)
     with open(ssh, 'w') as f:
         # ssh's arguments: OPTIONS -- HOST COMMAND. newhost: footd isn't
-        # there (its "old" file: an old one is); what the commands do
+        # there (its "old" file: an old one is); what the commands do.
+        # pwhost*: asks for a password ("secret"), unless it has a key
+        # ($TEST_LOGIN/HOST.key); its token is in $TEST_LOGIN/HOST.token
         f.write('#!/bin/sh\n'
                 'while [ "$1" != -- ]; do shift; done\n'
                 'case $2 in\n'
@@ -288,8 +292,11 @@ def test_remote(footd, tmp):
                 '        exec "$d/footd" --bridge --socket="$d/s.sock" --log-to-stderr ;;\n'
                 '    esac ;;\n'
                 'pwhost*)\n'
+                '    t=$TEST_LOGIN/$2.token\n'
+                '    echo "$FOOTD_ASKPASS_TOKEN" >"$t.new" && mv "$t.new" "$t"\n'
                 '    for i in 1 2 3; do\n'
-                '        pw=$("$SSH_ASKPASS" "$2\'s password: ") || break\n'
+                '        [ -e "$TEST_LOGIN/$2.key" ] && pw=secret ||\n'
+                '            pw=$("$SSH_ASKPASS" "$2\'s password: ") || break\n'
                 '        [ "$pw" = secret ] && exec "$TEST_FOOTD" --bridge --socket="$TEST_PWREMOTE.$2" --log-to-stderr\n'
                 '    done\n'
                 '    echo "Permission denied (password)." >&2; exit 255 ;;\n'
@@ -302,7 +309,7 @@ def test_remote(footd, tmp):
 
     path = os.path.join(tmp, 'l.sock')
     env = dict(os.environ, FOOTD_SSH=ssh, TEST_FOOTD=os.path.abspath(footd),
-               TEST_REMOTE=remote_path, TEST_PWREMOTE=pw_remote_path, TEST_NEWHOST=newhost, REMOTE_MARK='there', HOME=tmp,
+               TEST_REMOTE=remote_path, TEST_PWREMOTE=pw_remote_path, TEST_NEWHOST=newhost, TEST_LOGIN=login, REMOTE_MARK='there', HOME=tmp,
                FOOTD_CHECK_TIMEOUT=str(int(check_timeout * 1000)), FOOTD_LINGER='300', FOOTD_MIN_GAP='500')
     proc = subprocess.Popen([footd, f'--socket={path}', '--log-to-stderr', '--log-level=warning'],
                             env=env)
@@ -492,6 +499,28 @@ def test_remote(footd, tmp):
         c.expect(STARTED)
         if select.select([asker.sock], [], [], .3)[0]:
             raise Failure('remote: asked again after reconnecting')
+
+        # Another program asks as ssh's helper would, with the token of an
+        # ssh that hasn't asked (it has a key now): it isn't told the password
+        token_path = os.path.join(login, 'pwhost.token')
+        os.remove(token_path)
+        open(os.path.join(login, 'pwhost.key'), 'w').close()
+        kill_ssh('pwhost')
+        win.read_past(b'connection to pwhost is lost')
+        win.read_until(b'in')
+        c.expect(STARTED)
+        with open(token_path) as f:
+            token = int(f.read(), 16)
+        other = Client(path)
+        other.hello()
+        other.send(ASKPASS, u64(token) + string("pwhost's password: ") + u8(0))
+        if other.expect(ANSWERED).u8() != 0:
+            raise Failure('remote: another program was told the password')
+        other.close()
+        if select.select([asker.sock], [], [], .3)[0]:
+            raise Failure('remote: asked for another program')
+        if token < 1 << 32:
+            raise Failure(f"remote: ssh's token can be guessed ({token})")
 
         # Canceled: not tried again before the window's input
         win2, _ = create(c, 111, 11, ['/bin/sh', '-c', 'echo two; read x'], host='pwhost2',

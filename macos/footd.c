@@ -42,6 +42,7 @@
 #include <sys/epoll.h>
 #include <sys/file.h>
 #include <sys/ioctl.h>
+#include <sys/random.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/timerfd.h>
@@ -53,6 +54,7 @@
  /* The system's, not foot's notify.h (as spawn.h above) */
  #include <sys/../notify.h>
  #include <notify_keys.h>
+ #include <libproc.h>
 #endif
 
 #include <tllist.h>
@@ -279,7 +281,7 @@ static struct {
     int network_timer;      /* Until they've settled; -1: none */
     struct session_msg remotes_told;  /* The last REMOTES (to those who WATCH) */
     tll(struct ask *) asks;
-    uint64_t next_id;       /* The asks', and ssh's tokens */
+    uint64_t next_id;       /* The asks' */
 
     /* The windows' layout, from the last window to tell */
     void *layout;
@@ -2125,7 +2127,72 @@ fdm_ssh_log(struct fdm *fdm, int fd, int events, void *data)
  * machine before (for the same prompt) is the answer, unless the same
  * ssh asks again (then it was wrong); else foot (a window there) asks.
  * While it does, connecting isn't given up on (CONNECT_TIMEOUT).
+ *
+ * Only that ssh is answered: other programs of the user's can connect
+ * here too, and aren't to be told a password. Who asks must run in the
+ * ssh footd has run for that machine (runs_in_ssh()), and say its
+ * token, which can't be guessed.
  */
+
+/* A token for an ssh; 0: none (who asks with it isn't answered) */
+static uint64_t
+ssh_token(void)
+{
+    uint64_t token;
+    if (getentropy(&token, sizeof(token)) < 0) {
+        LOG_ERRNO("failed to get random bytes");
+        return 0;
+    }
+    return token;
+}
+
+/* A process' parent; -1: unknown (e.g. it's gone) */
+static pid_t
+parent_of(pid_t pid)
+{
+#if defined(__APPLE__)
+    struct proc_bsdinfo info;
+    if (proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, sizeof(info)) != (int)sizeof(info))
+        return -1;
+    return (pid_t)info.pbi_ppid;
+#else
+    /* "PID (NAME) STATE PPID ...": the name may have spaces and parentheses */
+    char path[32];
+    snprintf(path, sizeof(path), "/proc/%d/stat", (int)pid);
+    const int fd = open(path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0)
+        return -1;
+
+    char stat[512];
+    const ssize_t n = read(fd, stat, sizeof(stat) - 1);
+    close(fd);
+    if (n <= 0)
+        return -1;
+    stat[n] = '\0';
+
+    const char *name_end = strrchr(stat, ')');
+    int parent;
+    if (name_end == NULL || sscanf(name_end + 1, " %*c %d", &parent) != 1)
+        return -1;
+    return parent;
+#endif
+}
+
+/*
+ * Whether 'pid' is an ssh footd has run for 'r', or runs in one: its
+ * helper does (footd --askpass: ssh's child; a jump host's ssh in
+ * between, with ProxyJump)
+ */
+static bool
+runs_in_ssh(const struct remote *r, pid_t pid)
+{
+    for (int depth = 0; pid > 1 && depth < 16; depth++) {
+        if (pid == r->ssh || pid == r->installer || pid == r->uninstaller)
+            return true;
+        pid = parent_of(pid);
+    }
+    return false;
+}
 
 /* ssh's environment: for footd --askpass, with a token for that ssh (it's run anew) */
 static char **
@@ -2145,7 +2212,7 @@ ssh_environment(struct remote *r)
         }
     }
 
-    r->token = ++footd.next_id;
+    r->token = ssh_token();
     char *self = footd_own_path();
     if (self != NULL && footd.socket_path != NULL) {
         env[n++] = xasprintf("SSH_ASKPASS=%s", self);
@@ -2250,6 +2317,11 @@ handle_askpass(struct client *helper, uint64_t token, const char *prompt, bool c
     tll_foreach(footd.remotes, it) {
         if (token != 0 && it->item->token == token)
             r = it->item;
+    }
+    if (r != NULL && !runs_in_ssh(r, helper->pid)) {
+        LOG_WARN("%s: asked by a program that isn't its ssh's (PID=%d): not answered",
+                 r->host, helper->pid);
+        r = NULL;
     }
     if (r == NULL) {
         send_answered(helper, false, NULL);

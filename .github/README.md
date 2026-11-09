@@ -289,7 +289,8 @@ is sent while the windows are idle.
   the answer. footd keeps it too, while it runs: connecting again
   doesn't ask. A wrong one is asked for again; canceled, foot doesn't
   try again until you type in the window. (ssh runs with
-  `SSH_ASKPASS`, footd itself, which asks foot.) A
+  `SSH_ASKPASS`, footd itself, which asks foot. footd only answers
+  the ssh it has run: no other program is told a password.) A
   machine's key is trusted the first time (added to
   `~/.ssh/known_hosts`), not when it has changed.
 * footd must be there. If it isn't, the window offers to install it:
