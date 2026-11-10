@@ -120,7 +120,13 @@ find_superview(NSView *view, NSString *name)
     FootTitleLabel *_titleLabel;
     NSColor *_titlebarColor;
     id _tabBarObserver;
+    BOOL _hasTabBar;
+
+    /* AppKit's views of the tab bar, as moved (they're put back once it's gone) */
+    __weak NSView *_tabBarClip;
+    __weak NSView *_tabBarAccessory;
     NSArray<NSLayoutConstraint *> *_tabBarConstraints;
+    NSArray<id> *_fullScreenObservers;
 }
 
 - (instancetype)initWithContentRect:(NSRect)rect titlebarTabs:(BOOL)titlebar_tabs
@@ -167,6 +173,8 @@ find_superview(NSView *view, NSString *name)
     [NSNotificationCenter.defaultCenter removeObserver:_shortcutObserver];
     if (_tabBarObserver != nil)
         [NSNotificationCenter.defaultCenter removeObserver:_tabBarObserver];
+    for (id observer in _fullScreenObservers)
+        [NSNotificationCenter.defaultCenter removeObserver:observer];
 }
 
 /* Its shortcut, if it's a tab: Cmd+1 to Cmd+8, and Cmd+9 for the last one */
@@ -236,7 +244,12 @@ find_superview(NSView *view, NSString *name)
     [_titleLabel setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
                                           forOrientation:NSLayoutConstraintOrientationHorizontal];
 
-    NSToolbar *toolbar = [[NSToolbar alloc] initWithIdentifier:@"io.github.gobijan.foot.toolbar"];
+    /*
+     * Its own: AppKit keeps toolbars with the same identifier alike (e.g.
+     * shown or not), and this one isn't shown in full screen without tabs
+     */
+    NSToolbar *toolbar = [[NSToolbar alloc] initWithIdentifier:
+        [@"io.github.gobijan.foot.toolbar." stringByAppendingString:NSUUID.UUID.UUIDString]];
     toolbar.delegate = self;
     toolbar.centeredItemIdentifiers = [NSSet setWithObject:title_item];
     toolbar.allowsUserCustomization = NO;
@@ -245,6 +258,45 @@ find_superview(NSView *view, NSString *name)
 
     /* The titlebar and the terminal are one (same color) */
     self.titlebarSeparatorStyle = NSTitlebarSeparatorStyleNone;
+
+    /* Before the window changes, so that it doesn't change twice */
+    __weak FootWindow *weak_self = self;
+    NSNotificationCenter *center = NSNotificationCenter.defaultCenter;
+    _fullScreenObservers = @[
+        [center addObserverForName:NSWindowWillEnterFullScreenNotification
+                            object:self queue:nil usingBlock:^(NSNotification *n) {
+                                [weak_self updateToolbarInFullScreen:YES];
+                            }],
+        [center addObserverForName:NSWindowWillExitFullScreenNotification
+                            object:self queue:nil usingBlock:^(NSNotification *n) {
+                                [weak_self updateToolbarInFullScreen:NO];
+                            }],
+    ];
+}
+
+/*
+ * In full screen, the toolbar is there for the tabs only: without them,
+ * it'd be a bar with nothing in it. The titlebar is then as usual in full
+ * screen (shown with the menu bar), with the window's own title.
+ */
+- (void)updateToolbar
+{
+    [self updateToolbarInFullScreen:(self.styleMask & NSWindowStyleMaskFullScreen) != 0];
+}
+
+- (void)updateToolbarInFullScreen:(BOOL)full_screen
+{
+    if (!_titlebarTabs)
+        return;
+
+    const BOOL visible = !full_screen || _hasTabBar;
+
+    if (self.toolbar.visible != visible)
+        self.toolbar.visible = visible;
+
+    const NSWindowTitleVisibility title = visible ? NSWindowTitleHidden : NSWindowTitleVisible;
+    if (self.titleVisibility != title)
+        self.titleVisibility = title;
 }
 
 - (void)setTitle:(NSString *)title
@@ -287,6 +339,7 @@ find_superview(NSView *view, NSString *name)
 
     /* Only the main window of the tabs has the tab bar */
     if (_titlebarTabs) {
+        [self updateToolbar];
         [self setUpTabBar];
         [self updateTitlebar];
     }
@@ -350,6 +403,10 @@ find_superview(NSView *view, NSString *name)
     controller.identifier = tab_bar_identifier;
     [self forgetTabBar];
 
+    /* In full screen, the toolbar is back for it */
+    _hasTabBar = YES;
+    [self updateToolbar];
+
     /* Before it's added (an exception otherwise) */
     controller.layoutAttribute = NSLayoutAttributeRight;
     [super addTitlebarAccessoryViewController:controller];
@@ -367,13 +424,30 @@ find_superview(NSView *view, NSString *name)
     const BOOL tab_bar = _titlebarTabs && index >= 0 && (NSUInteger)index < controllers.count &&
         [self isTabBar:controllers[index]];
 
+    /* AppKit's views as they were (they may stay, e.g. in full screen) */
+    if (tab_bar)
+        [self restoreTabBarViews];
+
     [super removeTitlebarAccessoryViewControllerAtIndex:index];
 
     if (tab_bar) {
         [self forgetTabBar];
+        _hasTabBar = NO;
         _titleLabel.alphaValue = 1.;
+        [self updateToolbar];
         [self updateTitlebar];
     }
+}
+
+- (void)restoreTabBarViews
+{
+    [NSLayoutConstraint deactivateConstraints:_tabBarConstraints];
+    _tabBarConstraints = nil;
+
+    _tabBarClip.translatesAutoresizingMaskIntoConstraints = YES;
+    _tabBarAccessory.translatesAutoresizingMaskIntoConstraints = YES;
+    _tabBarClip = nil;
+    _tabBarAccessory = nil;
 }
 
 - (void)forgetTabBar
@@ -416,10 +490,12 @@ find_superview(NSView *view, NSString *name)
     if (new_tab != nil)
         [tab_bar setFrameSize:NSMakeSize(NSWidth(tab_bar.frame), NSWidth(new_tab.frame))];
 
-    [NSLayoutConstraint deactivateConstraints:_tabBarConstraints];
+    [self restoreTabBarViews];
 
     clip.translatesAutoresizingMaskIntoConstraints = NO;
     accessory.translatesAutoresizingMaskIntoConstraints = NO;
+    _tabBarClip = clip;
+    _tabBarAccessory = accessory;
 
     _tabBarConstraints = @[
         [clip.leftAnchor constraintEqualToAnchor:toolbar.leftAnchor constant:WINDOW_BUTTONS_WIDTH],
