@@ -729,10 +729,14 @@ wayl_win_destroy(struct wl_window *win)
         if (last) {
             nswindow.delegate = nil;
 
-            /* Ordering out a tab hides all of them */
-            [nswindow.tabGroup removeWindow:nswindow];
-
-            [nswindow orderOut:nil];
+            /*
+             * A tab is closed as its close button does. Not ordered out
+             * (that hides all of them), nor taken out of its tabs first:
+             * in full screen, it'd be a window of its own, and macOS'
+             * switch to its desktop got stuck, over the other tabs
+             */
+            if (nswindow.tabbedWindows.count <= 1)
+                [nswindow orderOut:nil];
             [nswindow close];
         }
     }
