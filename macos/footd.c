@@ -29,6 +29,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <uchar.h>
 #include <unistd.h>
 
@@ -1138,6 +1139,12 @@ static const int retry_after[] = {1000, 4000, 10000, 20000, 30000, 60000};
  * (the sessions there run on).
  */
 #define LINGER 30000
+
+/*
+ * At exit, ssh has this long (milliseconds) to pass on what it hasn't
+ * yet, and to hang up; then it's ended
+ */
+#define HANG_UP 2000
 
 static void remote_disconnected(struct remote *r);
 static bool remote_connect(struct remote *r);
@@ -2661,14 +2668,14 @@ remote_get(const char *host)
     return r;
 }
 
-static void
+/* At exit: its connection is closed; its ssh is returned, to hang up (remotes_hang_up()) */
+static pid_t
 remote_free(struct remote *r)
 {
     session_mux_destroy(r->mux);
-    if (r->ssh > 0) {
-        reaper_del(footd.reaper, r->ssh);
-        kill(r->ssh, SIGTERM);
-    }
+    const pid_t ssh = r->ssh;
+    if (ssh > 0)
+        reaper_del(footd.reaper, ssh);
     /* (Installing or removing footd there goes on) */
     if (r->installer > 0)
         reaper_del(footd.reaper, r->installer);
@@ -2689,6 +2696,45 @@ remote_free(struct remote *r)
     free(r->error);
     free(r->host);
     free(r);
+    return ssh;
+}
+
+/*
+ * At exit: the connections to the other machines are closed. ssh
+ * passes on what it hasn't yet (a window's KILL, just before), and
+ * exits once the other footd's bridge has had it, and our EOF. It's
+ * waited for, a while; then ended (a SIGTERM right away lost the KILL).
+ */
+static void
+remotes_hang_up(void)
+{
+    tll(pid_t) ssh = tll_init();
+    tll_foreach(footd.remotes, it) {
+        const pid_t pid = remote_free(it->item);
+        if (pid > 0)
+            tll_push_back(ssh, pid);
+        tll_remove(footd.remotes, it);
+    }
+
+    const int64_t until = now_ms() + HANG_UP;
+    while (tll_length(ssh) > 0) {
+        tll_foreach(ssh, it) {
+            /* (Exited, or not ours any more) */
+            const pid_t pid = waitpid(it->item, NULL, WNOHANG);
+            if (pid > 0 || (pid < 0 && errno != EINTR))
+                tll_remove(ssh, it);
+        }
+
+        if (tll_length(ssh) > 0 && now_ms() >= until) {
+            tll_foreach(ssh, it) {
+                kill(it->item, SIGTERM);
+                tll_remove(ssh, it);
+            }
+        }
+
+        if (tll_length(ssh) > 0)
+            nanosleep(&(struct timespec){.tv_nsec = 10 * 1000 * 1000}, NULL);
+    }
 }
 
 /*
@@ -3568,10 +3614,7 @@ out:
     /* Those on other machines run on, there */
     tll_foreach(footd.remote_sessions, it)
         remote_session_free(it->item);
-    tll_foreach(footd.remotes, it) {
-        remote_free(it->item);
-        tll_remove(footd.remotes, it);
-    }
+    remotes_hang_up();
     network_unwatch();
 
     headless_fini();

@@ -272,6 +272,8 @@ def test_remote(footd, tmp):
     os.mkdir(newhost)
     login = os.path.join(tmp, 'login')
     os.mkdir(login)
+    others = [remote_path, os.path.join(newhost, 's.sock')] + \
+        [f'{pw_remote_path}.{host}' for host in ['pwhost', 'pwhost2', 'pwhost3']]
     with open(ssh, 'w') as f:
         # ssh's arguments: OPTIONS -- HOST COMMAND. newhost: footd isn't
         # there (its "old" file: an old one is); what the commands do.
@@ -587,16 +589,19 @@ def test_remote(footd, tmp):
         if wait_exit(proc) != 0:
             raise Failure('remote: footd failed')
         deadline = time.time() + TIMEOUT
-        others = [remote_path, os.path.join(newhost, 's.sock')] + \
-            [f'{pw_remote_path}.{host}' for host in ['pwhost', 'pwhost2', 'pwhost3']]
         while any(os.path.exists(other) for other in others):
             if time.time() > deadline:
-                raise Failure('remote: the other footds did not exit')
+                left = [os.path.relpath(other, tmp) for other in others if os.path.exists(other)]
+                raise Failure(f'remote: the other footds did not exit: {left}')
             time.sleep(.05)
     finally:
         if proc.poll() is None:
             proc.kill()
             proc.wait()
+
+        # Those left (it failed) are ended too (SIGTERM: their sessions with them)
+        if any(os.path.exists(other) for other in others):
+            subprocess.run(['pkill', '-f', '--', f'--socket={tmp}/'])
 
 
 def main():
