@@ -447,6 +447,13 @@ void wayl_enable_new_windows(
     struct fdm *fdm, struct reaper *reaper);
 
 /*
+ * The command line's overrides (-o etc.) of 'conf' above, before
+ * they're applied: copied, for when the configuration is reloaded
+ * (macos/reload.m)
+ */
+void wayl_keep_config_overrides(config_override_t *overrides);
+
+/*
  * footclient --quake, and the menus and the hotkey (macos/windows.c):
  * shows, hides or toggles the quake terminal (macos/quake.m; 'action':
  * enum client_quake). If there's none, it's created first, as

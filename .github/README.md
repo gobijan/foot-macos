@@ -121,10 +121,10 @@ frameworks.
 
 * `Cmd+C` / `Cmd+V` copy and paste, `Cmd+N` opens a new window (in the
   same process, and in the current window's working directory), `Cmd+,`
-  opens the configuration in `$EDITOR`, `Cmd+=` / `Cmd+-` / `Cmd+0`
-  change the font size, `Cmd+Shift+O` shows URLs (like foot's
-  `Ctrl+Shift+O`), `Ctrl+Cmd+F` toggles fullscreen. foot's own key
-  bindings (e.g. `Ctrl+Shift+C`) still work.
+  opens the configuration in `$EDITOR`, `Cmd+Shift+,` reloads it,
+  `Cmd+=` / `Cmd+-` / `Cmd+0` change the font size, `Cmd+Shift+O` shows
+  URLs (like foot's `Ctrl+Shift+O`), `Ctrl+Cmd+F` toggles fullscreen.
+  foot's own key bindings (e.g. `Ctrl+Shift+C`) still work.
 * `Cmd+K` clears the scrollback and everything above the prompt, which
   moves to the top, also while a command is running. What's been typed
   stays. With shell integration (OSC 133), a prompt of several rows
@@ -164,7 +164,14 @@ frameworks.
   `[main]` changes that. On keys without text (arrows, Return, Backspace
   etc), Option always is Alt.
 * The configuration is read from `~/.config/foot/foot.ini`. New windows
-  re-read it, so changes apply without restarting foot.
+  re-read it, so changes apply without restarting foot. `Cmd+Shift+,`
+  (foot > Reload Configuration, as in Ghostty) applies it to the windows
+  that are open too: colors, fonts, key bindings, padding, the cursor,
+  and the other options a running terminal uses. Errors in the file are
+  shown; the rest of it is applied. What a terminal starts with (the
+  shell, the environment, the initial size, `[scrollback]`'s `lines`,
+  `macos-titlebar-style`) is for new windows. Options from the command
+  line (`-o`) stay.
 * Font sizes are in points, like in other macOS applications. The
   default font is SF Mono (`monospace`), 13pt. Icons from installed Nerd
   Fonts are used automatically.

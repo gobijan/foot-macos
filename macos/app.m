@@ -258,6 +258,23 @@ toggle_quake(void)
     app_run_hooks();
 }
 
+void
+app_set_quake_hotkey(uint32_t sym, unsigned mods)
+{
+    if (sym == app.hotkey_sym && mods == app.hotkey_mods)
+        return;
+
+    app.hotkey_sym = sym;
+    app.hotkey_mods = mods;
+
+    if (app.quake_item != nil)
+        hotkey_set_key_equivalent(app.quake_item, sym, mods);
+
+    /* Only if wayl_run() registered one */
+    if (app.running && app.launched_as_app && !app.server && app.quake != NULL)
+        hotkey_register(sym, mods, &toggle_quake);
+}
+
 static NSString *
 quake_item_title(void)
 {
@@ -963,6 +980,8 @@ create_menu(void)
             [menu addItem:updates];
         [menu addItem:[NSMenuItem separatorItem]];
         [menu addItem:menu_item(@"Settings…", @selector(openSettings:), @",", cmd)];
+        [menu addItem:menu_item(@"Reload Configuration", @selector(reloadConfiguration:), @",",
+                                cmd | NSEventModifierFlagShift)];
         [menu addItem:menu_item(@"Secure Keyboard Entry", @selector(toggleSecureInput:), @"", 0)];
         [menu addItem:[NSMenuItem separatorItem]];
 
@@ -1359,6 +1378,11 @@ app_remove_footd(NSString *host)
 {
     if (app.settings != NULL && !app.settings(app.settings_data))
         LOG_ERR("failed to open the settings");
+}
+
+- (void)reloadConfiguration:(id)sender
+{
+    app_reload_config();
 }
 
 - (void)quitEndingSessions:(id)sender

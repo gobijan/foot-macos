@@ -118,63 +118,133 @@ class Tests:
             if f.read().split() != ['30', '100']:
                 raise Failure('stty size: not the window size')
 
-    def test_splits(self):
-        """Splits: right and down, zoomed, closed; each pane's terminal size"""
-        tmp = os.path.join(self.tmp, 'splits')
-        os.mkdir(tmp)
+    class Panes:
+        """foot, driven by macos/smoke-driver.m; each pane's shell reports its size"""
 
-        # Each pane's shell reports its size, until the test is done
-        script = os.path.join(tmp, 'pane.sh')
-        with open(script, 'w') as f:
-            f.write(f"""
-                last=
-                while [ ! -e {tmp}/quit ]; do
-                    size=$(stty size)
-                    if [ "$size" != "$last" ]; then
-                        echo "$size" > {tmp}/size.$$.tmp
-                        mv {tmp}/size.$$.tmp {tmp}/size.$$
-                        last=$size
-                    fi
-                    sleep .1
-                done
-            """)
+        def __init__(self, tests, name):
+            self.tmp = tmp = os.path.join(tests.tmp, name)
+            os.mkdir(tmp)
+            self.tests = tests
+            self.foot = None
 
-        config = os.path.join(tmp, 'foot.ini')
-        with open(config, 'w') as f:
-            f.write(f'shell=/bin/sh {script}\nlogin-shell=no\nmacos-confirm-close=no\n')
+            # Until the test is done
+            self.script = os.path.join(tmp, 'pane.sh')
+            with open(self.script, 'w') as f:
+                f.write(f"""
+                    last=
+                    while [ ! -e {tmp}/quit ]; do
+                        size=$(stty size)
+                        if [ "$size" != "$last" ]; then
+                            echo "$size" > {tmp}/size.$$.tmp
+                            mv {tmp}/size.$$.tmp {tmp}/size.$$
+                            last=$size
+                        fi
+                        sleep .1
+                    done
+                """)
 
-        def sizes():
+            self.config = os.path.join(tmp, 'foot.ini')
+            self.configure()
+
+        def configure(self, options=''):
+            """foot.ini: the panes' shell, and 'options' (lines)"""
+            with open(self.config, 'w') as f:
+                f.write(f'shell=/bin/sh {self.script}\nlogin-shell=no\n'
+                        f'macos-confirm-close=no\n{options}')
+
+        def start(self, *args):
+            env = dict(ENV, DYLD_INSERT_LIBRARIES=self.tests.driver, FOOT_SMOKE_DIR=self.tmp)
+            self.foot = subprocess.Popen(
+                [self.tests.foot, f'--config={self.config}', '--window-size-chars=100x30', *args],
+                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, env=env)
+
+        def sizes(self):
             result = {}
-            for name in os.listdir(tmp):
+            for name in os.listdir(self.tmp):
                 if name.startswith('size.') and not name.endswith('.tmp'):
-                    with open(os.path.join(tmp, name)) as f:
+                    with open(os.path.join(self.tmp, name)) as f:
                         rows, cols = f.read().split()
                     result[name[5:]] = (int(rows), int(cols))
             return result
 
-        def wait(what, check):
+        def wait(self, what, check):
             deadline = time.time() + TIMEOUT
             while True:
-                got = sizes()
+                got = self.sizes()
                 if check(got):
                     return got
-                if time.time() > deadline or foot.poll() is not None:
+                if time.time() > deadline or self.foot.poll() is not None:
                     raise Failure(f'{what}: the panes\' sizes are {got}')
                 time.sleep(.1)
 
-        def perform(action):
-            with open(os.path.join(tmp, 'action'), 'w') as f:
+        def perform(self, action):
+            with open(os.path.join(self.tmp, 'action'), 'w') as f:
                 f.write(action)
+
+        def quit(self):
+            """The shells exit, and foot with its last window; returns its output"""
+            open(os.path.join(self.tmp, 'quit'), 'w').close()
+            try:
+                out, _ = self.foot.communicate(timeout=TIMEOUT)
+            except subprocess.TimeoutExpired:
+                self.foot.kill()
+                out, _ = self.foot.communicate()
+            return out
+
+    def test_reload(self):
+        """Reload Configuration: the panes take the file's padding and fonts, and keep the command line's overrides"""
+        t = self.Panes(self, 'reload')
+        t.configure('pad=0x0\n')
+
+        # Keeping its grid (the default), the window would grow with the
+        # font instead: as far as the screen allows
+        t.start('--override=resize-keep-grid=no')
+        out = ''
+
+        try:
+            got = t.wait('the window', lambda got: list(got.values()) == [(30, 100)])
+            a = next(iter(got))
+
+            # The window keeps its size: less of it is the grid's
+            t.configure('pad=40x40\n')
+            t.perform('reloadConfiguration:')
+            t.wait('padding', lambda got: got[a][0] < 30 and got[a][1] < 100)
+
+            t.configure('pad=0x0\n')
+            t.perform('reloadConfiguration:')
+            t.wait('no padding', lambda got: got[a] == (30, 100))
+
+            # Twice the font size (and another number of fonts): half the grid
+            t.configure('pad=0x0\nfont=monospace:size=26, Menlo:size=26\n')
+            t.perform('reloadConfiguration:')
+            t.wait('a larger font', lambda got: 10 <= got[a][0] <= 17 and 40 <= got[a][1] <= 55)
+
+            # All panes: also one that loaded the file itself
+            t.perform('splitRight:')
+            got = t.wait('split', lambda got: len(got) == 2 and all(rows <= 17 for rows, _ in got.values()))
+            b = next(pane for pane in got if pane != a)
+
+            t.configure('pad=0x0\n')
+            t.perform('reloadConfiguration:')
+            t.wait('the default font', lambda got: got[a][0] >= 27 and got[b][0] >= 27)
+        finally:
+            out = t.quit()
+
+        if t.foot.returncode != 0:
+            raise Failure(f'foot: exit code {t.foot.returncode}\n{out}')
+
+    def test_splits(self):
+        """Splits: right and down, zoomed, closed; each pane's terminal size"""
+        t = self.Panes(self, 'splits')
+        wait, perform = t.wait, t.perform
 
         def new_pane(got, known):
             panes = [pane for pane in got if pane not in known]
             return panes[0] if len(panes) == 1 else None
 
-        env = dict(ENV, DYLD_INSERT_LIBRARIES=self.driver, FOOT_SMOKE_DIR=tmp)
-        foot = subprocess.Popen(
-            [self.foot, f'--config={config}', '--window-size-chars=100x30'],
-            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, env=env)
+        t.start()
+        out = ''
 
         try:
             got = wait('the window', lambda got: list(got.values()) == [(30, 100)])
@@ -207,15 +277,10 @@ class Tests:
             perform('performClose:')
             wait('close', lambda got: got[b] == b_size and got[a] == a_size)
         finally:
-            open(os.path.join(tmp, 'quit'), 'w').close()
-            try:
-                out, _ = foot.communicate(timeout=TIMEOUT)
-            except subprocess.TimeoutExpired:
-                foot.kill()
-                out, _ = foot.communicate()
+            out = t.quit()
 
-        if foot.returncode != 0:
-            raise Failure(f'foot: exit code {foot.returncode}\n{out}')
+        if t.foot.returncode != 0:
+            raise Failure(f'foot: exit code {t.foot.returncode}\n{out}')
 
     class Sessions:
         """foot with sessions (in a footd of its own), driven by macos/smoke-driver.m"""

@@ -26,6 +26,15 @@ void app_run_hooks(void);
  */
 void app_apply_color_theme(struct terminal *term, bool reload);
 
+/*
+ * reload.m: foot > Reload Configuration: the windows that are open take
+ * the configuration as it is now
+ */
+void app_reload_config(void);
+
+/* macos-quake-hotkey is another one now (the configuration was reloaded) */
+void app_set_quake_hotkey(uint32_t sym, unsigned mods);
+
 /* notifications.m: before the application has finished launching */
 void notifications_init(void);
 
@@ -169,6 +178,9 @@ void window_backing_changed(struct wl_window *win);
 /* The pane gets, or loses, the keyboard focus (its window is key) */
 void window_focus_in(struct wl_window *win);
 void window_focus_out(struct wl_window *win);
+
+/* The padding changed: the grid is laid out again, in the pane's size */
+void window_layout_changed(struct wl_window *win);
 
 /* The window (or a divider) is no longer being resized: the final size */
 void window_live_resize_ended(struct wl_window *win);

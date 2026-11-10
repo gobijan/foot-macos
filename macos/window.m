@@ -402,6 +402,16 @@ window_resized(struct wl_window *win)
     app_run_hooks();
 }
 
+void
+window_layout_changed(struct wl_window *win)
+{
+    if (!win->is_configured)
+        return;
+
+    const NSSize size = view_of(win).bounds.size;
+    render_resize(win->term, (int)size.width, (int)size.height, RESIZE_FORCE);
+}
+
 /*
  * The cell size changed (font size, scale), and the terminal kept its
  * grid (resize-keep-grid): like a Wayland compositor, the window adopts

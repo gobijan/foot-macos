@@ -39,6 +39,34 @@ struct new_window_context {
 
 static struct new_window_context context;
 
+/* The command line's (-o etc.): they're the first window's only */
+static config_override_t initial_overrides = tll_init();
+
+void
+wayl_keep_config_overrides(config_override_t *overrides)
+{
+    tll_foreach(*overrides, it)
+        tll_push_back(initial_overrides, xstrdup(it->item));
+}
+
+struct config *
+windows_initial_config(void)
+{
+    return (struct config *)context.conf;
+}
+
+void
+windows_apply_overrides(struct config *conf)
+{
+    /* Applying them takes them apart (key and value): copies */
+    config_override_t overrides = tll_init();
+    tll_foreach(initial_overrides, it)
+        tll_push_back(overrides, xstrdup(it->item));
+
+    config_override_apply(conf, &overrides, false);
+    tll_free_and_free(overrides, free);
+}
+
 /* The configuration, as new windows load it */
 bool
 windows_load_config(struct config *conf)

@@ -542,6 +542,9 @@ main(int argc, char *const *argv)
         free(saved_locale);
     }
 
+    /* Applied again when the configuration is reloaded (Cmd+Shift+,) */
+    wayl_keep_config_overrides(&overrides);
+
     struct config conf = {NULL};
     bool conf_successful = config_load(
         &conf, conf_path, &user_notifications, &overrides, check_config, as_server);
