@@ -209,6 +209,16 @@ doctor: ## Check the build tools and print their versions
 icon: ## Generate the app icon from upstream's logo (needs librsvg)
 	macos/icon/make-icon.py
 
+##@ Website
+
+.PHONY: site
+site: ## Serve the website (macos/site) at http://localhost:8000
+	python3 -m http.server 8000 --bind 127.0.0.1 --directory macos/site
+
+.PHONY: site-assets
+site-assets: ## Generate the website's themes and images (needs librsvg and webp)
+	macos/site/make-assets.py
+
 ##@ Help
 
 .PHONY: help

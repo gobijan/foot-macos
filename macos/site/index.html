@@ -1,0 +1,822 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>foot for macOS: the fast, lightweight terminal emulator</title>
+<meta name="description" content="A native macOS port of foot, the fast, lightweight terminal emulator. Starts in 75 ms, does nothing while idle, and keeps what runs in it running when you quit.">
+<link rel="canonical" href="https://screenisland.com/foot-macos/">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta property="og:type" content="website">
+<meta property="og:title" content="foot for macOS">
+<meta property="og:description" content="The fast, lightweight terminal emulator, native on the Mac.">
+<meta property="og:url" content="https://screenisland.com/foot-macos/">
+<meta property="og:image" content="https://screenisland.com/foot-macos/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "foot for macOS",
+  "description": "A native macOS port of foot, the fast, lightweight terminal emulator.",
+  "applicationCategory": "DeveloperApplication",
+  "operatingSystem": "macOS 14 or later",
+  "url": "https://screenisland.com/foot-macos/",
+  "downloadUrl": "https://github.com/gobijan/foot-macos/releases/latest",
+  "license": "https://github.com/gobijan/foot-macos/blob/main/LICENSE",
+  "author": { "@type": "Person", "name": "Bijan Rahnema", "url": "https://github.com/gobijan" },
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+}
+</script>
+<meta name="theme-color" content="#0a0a0a" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f5f5f5" media="(prefers-color-scheme: light)">
+<script>
+// The theme chosen last time, before the first paint
+try {
+  var saved = JSON.parse(localStorage.getItem('foot-theme'));
+  if (saved && saved.css) document.documentElement.style.cssText = saved.css;
+} catch (e) {}
+</script>
+<style>
+/* The colors are a foot theme's: Grok Night and Grok Day, foot's defaults
+   on macOS (macos/themes/). The Theme menu replaces them (themes.js). */
+:root {
+  color-scheme: dark;
+  --bg: #0a0a0a; --fg: #e1e1e1;
+  --r0: #111111; --r1: #f7768e; --r2: #9ece6a; --r3: #e0af68;
+  --r4: #7aa2f7; --r5: #bb9af7; --r6: #1abc9c; --r7: #c8c8c8;
+  --b0: #6c6c6c; --b1: #f7768e; --b2: #8bc34a; --b3: #ff9e64;
+  --b4: #7aa2f7; --b5: #9d7cd8; --b6: #3a95ab; --b7: #e1e1e1;
+  --sel-bg: #323237; --sel-fg: #e1e1e1; --cursor: #bb9af7;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+    --bg: #f5f5f5; --fg: #262626;
+    --r0: #262626; --r1: #cd3048; --r2: #378e23; --r3: #a27612;
+    --r4: #2f64d2; --r5: #7d4bc6; --r6: #0a8e70; --r7: #444444;
+    --b0: #767676; --b1: #cd3048; --b2: #4caf50; --b3: #c3691e;
+    --b4: #2f64d2; --b5: #6c3eb2; --b6: #0f87a2; --b7: #262626;
+    --sel-bg: #d4d4d8; --sel-fg: #262626; --cursor: #7d4bc6;
+  }
+}
+:root {
+  --dim: color-mix(in oklab, var(--fg) 66%, var(--bg));
+  --faint: color-mix(in oklab, var(--fg) 34%, var(--bg));
+  --rule: color-mix(in oklab, var(--fg) 15%, var(--bg));
+  --raise: color-mix(in oklab, var(--fg) 6%, var(--bg));
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, "Cascadia Mono", "DejaVu Sans Mono", Consolas, monospace;
+  --gutter: clamp(16px, 4vw, 40px);
+  scroll-padding-top: 4.5rem;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 0.9375rem/1.6 var(--mono);
+  overflow-wrap: break-word;
+}
+::selection { background: var(--sel-bg); color: var(--sel-fg); }
+:focus-visible { outline: 2px solid var(--cursor); outline-offset: 2px; }
+a { color: var(--r4); text-underline-offset: 0.2em; text-decoration-thickness: 1px; }
+a:hover { text-decoration-thickness: 2px; }
+p { margin: 0 0 1em; }
+h1, h2, h3 { margin: 0; font-weight: 600; }
+h2 { font-size: clamp(1.375rem, 1rem + 1.6vw, 1.875rem); line-height: 1.2; letter-spacing: -0.02em; margin-bottom: 0.8em; text-wrap: balance; }
+h3 { font-size: 1em; margin-bottom: 0.4em; }
+code, kbd, pre { font: inherit; }
+code { color: var(--r3); }
+kbd { display: inline-block; min-width: 1.6em; padding: 0 0.35em; border: 1px solid var(--rule); border-bottom-width: 2px; border-radius: 4px; background: var(--raise); text-align: center; line-height: 1.5; white-space: nowrap; }
+img { max-width: 100%; height: auto; }
+figure { margin: 0; }
+[hidden] { display: none !important; }
+
+.wrap { max-width: 1160px; margin-inline: auto; padding-inline: var(--gutter); }
+.prose { max-width: 62ch; }
+.dim { color: var(--dim); }
+.small { font-size: 0.8125rem; line-height: 1.55; }
+
+/* Top bar */
+.bar { position: sticky; top: 0; z-index: 5; background: var(--bg); border-bottom: 1px solid var(--rule); }
+.bar-in { display: flex; align-items: center; gap: 2.5ch; min-height: 3rem; }
+.brand { display: inline-flex; align-items: center; gap: 1ch; color: inherit; font-weight: 600; text-decoration: none; }
+.brand img { display: block; }
+.bar nav { display: flex; gap: 2.5ch; margin-right: auto; }
+.bar nav a, .bar-in > a { color: var(--dim); text-decoration: none; }
+.bar nav a:hover, .bar-in > a:hover { color: var(--fg); }
+.theme { display: inline-flex; align-items: center; gap: 1ch; color: var(--dim); }
+.theme-box { position: relative; display: inline-flex; }
+.theme-box::after { content: "▾"; position: absolute; right: 0.6ch; top: 50%; translate: 0 -50%; pointer-events: none; color: var(--dim); }
+.theme select { appearance: none; -webkit-appearance: none; max-width: 22ch; padding: 0.15rem 2.6ch 0.15rem 1ch; border: 1px solid var(--rule); border-radius: 0; background: var(--raise); color: var(--fg); font: inherit; text-overflow: ellipsis; }
+@media (max-width: 860px) { .bar nav { display: none; } .theme { margin-left: auto; } }
+@media (max-width: 430px) { .theme-label { display: none; } }
+
+/* Hero */
+.hero { padding-top: clamp(40px, 7vw, 88px); padding-bottom: clamp(32px, 5vw, 56px); }
+.lockup { --px: 5px; display: block; width: calc(58 * var(--px)); height: calc(22 * var(--px)); shape-rendering: crispEdges; margin-bottom: clamp(28px, 4vw, 48px); }
+@media (min-width: 400px) { .lockup { --px: 6px; } }
+@media (min-width: 540px) { .lockup { --px: 8px; } }
+@media (min-width: 720px) { .lockup { --px: 10px; } }
+@media (min-width: 960px) { .lockup { --px: 12px; } }
+@media (min-width: 1280px) and (min-height: 1000px) { .lockup { --px: 14px; } }
+.lockup .word { fill: var(--fg); }
+.c0 { fill: var(--r0); } .c1 { fill: var(--r1); } .c2 { fill: var(--r2); } .c3 { fill: var(--r3); }
+.c4 { fill: var(--r4); } .c5 { fill: var(--r5); } .c6 { fill: var(--r6); } .c7 { fill: var(--r7); }
+.c8 { fill: var(--b0); } .c9 { fill: var(--b1); } .c10 { fill: var(--b2); } .c11 { fill: var(--b3); }
+.c12 { fill: var(--b4); } .c13 { fill: var(--b5); } .c14 { fill: var(--b6); } .c15 { fill: var(--b7); }
+h1 { max-width: 23ch; font-size: clamp(1.75rem, 1.1rem + 2.7vw, 2.875rem); line-height: 1.12; letter-spacing: -0.035em; text-wrap: balance; }
+.lead { max-width: 60ch; margin: 1.4em 0 2em; font-size: 1.0625rem; color: var(--dim); }
+
+.get { display: flex; flex-wrap: wrap; align-items: stretch; gap: 0.75rem 2ch; margin-bottom: 1.1rem; }
+.cmd { display: inline-flex; align-items: center; max-width: 100%; min-width: 0; border: 1px solid var(--rule); background: var(--raise); }
+.cmd-text { display: flex; gap: 1ch; min-width: 0; padding: 0.6rem 1.5ch; overflow-x: auto; white-space: nowrap; }
+.cmd-text::before { content: "❯"; color: var(--r5); }
+.cmd code { color: var(--fg); }
+.button, .cmd button, .ghost {
+  display: inline-flex; align-items: center; gap: 1ch; padding: 0.6rem 2ch; border: 0; border-radius: 0;
+  background: var(--fg); color: var(--bg); font: inherit; font-weight: 600; text-decoration: none; cursor: pointer;
+}
+.button:hover, .cmd button:hover { background: var(--b7); background: color-mix(in oklab, var(--fg) 86%, var(--bg)); }
+.cmd button { align-self: stretch; min-width: 9ch; justify-content: center; background: transparent; color: var(--dim); font-weight: 400; border-left: 1px solid var(--rule); }
+.cmd button:hover { background: var(--rule); color: var(--fg); }
+.ghost { background: transparent; color: var(--fg); box-shadow: inset 0 0 0 1px var(--faint); font-weight: 400; }
+.ghost:hover { box-shadow: inset 0 0 0 1px var(--fg); }
+.ghost kbd { border-color: var(--faint); background: none; }
+
+.shot { margin-top: clamp(8px, 2vw, 24px); }
+/* The picture has the window's shadow around it: the window lines up with the text */
+.shot img { display: block; width: 103.8%; max-width: none; margin-inline: -1.9%; }
+.shot figcaption { margin-top: -0.6rem; color: var(--dim); }
+
+/* Sections */
+.sec { padding-block: clamp(64px, 9vw, 120px); }
+.sec + .sec { border-top: 1px solid var(--rule); }
+.cols { display: grid; grid-template-columns: minmax(0, 1fr); gap: clamp(32px, 5vw, 72px); align-items: start; }
+@media (min-width: 940px) { .cols { grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); } }
+
+/* Performance */
+.wake figcaption { margin-bottom: 1.2rem; color: var(--dim); }
+.wake-row { display: grid; grid-template-columns: 8ch minmax(0, 1fr) 9ch; align-items: center; gap: 1ch; margin-bottom: 0.6rem; }
+.wake-row span:last-child { text-align: right; color: var(--dim); }
+.strip { height: 2.5rem; border-block: 1px solid var(--rule); background: linear-gradient(90deg, var(--tick) 0 var(--tick-w, 1px), transparent 0) 14px 0 / var(--gap) 100% repeat-x; }
+.scale { display: flex; align-items: center; gap: 1ch; margin: 0.9rem 0 0 9ch; color: var(--dim); }
+.scale i { width: 64px; height: 0.5rem; border: 1px solid var(--faint); border-top: 0; }
+
+.metrics { display: grid; gap: 2.5rem clamp(32px, 5vw, 72px); margin-top: clamp(48px, 6vw, 80px); }
+@media (min-width: 760px) { .metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.metric figcaption { margin-bottom: 0.7rem; }
+.metric dl { display: grid; gap: 0.3rem; margin: 0; }
+.metric dl > div { display: grid; grid-template-columns: 8ch minmax(0, 1fr); align-items: center; gap: 1ch; }
+.metric dt { color: var(--dim); }
+.metric dd { display: flex; align-items: center; gap: 1ch; margin: 0; color: var(--dim); white-space: nowrap; }
+.metric dd::before { content: ""; flex: none; width: calc(var(--v) * (100% - 10ch)); min-width: 3px; height: 0.8rem; background: var(--faint); }
+.metric .us dt, .metric .us dd { color: var(--fg); }
+.metric .us dd::before { background: var(--fg); }
+
+.thru { margin-top: clamp(48px, 6vw, 80px); }
+.table-box { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; }
+th, td { padding: 0.35rem 2ch 0.35rem 0; border-bottom: 1px solid var(--rule); text-align: left; vertical-align: top; font-weight: 400; }
+thead th { color: var(--dim); }
+.num th:not(:first-child), .num td { text-align: right; padding-right: 0; padding-left: 2ch; font-variant-numeric: tabular-nums; }
+.num td { color: var(--dim); }
+.num td.best { color: var(--fg); font-weight: 600; }
+.num { max-width: 800px; }
+.note { max-width: 86ch; margin-top: 1.4rem; color: var(--dim); }
+
+/* A window, as in the screenshot */
+.win { overflow: hidden; border: 1px solid var(--rule); border-radius: 10px; background: var(--bg); box-shadow: 0 22px 50px -18px rgb(0 0 0 / 0.5); }
+.win-bar { display: flex; align-items: center; gap: 8px; height: 28px; padding-inline: 10px; background: var(--raise); color: var(--dim); font-size: 0.8125rem; }
+.win-bar i { width: 12px; height: 12px; border-radius: 50%; }
+.win-bar i:nth-child(1) { background: #ff5f57; } .win-bar i:nth-child(2) { background: #febc2e; } .win-bar i:nth-child(3) { background: #28c840; }
+.win-bar span { flex: 1; margin-right: 52px; text-align: center; }
+/* foot's defaults: SF Mono 13, pad=8x8 */
+.term { clip-path: inset(8px 0 0); height: calc(10 * 1.35em + 16px); margin: 0; padding: 8px; overflow: hidden; font-size: 0.8125rem; line-height: 1.35; white-space: pre-wrap; word-break: break-all; }
+.term span { display: block; }
+.term .late { box-shadow: -5px 0 0 var(--bg), -8px 0 0 var(--r3); }
+.prompt { color: var(--r5); }
+
+/* Sessions */
+.desk { position: relative; }
+.desk .win { transition: opacity 0.2s, scale 0.2s; }
+.desk.quit .win { opacity: 0; scale: 0.97; visibility: hidden; transition: opacity 0.2s, scale 0.2s, visibility 0s 0.2s; }
+.desk-empty { position: absolute; inset: 0; display: grid; place-items: center; margin: 0; border: 1px dashed var(--rule); border-radius: 10px; color: var(--dim); opacity: 0; transition: opacity 0.2s; }
+.desk.quit .desk-empty { opacity: 1; }
+.socket { width: 1px; height: 1.6rem; margin-left: 4ch; background: var(--faint); }
+.desk.quit + .socket { background: none; }
+.footd { display: grid; gap: 0.1rem 2ch; padding: 0.7rem 1.5ch; border: 1px solid var(--faint); }
+@media (min-width: 560px) { .footd { grid-template-columns: auto 1fr auto; align-items: baseline; } }
+.footd output { color: var(--r2); }
+.demo-controls { margin-top: 1.4rem; }
+.demo-controls p { min-height: 1.55em; margin: 0.8rem 0 0; color: var(--dim); }
+.facts { display: grid; gap: 2rem clamp(32px, 5vw, 72px); margin-top: clamp(48px, 6vw, 80px); }
+@media (min-width: 760px) { .facts { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.facts p { margin: 0; color: var(--dim); }
+
+/* Mac */
+.keys { display: grid; gap: 0.45rem; margin: 0; }
+.keys div { display: grid; grid-template-columns: 12ch minmax(0, 1fr); gap: 1ch; align-items: baseline; }
+.keys dt { white-space: nowrap; }
+.keys dd { margin: 0; color: var(--dim); }
+.facts .ghost { margin-top: 1rem; }
+
+/* Native: upstream's platform layer and the port's, as a diff */
+.diff td:nth-child(2) { color: var(--r1); }
+.diff td:nth-child(3) { color: var(--r2); }
+.diff td:nth-child(2)::before { content: "- "; }
+.diff td:nth-child(3)::before { content: "+ "; }
+.diff th[scope=row] { color: var(--fg); white-space: nowrap; }
+@media (max-width: 700px) {
+  .diff thead { display: none; }
+  .diff tr { display: block; padding-block: 0.5rem; border-bottom: 1px solid var(--rule); }
+  .diff th, .diff td { display: block; padding: 0; border: 0; }
+}
+
+/* Install */
+.steps { margin: 0; padding: 0; list-style: none; }
+.steps li + li { margin-top: 1.6rem; }
+.sponsor { padding-left: 2ch; border-left: 2px solid var(--r5); }
+.sponsor .button { margin-top: 0.4rem; }
+
+footer { border-top: 1px solid var(--rule); padding-block: 2.5rem 4rem; color: var(--dim); }
+footer p { max-width: 78ch; }
+footer nav { display: flex; flex-wrap: wrap; gap: 0.4rem 3ch; margin-top: 1.4rem; }
+
+/* The quake terminal: half the screen high, twice as wide as high,
+   centered at the top; the rest is darkened (macos-quake-dim=0.6) */
+#quake { top: 0; width: min(100vw, 100vh); width: min(100dvw, 100dvh); max-width: none; height: 50vh; height: 50dvh; max-height: none; margin: 0 auto; padding: 0; border: 0; border-bottom: 1px solid var(--rule); background: var(--bg); color: var(--fg); box-shadow: 0 30px 60px -20px rgb(0 0 0 / 0.6); }
+#quake::backdrop { background: rgb(0 0 0 / 0.6); }
+#quake[open] { animation: quake-in 0.3s cubic-bezier(0.2, 0.9, 0.3, 1); }
+#quake[open]::backdrop { animation: fade-in 0.3s; }
+#quake.hiding { animation: quake-out 0.2s ease-in forwards; }
+#quake.hiding::backdrop { animation: fade-in 0.2s reverse forwards; }
+@keyframes quake-in { from { translate: 0 -100%; } }
+@keyframes quake-out { to { translate: 0 -100%; } }
+@keyframes fade-in { from { opacity: 0; } }
+.quake-term { display: flex; flex-direction: column; height: 100%; padding: 8px; overflow-y: auto; font-size: 0.8125rem; line-height: 1.35; cursor: text; }
+#quake-out { white-space: pre-wrap; }
+.quake-line { display: flex; gap: 1ch; }
+#quake-in { flex: 1; min-width: 0; padding: 0; border: 0; outline: 0; background: none; color: inherit; font: inherit; caret-color: var(--cursor); }
+
+@media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+@media (prefers-reduced-motion: reduce) {
+  /* As foot's own: with Reduce Motion, it fades */
+  @keyframes quake-in { from { opacity: 0; } }
+  @keyframes quake-out { to { opacity: 0; } }
+  .desk .win, .desk-empty { transition: none !important; }
+}
+</style>
+</head>
+<body id="top">
+
+<header class="bar">
+  <div class="wrap bar-in">
+    <a class="brand" href="#top"><img src="favicon.svg" width="22" height="22" alt="">foot</a>
+    <nav aria-label="On this page">
+      <a href="#performance">Performance</a>
+      <a href="#sessions">Sessions</a>
+      <a href="#mac">Mac</a>
+      <a href="#native">Native</a>
+      <a href="#install">Install</a>
+    </nav>
+    <label class="theme" hidden><span class="theme-label">Theme</span>
+      <span class="theme-box"><select id="theme" aria-label="Theme"><option value="">Default Colors</option></select></span>
+    </label>
+    <a href="https://github.com/gobijan/foot-macos">GitHub</a>
+  </div>
+</header>
+
+<main>
+
+<section class="wrap hero">
+  <svg class="lockup" viewBox="0 0 58 22" role="img" aria-label="foot"><defs><linearGradient id="g" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="0" y2="22"><stop offset="0" stop-color="#3a3a3a"/><stop offset="1" stop-color="#1e1e1e"/></linearGradient></defs><path fill="url(#g)" d="M3 0h20v1h-20zM1 1h24v1h-24zM1 2h24v1h-24zM0 3h26v1h-26zM0 4h26v1h-26zM0 5h26v1h-26zM0 6h26v1h-26zM0 7h26v1h-26zM0 8h26v1h-26zM0 9h26v1h-26zM0 10h26v1h-26zM0 11h26v1h-26zM0 12h26v1h-26zM0 13h26v1h-26zM0 14h26v1h-26zM0 15h26v1h-26zM0 16h26v1h-26zM0 17h26v1h-26zM0 18h26v1h-26zM1 19h24v1h-24zM1 20h24v1h-24zM3 21h20v1h-20z"/><path fill="#fbf1c7" d="M5 4h2v1h-2zM5 5h2v1h-2zM8 5h1v1h-1zM10 6h1v1h-1zM4 7h5v1h-5zM11 7h1v1h-1zM4 8h7v1h-7zM12 8h1v1h-1zM4 9h8v1h-8zM5 10h7v1h-7zM6 11h6v1h-6zM7 12h4v1h-4zM6 13h5v1h-5zM6 14h4v1h-4zM4 15h6v1h-6zM4 16h5v1h-5zM14 16h7v1h-7zM4 17h4v1h-4zM14 17h7v1h-7zM5 18h2v1h-2z"/><path class="word" d="M31 3h4v1h-4zM53 3h2v1h-2zM30 4h5v1h-5zM53 4h2v1h-2zM30 5h2v1h-2zM53 5h2v1h-2zM29 6h6v1h-6zM37 6h5v1h-5zM45 6h5v1h-5zM52 6h6v1h-6zM29 7h6v1h-6zM36 7h7v1h-7zM44 7h7v1h-7zM52 7h6v1h-6zM30 8h2v1h-2zM36 8h2v1h-2zM41 8h2v1h-2zM44 8h2v1h-2zM49 8h2v1h-2zM53 8h2v1h-2zM30 9h2v1h-2zM36 9h2v1h-2zM41 9h2v1h-2zM44 9h2v1h-2zM49 9h2v1h-2zM53 9h2v1h-2zM30 10h2v1h-2zM36 10h7v1h-7zM44 10h7v1h-7zM53 10h5v1h-5zM30 11h2v1h-2zM37 11h5v1h-5zM45 11h5v1h-5zM54 11h4v1h-4z"/><path class="c0" d="M29 15h3v2h-3z"/><path class="c1" d="M32 15h3v2h-3z"/><path class="c2" d="M35 15h3v2h-3z"/><path class="c3" d="M38 15h3v2h-3z"/><path class="c4" d="M41 15h3v2h-3z"/><path class="c5" d="M44 15h3v2h-3z"/><path class="c6" d="M47 15h3v2h-3z"/><path class="c7" d="M50 15h3v2h-3z"/><path class="c8" d="M29 17h3v2h-3z"/><path class="c9" d="M32 17h3v2h-3z"/><path class="c10" d="M35 17h3v2h-3z"/><path class="c11" d="M38 17h3v2h-3z"/><path class="c12" d="M41 17h3v2h-3z"/><path class="c13" d="M44 17h3v2h-3z"/><path class="c14" d="M47 17h3v2h-3z"/><path class="c15" d="M50 17h3v2h-3z"/></svg>
+
+  <h1>The fast, lightweight terminal emulator, native on the Mac.</h1>
+  <p class="lead">foot comes from Linux, where it draws on Wayland. This port keeps its terminal core and builds the rest on AppKit, Core Animation, CoreText and kqueue. It starts in 75&nbsp;ms, does nothing while idle, and what runs in it keeps running when you quit.</p>
+
+  <div class="get">
+    <div class="cmd">
+      <span class="cmd-text"><code>brew install --cask gobijan/tap/foot</code></span>
+      <button type="button" data-copy="brew install --cask gobijan/tap/foot" hidden>Copy</button>
+    </div>
+    <a class="button" href="https://github.com/gobijan/foot-macos/releases/latest">Download foot.app</a>
+  </div>
+  <p class="small dim">A universal app for Apple silicon and Intel, signed and notarized, for macOS 14 and later.<br>An unofficial port, not affiliated with upstream foot.</p>
+</section>
+
+<figure class="wrap shot">
+  <img src="splits.webp" srcset="splits-small.webp 1262w, splits.webp 2524w" sizes="(min-width: 1160px) 1125px, 97vw" width="2524" height="1468" alt="A foot window on macOS with three splits: the Helix editor on the left, GitUI's commit log at the top right and a shell listing files below it.">
+  <figcaption class="small">One window, three splits: Helix, GitUI and eza.</figcaption>
+</figure>
+
+<section class="sec" id="performance">
+  <div class="wrap">
+    <div class="cols">
+      <div class="prose">
+        <h2>It does nothing when you do nothing.</h2>
+        <p>An idle foot window wakes up less than once a second and uses next to no CPU. Nothing polls. The display link is paused whenever nothing changes.</p>
+        <p class="dim">Frames are drawn on the CPU with pixman, exactly like upstream foot, and reach the screen as IOSurfaces without being copied. That is what keeps it lean.</p>
+      </div>
+      <figure class="wake">
+        <figcaption>An idle window, over time. Each line is one wakeup, evenly spaced at the measured average.</figcaption>
+        <div class="wake-row"><span>foot</span><span class="strip" style="--gap: 213px; --tick: var(--fg); --tick-w: 2px"></span><span>0.3 / s</span></div>
+        <div class="wake-row"><span class="dim">kitty</span><span class="strip" style="--gap: 28px; --tick: var(--dim)"></span><span>2.3 / s</span></div>
+        <div class="wake-row"><span class="dim">Ghostty</span><span class="strip" style="--gap: 4px; --tick: var(--dim)"></span><span>16.2 / s</span></div>
+        <div class="scale" aria-hidden="true"><i></i><span class="small">1 second</span></div>
+      </figure>
+    </div>
+
+    <div class="metrics">
+      <figure class="metric">
+        <figcaption>Startup, until the command runs</figcaption>
+        <dl>
+          <div class="us"><dt>foot</dt><dd style="--v: 0.11">75 ms</dd></div>
+          <div><dt>kitty</dt><dd style="--v: 1">683 ms</dd></div>
+          <div><dt>Ghostty</dt><dd style="--v: 0.227">155 ms</dd></div>
+        </dl>
+      </figure>
+      <figure class="metric">
+        <figcaption>Memory, one idle window</figcaption>
+        <dl>
+          <div class="us"><dt>foot</dt><dd style="--v: 0.36">31 MiB</dd></div>
+          <div><dt>kitty</dt><dd style="--v: 1">86 MiB</dd></div>
+          <div><dt>Ghostty</dt><dd style="--v: 0.72">62 MiB</dd></div>
+        </dl>
+      </figure>
+      <figure class="metric">
+        <figcaption>CPU, one idle window</figcaption>
+        <dl>
+          <div class="us"><dt>foot</dt><dd style="--v: 0.062">0.04 %</dd></div>
+          <div><dt>kitty</dt><dd style="--v: 0.446">0.29 %</dd></div>
+          <div><dt>Ghostty</dt><dd style="--v: 1">0.65 %</dd></div>
+        </dl>
+      </figure>
+    </div>
+
+    <div class="thru">
+      <p class="prose">Throughput is where foot isn't first. Ghostty processes output the fastest; foot is behind kitty with text, and well ahead of it when scrolling.</p>
+      <div class="table-box">
+        <table class="num">
+          <thead><tr><th scope="col">MiB/s in a 160×50 window, higher is better</th><th scope="col">foot</th><th scope="col">kitty</th><th scope="col">Ghostty</th></tr></thead>
+          <tbody>
+            <tr><th scope="row">ASCII text</th><td>90</td><td>117</td><td class="best">240</td></tr>
+            <tr><th scope="row">Unicode text</th><td>62</td><td>78</td><td class="best">90</td></tr>
+            <tr><th scope="row">Colored cells</th><td>112</td><td>124</td><td class="best">126</td></tr>
+            <tr><th scope="row">Scrolling</th><td class="best">48</td><td>9</td><td>46</td></tr>
+            <tr><th scope="row">Scrolling region</th><td>50</td><td>24</td><td class="best">66</td></tr>
+            <tr><th scope="row">Cursor motion</th><td>92</td><td>105</td><td class="best">202</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="note small">Measured on 25 October 2026 on a Mac Studio (M1 Max, 32 GB) with macOS 27.0.1 and a 3840×1600 display at 144 Hz: foot 1.28.0-macos.2, kitty 0.49.2 and Ghostty 1.3.2, each with its default configuration and Menlo 14. <a href="https://github.com/gobijan/foot-macos/blob/main/macos/bench/results.md">All results</a> and <a href="https://github.com/gobijan/foot-macos/blob/main/macos/bench/README.md">how they are measured</a> are in the repository; <code>make bench</code> measures them on your Mac.</p>
+    </div>
+  </div>
+</section>
+
+<section class="sec" id="sessions">
+  <div class="wrap">
+    <div class="cols">
+      <div class="prose">
+        <h2>Quit foot. What runs in it keeps running.</h2>
+        <p>Your programs don't run in the window. They run in footd, a small daemon that foot starts when it's needed, and the window only shows them. So they keep running when foot quits, crashes or is updated.</p>
+        <p class="dim">Open foot again and the windows are back where they were, with their tabs, splits and scrollback. The programs in them didn't notice. footd exits once there are no sessions left, and does nothing while idle.</p>
+      </div>
+      <div class="demo" id="demo">
+        <div class="desk">
+          <div class="win">
+            <div class="win-bar" aria-hidden="true"><i></i><i></i><i></i><span>ping</span></div>
+            <pre class="term" id="demo-term"><span><b class="prompt">~ ❯</b> ping 1.1.1.1</span><span>PING 1.1.1.1 (1.1.1.1): 56 data bytes</span><span>64 bytes from 1.1.1.1: icmp_seq=0 ttl=57 time=11.482 ms</span><span>64 bytes from 1.1.1.1: icmp_seq=1 ttl=57 time=10.219 ms</span></pre>
+          </div>
+          <p class="desk-empty" aria-hidden="true">foot isn't running.</p>
+        </div>
+        <div class="socket" aria-hidden="true"></div>
+        <div class="footd">
+          <b>footd</b>
+          <span id="demo-state">1 session, shown in a window</span>
+          <output id="demo-last">icmp_seq=1</output>
+        </div>
+        <div class="demo-controls" hidden>
+          <button class="ghost" type="button" id="demo-toggle">Quit foot <kbd>⌘Q</kbd></button>
+          <p class="small" id="demo-note" role="status"></p>
+        </div>
+      </div>
+    </div>
+
+    <div class="facts">
+      <div>
+        <h3>Everything comes back</h3>
+        <p>The screen and the alternate screen, so Vim and htop are as you left them. The scrollback, wrapped lines, the cursor, colors, titles and links.</p>
+      </div>
+      <div>
+        <h3>On other machines too</h3>
+        <p>Shell &gt; New Window on opens a window whose session runs on a server or another Mac, over SSH. It survives sleep and a change of network; foot reconnects on its own.</p>
+      </div>
+      <div>
+        <h3>Nothing to set up there</h3>
+        <p>If footd isn't on the machine yet, foot offers to install it: one static file in <code>~/.local/bin</code>, no sudo. Passwords are asked for in a window, and can stay in the Keychain.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="sec" id="mac">
+  <div class="wrap">
+    <div class="cols">
+      <div class="prose">
+        <h2>It behaves like the Mac apps around it.</h2>
+        <p>Native tabs that drag between windows. Splits you move by their dots. Light and dark mode, Notification Center, Finder services, Secure Keyboard Entry and VoiceOver. Updates that install themselves.</p>
+        <p class="dim">And it is still foot: <code>~/.config/foot/foot.ini</code>, footclient, scrollback search, URL mode, sixel and shell integration work as upstream's.</p>
+      </div>
+      <dl class="keys">
+        <div><dt><kbd>⌘</kbd> <kbd>T</kbd></dt><dd>New tab, in the same directory</dd></div>
+        <div><dt><kbd>⌘</kbd> <kbd>D</kbd></dt><dd>Split, side by side</dd></div>
+        <div><dt><kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>D</kbd></dt><dd>Split, stacked</dd></div>
+        <div><dt><kbd>⌥</kbd> <kbd>⌘</kbd> <kbd>→</kbd></dt><dd>Focus the split in that direction</dd></div>
+        <div><dt><kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>↩</kbd></dt><dd>Zoom the focused split, and back</dd></div>
+        <div><dt><kbd>⌘</kbd> <kbd>K</kbd></dt><dd>Clear, keeping what you've typed</dd></div>
+        <div><dt><kbd>⌘</kbd> <kbd>,</kbd></dt><dd>Open foot.ini in $EDITOR</dd></div>
+        <div><dt><kbd>⌘</kbd> click</dt><dd>Open a URL or a hyperlink</dd></div>
+        <div><dt><kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>K</kbd></dt><dd>Connections to other machines</dd></div>
+        <div><dt><kbd>⌥</kbd> <kbd>`</kbd></dt><dd>Quake terminal, from any app</dd></div>
+      </dl>
+    </div>
+
+    <div class="facts">
+      <div>
+        <h3>Quake terminal</h3>
+        <p>A drop-down terminal that slides in over any app, full screen ones too, on every Space. Its hotkey needs no permissions.</p>
+        <button class="ghost" type="button" id="quake-show" hidden>Show it here <kbd>`</kbd></button>
+      </div>
+      <div>
+        <h3>More than 80 themes</h3>
+        <p>Catppuccin, Dracula, Gruvbox, Nord, Solarized, Tokyo Night and the rest of foot's themes are in View &gt; Theme. All windows switch right away. This page wears them too: try the Theme menu at the top.</p>
+      </div>
+      <div>
+        <h3>Tabs in the titlebar</h3>
+        <p><code>macos-titlebar-style=tabs</code> puts the tab bar next to the window's buttons and gives the titlebar the terminal's background. Each tab shows its shortcut.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="sec" id="native">
+  <div class="wrap">
+    <div class="prose">
+      <h2>foot's terminal core. The Mac's platform layer.</h2>
+      <p>The VT parser, grid, sixel, search and URL mode are upstream foot's, unchanged. Only the platform layer is new, and it is native: no Wayland compositor, no X11, no emulation.</p>
+    </div>
+    <table class="diff">
+      <thead><tr><th scope="col"></th><th scope="col">Upstream, on Linux</th><th scope="col">On macOS</th></tr></thead>
+      <tbody>
+        <tr><th scope="row">Windows, input</th><td>Wayland</td><td>AppKit</td></tr>
+        <tr><th scope="row">Presentation</th><td>wl_shm buffers</td><td>IOSurfaces as CALayer contents, zero copy</td></tr>
+        <tr><th scope="row">Frame pacing</th><td>frame callbacks</td><td>CADisplayLink, paused when idle or hidden</td></tr>
+        <tr><th scope="row">Event loop</th><td>epoll</td><td>kqueue, integrated with the main run loop</td></tr>
+        <tr><th scope="row">Fonts</th><td>fcft on fontconfig, FreeType, HarfBuzz</td><td>the fcft API, implemented on CoreText</td></tr>
+        <tr><th scope="row">Keyboard</th><td>xkbcommon keymap from the compositor</td><td>xkbcommon keymap generated from the macOS layout</td></tr>
+        <tr><th scope="row">Input methods</th><td>text-input-v3</td><td>NSTextInputClient: dead keys, IMEs</td></tr>
+        <tr><th scope="row">Clipboard</th><td>Wayland data devices</td><td>NSPasteboard</td></tr>
+      </tbody>
+    </table>
+    <p class="note small">pixman, utf8proc and xkbcommon are built from source and linked statically: the binary only depends on system frameworks. Upstream foot is merged every week.</p>
+  </div>
+</section>
+
+<section class="sec" id="install">
+  <div class="wrap cols">
+    <div>
+      <h2>Install foot</h2>
+      <ul class="steps">
+        <li>
+          <p>With <a href="https://brew.sh">Homebrew</a>, which also puts <code>foot</code> and <code>footclient</code> in your <code>$PATH</code>:</p>
+          <div class="cmd">
+            <span class="cmd-text"><code>brew install --cask gobijan/tap/foot</code></span>
+            <button type="button" data-copy="brew install --cask gobijan/tap/foot" hidden>Copy</button>
+          </div>
+        </li>
+        <li>
+          <p>Or download the zip from the <a href="https://github.com/gobijan/foot-macos/releases/latest">latest release</a> and move foot.app to Applications. It updates itself from then on.</p>
+        </li>
+        <li>
+          <p>Or build it, with Xcode's command line tools and <code>make deps</code>:</p>
+          <div class="cmd">
+            <span class="cmd-text"><code>make install</code></span>
+            <button type="button" data-copy="make install" hidden>Copy</button>
+          </div>
+        </li>
+      </ul>
+      <p class="note small">A work in progress: usable day to day, but expect rough edges. Please report bugs <a href="https://github.com/gobijan/foot-macos/issues">on GitHub</a>, not upstream.</p>
+    </div>
+    <div class="sponsor prose">
+      <h3>Supporting the port</h3>
+      <p class="dim">The port is a lot of ongoing work: the native platform layer, signed and notarized releases, automatic updates, the Homebrew cask, and keeping up with upstream foot every week. If you use foot on your Mac, please consider sponsoring its development.</p>
+      <p class="small dim">Sponsorships go to the macOS port, not to upstream foot.</p>
+      <a class="button" href="https://github.com/sponsors/gobijan">Sponsor on GitHub</a>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap small">
+    <p>foot is written by <a href="https://codeberg.org/dnkl">Daniel Eklöf</a> and contributors. The macOS port is developed and maintained by <a href="https://github.com/gobijan">Bijan Rahnema</a>; it is unofficial, and not affiliated with upstream foot. The app icon is based on foot's logo, designed by <a href="https://codeberg.org/Ordoviz">Ordoviz</a>. MIT licensed, like upstream foot.</p>
+    <nav aria-label="Project">
+      <a href="https://github.com/gobijan/foot-macos">Source</a>
+      <a href="https://github.com/gobijan/foot-macos/releases">Releases</a>
+      <a href="https://github.com/gobijan/foot-macos/issues">Issues</a>
+      <a href="https://github.com/gobijan/foot-macos/blob/main/.github/CONTRIBUTING.md">Contributing</a>
+      <a href="https://codeberg.org/dnkl/foot">Upstream foot</a>
+      <a href="https://screenisland.com/imprint/">Imprint</a>
+      <a href="https://screenisland.com/privacy/">Privacy</a>
+    </nav>
+  </div>
+</footer>
+
+<dialog id="quake" aria-label="Quake terminal">
+  <div class="quake-term">
+    <div id="quake-out"></div>
+    <form class="quake-line" id="quake-form">
+      <label class="prompt" for="quake-in"><b>~ ❯</b></label>
+      <input id="quake-in" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="Command">
+    </form>
+  </div>
+</dialog>
+
+<script src="themes.js"></script>
+<script>
+(() => {
+  const root = document.documentElement;
+  const $ = (selector) => document.querySelector(selector);
+  const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+
+  // -- Themes: View > Theme ----------------------------------------------
+  // themes.js has each theme's colors, in this order
+  const COLORS = ['bg', 'fg',
+    'r0', 'r1', 'r2', 'r3', 'r4', 'r5', 'r6', 'r7',
+    'b0', 'b1', 'b2', 'b3', 'b4', 'b5', 'b6', 'b7',
+    'sel-bg', 'sel-fg', 'cursor'];
+  const themes = window.FOOT_THEMES || {};
+  const names = Object.keys(themes).sort();
+  const dark = matchMedia('(prefers-color-scheme: dark)');
+  const select = $('#theme');
+  let theme = '';
+
+  function applyTheme(name) {
+    theme = themes[name] ? name : '';
+    const variants = themes[theme];
+    // A theme with dark and light colors follows the system, as in foot
+    const colors = variants && (dark.matches ? variants.d || variants.l : variants.l || variants.d);
+    root.removeAttribute('style');
+    if (colors) {
+      COLORS.forEach((color, i) => root.style.setProperty('--' + color, '#' + colors.substr(i * 6, 6)));
+      const [r, g, b] = [0, 2, 4].map((i) => parseInt(colors.substr(i, 2), 16));
+      root.style.colorScheme = 0.2126 * r + 0.7152 * g + 0.0722 * b > 128 ? 'light' : 'dark';
+    }
+    // The browser's toolbar, like foot's titlebar, has the background's color
+    const background = getComputedStyle(root).getPropertyValue('--bg').trim();
+    document.querySelectorAll('meta[name=theme-color]').forEach((meta) => { meta.content = background; });
+    select.value = theme;
+    try {
+      if (theme) localStorage.setItem('foot-theme', JSON.stringify({ name: theme, css: root.style.cssText }));
+      else localStorage.removeItem('foot-theme');
+    } catch (e) {}
+  }
+
+  if (names.length) {
+    const groups = [['Dark', (t) => t.d && !t.l], ['Light', (t) => t.l && !t.d], ['Dark and Light', (t) => t.d && t.l]];
+    for (const [label, belongs] of groups) {
+      const group = document.createElement('optgroup');
+      group.label = label;
+      for (const name of names) if (belongs(themes[name])) group.append(new Option(name, name));
+      select.append(group);
+    }
+    select.closest('label').hidden = false;
+    select.addEventListener('change', () => applyTheme(select.value));
+    dark.addEventListener('change', () => applyTheme(theme));
+    let saved = '';
+    try { saved = (JSON.parse(localStorage.getItem('foot-theme')) || {}).name || ''; } catch (e) {}
+    applyTheme(saved);
+  }
+
+  // -- Copy buttons --------------------------------------------------------
+  if (navigator.clipboard) {
+    for (const button of document.querySelectorAll('[data-copy]')) {
+      button.hidden = false;
+      button.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(button.dataset.copy);
+          button.textContent = 'Copied';
+        } catch (e) {
+          button.textContent = 'Not copied';
+        }
+        setTimeout(() => { button.textContent = 'Copy'; }, 1600);
+      });
+    }
+  }
+
+  // -- Sessions: ping runs in footd; quitting foot only closes the window --
+  const demo = $('#demo');
+  if (demo) {
+    const desk = demo.querySelector('.desk');
+    const term = $('#demo-term'), state = $('#demo-state'), last = $('#demo-last');
+    const toggle = $('#demo-toggle'), note = $('#demo-note');
+    const ROWS = 10, COUNT = 900;
+    const started = Date.now() - 2500;
+    let running = true;        // foot is
+    let lateFrom = -1, lateTo = -1;  // Arrived while foot wasn't running
+    let quitAt = 0, timer = 0;
+
+    const seq = () => Math.min(COUNT - 1, Math.floor((Date.now() - started) / 1000));
+    const line = (text, late) => {
+      const span = document.createElement('span');
+      span.textContent = text;
+      if (late) span.className = 'late';
+      return span;
+    };
+
+    function render() {
+      const now = seq();
+      last.textContent = 'icmp_seq=' + now;
+      if (!running) return;
+      let lines = [];
+      if (now < ROWS) {
+        const command = line(' ping 1.1.1.1');
+        const prompt = document.createElement('b');
+        prompt.className = 'prompt';
+        prompt.textContent = '~ ❯';
+        command.prepend(prompt);
+        lines.push(command, line('PING 1.1.1.1 (1.1.1.1): 56 data bytes'));
+      }
+      for (let i = Math.max(0, now - ROWS + 1); i <= now; i++) {
+        const time = (9 + (i * 7919) % 6131 / 1000).toFixed(3);
+        lines.push(line(`64 bytes from 1.1.1.1: icmp_seq=${i} ttl=57 time=${time} ms`, i > lateFrom && i <= lateTo));
+      }
+      term.replaceChildren(...lines.slice(-ROWS));
+      term.scrollTop = term.scrollHeight;
+    }
+
+    toggle.addEventListener('click', () => {
+      running = !running;
+      desk.classList.toggle('quit', !running);
+      if (running) {
+        lateFrom = quitAt;
+        lateTo = seq();
+        const count = lateTo - lateFrom;
+        note.textContent = count > 0
+          ? `ping wrote ${count} ${count === 1 ? 'line' : 'lines'} while foot wasn't running. ${count === 1 ? "It's" : "They're"} there.`
+          : 'Back, as it was.';
+        state.textContent = '1 session, shown in a window';
+        toggle.firstChild.textContent = 'Quit foot ';
+        toggle.lastElementChild.hidden = false;
+      } else {
+        quitAt = seq();
+        note.textContent = 'The window is gone. ping is still running.';
+        state.textContent = '1 session, no window';
+        toggle.firstChild.textContent = 'Open foot';
+        toggle.lastElementChild.hidden = true;
+      }
+      render();
+    });
+    toggle.parentElement.hidden = false;
+
+    // ping writes a line a second, but only while it's on screen; with
+    // Reduce Motion, only when a button is pressed
+    const tick = (on) => {
+      clearInterval(timer);
+      timer = on && !reducedMotion.matches ? setInterval(render, 1000) : 0;
+      if (on) render();
+    };
+    let visible = false;
+    new IntersectionObserver(([entry]) => {
+      visible = entry.isIntersecting;
+      tick(visible && !document.hidden);
+    }).observe(demo);
+    document.addEventListener('visibilitychange', () => tick(visible && !document.hidden));
+  }
+
+  // -- Quake terminal ------------------------------------------------------
+  const quake = $('#quake');
+  if (quake && quake.showModal) {
+    const out = $('#quake-out'), input = $('#quake-in'), show = $('#quake-show');
+    const print = (text, color) => {
+      const line = document.createElement('div');
+      line.textContent = text;
+      if (color) line.style.color = `var(--${color})`;
+      out.append(line);
+    };
+    const columns = (items, width) => {
+      const perRow = Math.max(1, Math.floor(out.clientWidth / (width * 7.9)));
+      for (let i = 0; i < items.length; i += perRow)
+        print(items.slice(i, i + perRow).map((item) => item.padEnd(width)).join(''));
+    };
+
+    const commands = {
+      help() {
+        print('install       how to install foot');
+        print('theme         foot\'s themes; theme NAME: this page in that theme');
+        print('bench         foot against kitty and Ghostty');
+        print('quake         its options in foot.ini');
+        print('clear         clear the screen');
+        print('exit          hide this terminal (so does Esc)');
+      },
+      install() {
+        print('brew install --cask gobijan/tap/foot', 'r2');
+        print('or foot.app from https://github.com/gobijan/foot-macos/releases/latest');
+      },
+      theme(name) {
+        if (!name) {
+          columns(['default', ...names], 30);
+        } else if (name === 'default' || themes[name]) {
+          applyTheme(name === 'default' ? '' : name);
+        } else {
+          print(`theme: no theme named ${name}`, 'r1');
+        }
+      },
+      bench() {
+        print('                           foot    kitty  Ghostty');
+        print('startup (ms)                 75      683      155');
+        print('memory, idle (MiB)           31       86       62');
+        print('CPU, idle (%)              0.04     0.29     0.65');
+        print('wakeups, idle (/s)          0.3      2.3     16.2');
+        print('ASCII text (MiB/s)           90      117      240');
+        print('scrolling (MiB/s)            48        9       46');
+      },
+      quake() {
+        print('[main]', 'r4');
+        print('macos-quake-hotkey=Mod1+grave     # Option+`, or none');
+        print('macos-quake-position=top          # bottom, left, right, center');
+        print('macos-quake-size=50               # percent of the screen');
+        print('macos-quake-dim=0.6               # how dark the rest gets');
+        print('macos-quake-auto-hide=yes         # when it loses the focus');
+      },
+      clear() { out.replaceChildren(); },
+      exit() { hide(); },
+    };
+
+    function run(text) {
+      const [name, ...args] = text.trim().split(/\s+/);
+      const prompt = document.createElement('div');
+      const mark = document.createElement('b');
+      mark.className = 'prompt';
+      mark.textContent = '~ ❯ ';
+      prompt.append(mark, text);
+      out.append(prompt);
+      if (!name) return;
+      if (Object.hasOwn(commands, name)) commands[name](...args);
+      else print(`${name}: command not found. help lists what there is.`, 'r1');
+    }
+
+    function hide() {
+      if (!quake.open || quake.classList.contains('hiding')) return;
+      quake.classList.add('hiding');
+      quake.addEventListener('animationend', () => {
+        quake.classList.remove('hiding');
+        quake.close();
+      }, { once: true });
+    }
+    function toggleQuake() {
+      if (quake.open) return hide();
+      if (!out.childNodes.length) {
+        print('This is foot\'s quake terminal, or a sketch of it. On your Mac,');
+        print('Option+` shows it over whatever you\'re working in.');
+        print('help lists what works here. Esc hides it.', 'b0');
+      }
+      quake.showModal();
+      input.focus();
+    }
+
+    $('#quake-form').addEventListener('submit', (event) => {
+      event.preventDefault();
+      run(input.value);
+      input.value = '';
+      input.scrollIntoView({ block: 'nearest' });
+    });
+    quake.addEventListener('cancel', (event) => { event.preventDefault(); hide(); });
+    // Hides when it loses the focus: a click beside it (macos-quake-auto-hide)
+    quake.addEventListener('click', (event) => {
+      if (event.target === quake) hide();
+      else if (!getSelection().toString()) input.focus();
+    });
+    show.hidden = false;
+    show.addEventListener('click', toggleQuake);
+
+    // The key below Esc (ISO keyboards report it as IntlBackslash)
+    document.addEventListener('keydown', (event) => {
+      if (event.code !== 'Backquote' && event.code !== 'IntlBackslash') return;
+      if (event.metaKey || event.ctrlKey) return;
+      if (!quake.open && event.target.closest('input, textarea, select, [contenteditable]')) return;
+      event.preventDefault();
+      toggleQuake();
+    });
+  }
+})();
+</script>
+</body>
+</html>
