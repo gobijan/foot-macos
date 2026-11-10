@@ -30,6 +30,10 @@ pgo=$build-pgo
 
 echo "==> Building with instrumentation ($pgo)"
 [[ -f $pgo/build.ninja ]] || meson setup "$pgo" "$@" -Db_lto=true -Db_pgo=generate
+# From scratch: with LTO, objects built before an update of the SDK
+# (Xcode, the Command Line Tools) don't link with those built after it
+# ("linking module flags 'SDK Version': IDs have conflicting values")
+ninja -C "$pgo" clean
 ninja -C "$pgo"
 
 echo "==> Profiling"
