@@ -58,8 +58,8 @@
 /* The window's occlusion state; zoomed out panes are always occluded */
 - (void)setWindowOccluded:(BOOL)occluded;
 
-/* Whether the mouse (window coordinates) is over a divider */
-- (BOOL)isDividerAt:(NSPoint)point;
+/* Whether the mouse (window coordinates) is over a divider, or a pane's grab handle */
+- (BOOL)isDividerOrHandleAt:(NSPoint)point;
 
 /* While dividers are dragged, the terminals resize as while the window is */
 @property (nonatomic, readonly) BOOL dragging;

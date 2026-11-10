@@ -111,6 +111,25 @@ split_remove(struct split **root, struct split *leaf)
     return was_first ? split_first(sibling) : last(sibling);
 }
 
+struct split *
+split_move(struct split **root, struct split *leaf, struct split *to, enum split_dir dir)
+{
+    xassert(leaf != to);
+    xassert(leaf->kind == SPLIT_LEAF && to->kind == SPLIT_LEAF);
+
+    void *pane = leaf->pane;
+    const int min_width = leaf->min_width;
+    const int min_height = leaf->min_height;
+
+    /* 'to' stays (if it's the sibling, it takes the parent's place) */
+    split_remove(root, leaf);
+
+    struct split *moved = split_insert(root, to, pane, dir);
+    moved->min_width = min_width;
+    moved->min_height = min_height;
+    return moved;
+}
+
 void
 split_min_size(const struct split *node, int *width, int *height)
 {
@@ -581,5 +600,47 @@ UNITTEST
     test_layout(root, 101, 51);
     xassert(la->frame.width == 50 && lc->frame.width == 50);
 
+    split_free(root);
+}
+
+UNITTEST
+{
+    int a, b, c;
+
+    /* A | B | C */
+    struct split *root = split_new(&a);
+    struct split *la = root;
+    struct split *lb = split_insert(&root, la, &b, SPLIT_RIGHT);
+    struct split *lc = split_insert(&root, lb, &c, SPLIT_RIGHT);
+    lc->min_width = 7;
+
+    /* C above A: (C / A) | B */
+    lc = split_move(&root, lc, la, SPLIT_UP);
+    xassert(lc->pane == &c && lc->min_width == 7);
+    xassert(split_count(root) == 3);
+    xassert(root->kind == SPLIT_HORIZONTAL && root->second == lb);
+    xassert(root->first->kind == SPLIT_VERTICAL);
+    xassert(root->first->first == lc && root->first->second == la);
+    test_layout(root, 101, 51);
+
+    /* Next to its sibling, which takes the parent's place: A | C, then B on top */
+    lc = split_move(&root, lc, la, SPLIT_RIGHT);
+    xassert(root->first->kind == SPLIT_HORIZONTAL);
+    xassert(root->first->first == la && root->first->second == lc);
+    lb = split_move(&root, lb, la, SPLIT_UP);
+    xassert(root->kind == SPLIT_HORIZONTAL && root->second == lc);
+    xassert(root->first->kind == SPLIT_VERTICAL);
+    xassert(root->first->first == lb && root->first->second == la);
+    xassert(lb->parent == root->first && la->parent == root->first);
+    test_layout(root, 101, 51);
+
+    /* Of two panes: the other way round */
+    split_free(root);
+    root = split_new(&a);
+    la = root;
+    lb = split_insert(&root, la, &b, SPLIT_RIGHT);
+    lb = split_move(&root, lb, la, SPLIT_LEFT);
+    xassert(root->kind == SPLIT_HORIZONTAL && root->first == lb && root->second == la);
+    xassert(root->parent == NULL && la->parent == root);
     split_free(root);
 }

@@ -599,13 +599,13 @@ keymap_produces(const struct seat *seat, uint32_t key, NSString *text)
 }
 
 /*
- * Over a divider, the mouse is the divider's (its own tracking area);
- * the pane's cursor is set again once it's back.
+ * Over a divider (or a grab handle), the mouse is the divider's (its own
+ * tracking area); the pane's cursor is set again once it's back.
  */
 - (BOOL)overDivider:(NSEvent *)event
 {
     FootSplitView *splits = self.splits;
-    const BOOL over = _buttonsDown == 0 && splits != nil && [splits isDividerAt:event.locationInWindow];
+    const BOOL over = _buttonsDown == 0 && splits != nil && [splits isDividerOrHandleAt:event.locationInWindow];
 
     if (over && !_overDivider) {
         struct seat *seat = app_seat();

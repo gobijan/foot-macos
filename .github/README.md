@@ -143,7 +143,9 @@ frameworks.
   same size. `Cmd+Shift+Return` zooms the focused one to the whole
   window, and back. `Cmd+W` closes it, `Cmd+Shift+W` the whole window,
   with all tabs and splits. Each split is a terminal of its own (e.g.
-  its font size).
+  its font size). To move one, drag it by the dots at its top (they
+  show when the mouse is near them) onto another one: it goes to the
+  side of that one that's highlighted.
 * `Cmd`+click opens a URL or a hyperlink (OSC 8), with `[url]`'s
   `launch`; the mouse pointer shows which text is one while `Cmd` is
   down.

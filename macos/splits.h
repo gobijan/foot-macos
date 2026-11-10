@@ -66,6 +66,14 @@ struct split *split_insert(
  */
 struct split *split_remove(struct split **root, struct split *leaf);
 
+/*
+ * Moves 'leaf' next to 'to' (another leaf), in 'dir': as if it was
+ * removed, and 'to' then split. Returns its new leaf (with the same pane,
+ * and minimum size).
+ */
+struct split *split_move(
+    struct split **root, struct split *leaf, struct split *to, enum split_dir dir);
+
 /* Sets the frames of all nodes, within 'area' */
 void split_layout(struct split *root, struct split_rect area);
 

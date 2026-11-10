@@ -4,6 +4,8 @@
 #import "session-layout.h"
 #import "view.h"
 
+#import <IOSurface/IOSurface.h>
+
 #include <math.h>
 
 #define LOG_MODULE "splits"
@@ -20,6 +22,26 @@
 
 /* How much of the terminal shows through in panes without focus (as Ghostty) */
 #define UNFOCUSED_OPACITY .7
+
+/*
+ * The grab handles at the top of the panes (as Ghostty's): their size,
+ * and the part of the pane (from the top) where the mouse shows them
+ */
+#define HANDLE_WIDTH 80
+#define HANDLE_HEIGHT 12
+#define HANDLE_REVEAL .2
+
+/* The handle's dots: their diameter, the space between them, their opacity */
+#define HANDLE_DOT 3
+#define HANDLE_DOT_GAP 2.5
+#define HANDLE_OPACITY .35
+#define HANDLE_OPACITY_HOVER .85
+
+/* The pane being dragged, shown at this scale (as Ghostty) */
+#define DRAG_IMAGE_SCALE .2
+
+/* What a pane's handle puts on the pasteboard (the pane is the drag's source) */
+static NSPasteboardType const pane_pasteboard_type = @"io.github.gobijan.foot.pane";
 
 static FootView *
 view_of(const struct wl_window *win)
@@ -200,6 +222,313 @@ rect_of(struct split_rect r)
 @end
 
 /*
+ * Grab handles: one at the top of each pane (with several). Dragging one
+ * moves its pane next to another one, on the side closest to the mouse
+ * (highlighted meanwhile). Its dots show while the mouse is in the top of
+ * the pane.
+ */
+
+@interface FootGrabHandle : NSView <NSDraggingSource>
+@property (nonatomic, weak) FootSplitView *splits;
+@property (nonatomic) struct wl_window *pane;  /* NULL once removed */
+@property (nonatomic) BOOL revealed;
+- (void)setColor:(CGColorRef)color;
+@end
+
+@interface FootSplitView ()
+- (void)handleDragEnded;
+@end
+
+/* The terminal's current frame, with the root layer's background around it */
+static NSImage *
+pane_image(FootView *view)
+{
+    const NSSize size = view.bounds.size;
+    if (size.width < 1 || size.height < 1)
+        return nil;
+
+    NSImage *image = [[NSImage alloc] initWithSize:size];
+    NSBitmapImageRep *rep = [[NSBitmapImageRep alloc]
+        initWithBitmapDataPlanes:NULL
+                      pixelsWide:(NSInteger)size.width
+                      pixelsHigh:(NSInteger)size.height
+                   bitsPerSample:8
+                 samplesPerPixel:4
+                        hasAlpha:YES
+                        isPlanar:NO
+                  colorSpaceName:NSDeviceRGBColorSpace
+                     bytesPerRow:0
+                    bitsPerPixel:0];
+    if (rep == nil)
+        return nil;
+
+    NSGraphicsContext *gc = [NSGraphicsContext graphicsContextWithBitmapImageRep:rep];
+    CGContextRef cg = gc.CGContext;
+
+    CGColorRef bg = view.rootLayer.backgroundColor;
+    if (bg != NULL) {
+        CGContextSetFillColorWithColor(cg, bg);
+        CGContextFillRect(cg, CGRectMake(0, 0, size.width, size.height));
+    }
+
+    /* A copy: the renderer writes to the surface while it's dragged */
+    id contents = view.gridLayer.contents;
+    if (contents != nil && CFGetTypeID((__bridge CFTypeRef)contents) == IOSurfaceGetTypeID()) {
+        IOSurfaceRef surface = (__bridge IOSurfaceRef)contents;
+        IOSurfaceLock(surface, kIOSurfaceLockReadOnly, NULL);
+
+        const size_t width = IOSurfaceGetWidth(surface);
+        const size_t height = IOSurfaceGetHeight(surface);
+        const size_t stride = IOSurfaceGetBytesPerRow(surface);
+        CFDataRef data = CFDataCreate(NULL, IOSurfaceGetBaseAddress(surface), stride * height);
+
+        IOSurfaceUnlock(surface, kIOSurfaceLockReadOnly, NULL);
+
+        CGDataProviderRef provider = CGDataProviderCreateWithCFData(data);
+        CGColorSpaceRef srgb = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+        CGImageRef grid = CGImageCreate(
+            width, height, 8, 32, stride, srgb,
+            kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little,
+            provider, NULL, false, kCGRenderingIntentDefault);
+
+        /* At the top left; the bitmap's origin is at the bottom */
+        const CGRect frame = view.gridLayer.frame;
+        if (grid != NULL) {
+            CGContextDrawImage(cg, CGRectMake(
+                frame.origin.x, size.height - frame.origin.y - frame.size.height,
+                frame.size.width, frame.size.height), grid);
+        }
+
+        CGImageRelease(grid);
+        CGColorSpaceRelease(srgb);
+        CGDataProviderRelease(provider);
+        CFRelease(data);
+    }
+
+    [gc flushGraphics];
+    [image addRepresentation:rep];
+    return image;
+}
+
+@implementation FootGrabHandle {
+    CALayer *_dots;
+    NSTrackingArea *_trackingArea;
+    BOOL _hovering;
+    BOOL _dragging;
+}
+
+- (instancetype)initWithFrame:(NSRect)frame
+{
+    self = [super initWithFrame:frame];
+    if (self == nil)
+        return nil;
+
+    /* Layer hosting; only the dots' opacity animates (a fade) */
+    CALayer *layer = [CALayer layer];
+    NSNull *null = [NSNull null];
+    layer.actions = @{@"bounds": null, @"position": null, @"frame": null,
+                      @"hidden": null, @"sublayers": null};
+    self.layer = layer;
+    self.wantsLayer = YES;
+
+    _dots = [CALayer layer];
+    _dots.actions = @{@"bounds": null, @"position": null, @"frame": null,
+                      @"sublayers": null};
+    _dots.opacity = 0.;
+    for (int i = 0; i < 3; i++) {
+        CALayer *dot = view_create_layer();
+        dot.hidden = NO;
+        dot.cornerRadius = HANDLE_DOT / 2.;
+        dot.frame = CGRectMake(i * (HANDLE_DOT + HANDLE_DOT_GAP), 0, HANDLE_DOT, HANDLE_DOT);
+        [_dots addSublayer:dot];
+    }
+    [layer addSublayer:_dots];
+    return self;
+}
+
+- (BOOL)isFlipped
+{
+    return YES;
+}
+
+- (BOOL)mouseDownCanMoveWindow
+{
+    return NO;
+}
+
+/* A pane of a window in the background can be dragged too */
+- (BOOL)acceptsFirstMouse:(NSEvent *)event
+{
+    return YES;
+}
+
+/* The dots in the middle */
+- (void)layoutDots
+{
+    const NSSize size = self.bounds.size;
+    const CGFloat width = 3 * HANDLE_DOT + 2 * HANDLE_DOT_GAP;
+    _dots.frame = CGRectMake(
+        round((size.width - width) / 2), round((size.height - HANDLE_DOT) / 2),
+        width, HANDLE_DOT);
+}
+
+- (void)setFrameSize:(NSSize)size
+{
+    [super setFrameSize:size];
+    [self layoutDots];
+}
+
+- (void)setColor:(CGColorRef)color
+{
+    for (CALayer *dot in _dots.sublayers) {
+        if (!CGColorEqualToColor(dot.backgroundColor, color))
+            dot.backgroundColor = color;
+    }
+}
+
+- (void)updateOpacity
+{
+    const float opacity = _hovering || _dragging
+        ? HANDLE_OPACITY_HOVER : (_revealed ? HANDLE_OPACITY : 0.);
+
+    if (_dots.opacity != opacity) {
+        [CATransaction begin];
+        [CATransaction setAnimationDuration:.15];
+        _dots.opacity = opacity;
+        [CATransaction commit];
+    }
+}
+
+- (void)setRevealed:(BOOL)revealed
+{
+    _revealed = revealed;
+    [self updateOpacity];
+}
+
+- (void)setHidden:(BOOL)hidden
+{
+    [super setHidden:hidden];
+    if (hidden) {
+        _hovering = NO;
+        [self updateOpacity];
+    }
+}
+
+- (void)updateTrackingAreas
+{
+    if (_trackingArea != nil)
+        [self removeTrackingArea:_trackingArea];
+
+    _trackingArea = [[NSTrackingArea alloc]
+        initWithRect:NSZeroRect
+             options:(NSTrackingMouseEnteredAndExited |
+                      NSTrackingCursorUpdate |
+                      NSTrackingActiveInActiveApp |
+                      NSTrackingInVisibleRect)
+               owner:self
+            userInfo:nil];
+
+    [self addTrackingArea:_trackingArea];
+    [super updateTrackingAreas];
+}
+
+- (void)cursorUpdate:(NSEvent *)event
+{
+    [(_dragging ? [NSCursor closedHandCursor] : [NSCursor openHandCursor]) set];
+}
+
+- (void)mouseEntered:(NSEvent *)event
+{
+    _hovering = YES;
+    [self updateOpacity];
+    [self cursorUpdate:event];
+}
+
+- (void)mouseExited:(NSEvent *)event
+{
+    _hovering = NO;
+    [self updateOpacity];
+}
+
+/* Not the terminal's (nor the window's: it doesn't move) */
+- (void)mouseDown:(NSEvent *)event
+{
+}
+
+- (void)mouseDragged:(NSEvent *)event
+{
+    if (_dragging || _pane == NULL)
+        return;
+
+    NSPasteboardItem *item = [[NSPasteboardItem alloc] init];
+    [item setString:@"" forType:pane_pasteboard_type];
+    NSDraggingItem *dragging = [[NSDraggingItem alloc] initWithPasteboardWriter:item];
+
+    /* The pane, small, with the mouse in its middle (as tabs) */
+    FootView *view = (__bridge FootView *)_pane->view;
+    NSImage *image = pane_image(view);
+    const NSSize size = NSMakeSize(
+        round(NSWidth(view.bounds) * DRAG_IMAGE_SCALE),
+        round(NSHeight(view.bounds) * DRAG_IMAGE_SCALE));
+    const NSPoint mouse = [self convertPoint:event.locationInWindow fromView:nil];
+    [dragging setDraggingFrame:NSMakeRect(
+        mouse.x - size.width / 2, mouse.y - size.height / 2, size.width, size.height)
+                      contents:image];
+
+    _dragging = YES;
+    [self updateOpacity];
+
+    NSDraggingSession *session =
+        [self beginDraggingSessionWithItems:@[dragging] event:event source:self];
+    session.animatesToStartingPositionsOnCancelOrFail = YES;
+}
+
+- (NSDragOperation)draggingSession:(NSDraggingSession *)session
+    sourceOperationMaskForDraggingContext:(NSDraggingContext)context
+{
+    return context == NSDraggingContextWithinApplication
+        ? NSDragOperationMove : NSDragOperationNone;
+}
+
+- (void)draggingSession:(NSDraggingSession *)session movedToPoint:(NSPoint)point
+{
+    [[NSCursor closedHandCursor] set];
+}
+
+- (void)draggingSession:(NSDraggingSession *)session
+           endedAtPoint:(NSPoint)point
+              operation:(NSDragOperation)operation
+{
+    _dragging = NO;
+
+    /* Where it ended (the pane may have moved away) */
+    const NSPoint p = [self convertPoint:[self.window convertPointFromScreen:point] fromView:nil];
+    _hovering = !self.hidden && NSPointInRect(p, self.bounds);
+    [self updateOpacity];
+
+    [_splits handleDragEnded];
+}
+
+@end
+
+/* Where a pane dropped at 'p' on 'r' goes: the side of 'r' closest to it */
+static enum split_dir
+drop_side(NSPoint p, struct split_rect r)
+{
+    const double left = (p.x - r.x) / r.width;
+    const double top = (p.y - r.y) / r.height;
+    const double closest = MIN(MIN(left, 1. - left), MIN(top, 1. - top));
+
+    if (closest == left)
+        return SPLIT_LEFT;
+    if (closest == 1. - left)
+        return SPLIT_RIGHT;
+    if (closest == top)
+        return SPLIT_UP;
+    return SPLIT_DOWN;
+}
+
+/*
  * The split view
  */
 
@@ -207,6 +536,9 @@ rect_of(struct split_rect r)
     struct split *_root;
     struct split *_zoomed;
     NSMutableArray<FootDividerView *> *_dividers;
+    NSMutableArray<FootGrabHandle *> *_handles;
+    NSView *_dropZone;
+    NSTrackingArea *_trackingArea;
     BOOL _windowOccluded;
 }
 
@@ -223,10 +555,14 @@ rect_of(struct split_rect r)
 
     _root = split_new(win);
     _dividers = [NSMutableArray array];
+    _handles = [NSMutableArray array];
     _focused = win;
 
     win->splits = (__bridge void *)self;
     [self addSubview:view];
+
+    /* Panes dragged by their handles */
+    [self registerForDraggedTypes:@[pane_pasteboard_type]];
     return self;
 }
 
@@ -321,6 +657,7 @@ rect_of(struct split_rect r)
     }
 
     [self updateDividers];
+    [self updateHandles];
     [self updateDecorations];
 
     /* Sessions: the panes, and their sizes, are kept */
@@ -374,6 +711,99 @@ rect_of(struct split_rect r)
     }
 }
 
+/* A handle at the top of each pane, while there are several (and none is zoomed) */
+- (void)updateHandles
+{
+    const NSUInteger count = _root != NULL && self.count > 1 ? self.count : 0;
+
+    while (_handles.count > count) {
+        FootGrabHandle *handle = _handles.lastObject;
+        handle.pane = NULL;
+        [handle removeFromSuperview];
+        [_handles removeLastObject];
+    }
+
+    while (_handles.count < count) {
+        FootGrabHandle *handle = [[FootGrabHandle alloc] initWithFrame:NSZeroRect];
+        handle.splits = self;
+        [self addSubview:handle positioned:NSWindowAbove relativeTo:nil];
+        [_handles addObject:handle];
+    }
+
+    NSUInteger i = 0;
+    for (struct split *it = split_first(_root); it != NULL && i < count; it = split_following(it)) {
+        FootGrabHandle *handle = _handles[i++];
+        handle.pane = it->pane;
+        handle.hidden = _zoomed != NULL;
+
+        const struct split_rect r = it->frame;
+        const int width = MIN(HANDLE_WIDTH, r.width);
+        const NSRect frame = NSMakeRect(r.x + (r.width - width) / 2, r.y, width, HANDLE_HEIGHT);
+
+        if (!NSEqualRects(handle.frame, frame))
+            handle.frame = frame;
+    }
+
+    /* Where the mouse is now */
+    if (self.window != nil) {
+        const NSPoint p = [self convertPoint:self.window.mouseLocationOutsideOfEventStream fromView:nil];
+        [self revealHandlesAt:p];
+    }
+}
+
+/* The handle's dots show while the mouse is in the top of its pane */
+- (void)revealHandlesAt:(NSPoint)point
+{
+    const BOOL inside = NSPointInRect(point, self.bounds);
+
+    for (FootGrabHandle *handle in _handles) {
+        BOOL reveal = NO;
+        const struct split *leaf = handle.pane != NULL ? [self leafOf:handle.pane] : NULL;
+
+        if (inside && leaf != NULL && !handle.hidden) {
+            const struct split_rect r = leaf->frame;
+            const double height = MIN(r.height, MAX(HANDLE_HEIGHT, r.height * HANDLE_REVEAL));
+            reveal = NSPointInRect(point, NSMakeRect(r.x, r.y, r.width, height));
+        }
+
+        if (handle.revealed != reveal)
+            handle.revealed = reveal;
+    }
+}
+
+- (void)updateTrackingAreas
+{
+    if (_trackingArea != nil)
+        [self removeTrackingArea:_trackingArea];
+
+    _trackingArea = [[NSTrackingArea alloc]
+        initWithRect:NSZeroRect
+             options:(NSTrackingMouseEnteredAndExited |
+                      NSTrackingMouseMoved |
+                      NSTrackingActiveInActiveApp |
+                      NSTrackingInVisibleRect)
+               owner:self
+            userInfo:nil];
+
+    [self addTrackingArea:_trackingArea];
+    [super updateTrackingAreas];
+}
+
+- (void)mouseEntered:(NSEvent *)event
+{
+    [self revealHandlesAt:[self convertPoint:event.locationInWindow fromView:nil]];
+}
+
+- (void)mouseMoved:(NSEvent *)event
+{
+    [self revealHandlesAt:[self convertPoint:event.locationInWindow fromView:nil]];
+}
+
+- (void)mouseExited:(NSEvent *)event
+{
+    [self revealHandlesAt:NSMakePoint(-1, -1)];
+}
+
 /* Panes without the focus are dimmed; the dividers have the focused pane's colors */
 - (void)updateDecorations
 {
@@ -399,6 +829,16 @@ rect_of(struct split_rect r)
     for (FootDividerView *divider in _dividers)
         [divider setColor:color];
     CGColorRelease(color);
+
+    /* The handles have their pane's foreground color */
+    for (FootGrabHandle *handle in _handles) {
+        if (handle.pane == NULL || [self leafOf:handle.pane] == NULL)
+            continue;
+
+        CGColorRef fg = create_color(handle.pane->term->colors.fg, 1.);
+        [handle setColor:fg];
+        CGColorRelease(fg);
+    }
 }
 
 - (void)paneColorsChanged:(struct wl_window *)win
@@ -454,16 +894,163 @@ rect_of(struct split_rect r)
     [self relayout];
 }
 
-- (BOOL)isDividerAt:(NSPoint)point
+- (BOOL)isDividerOrHandleAt:(NSPoint)point
 {
-    for (FootDividerView *divider in _dividers) {
-        if (!divider.hidden &&
-            NSPointInRect([divider convertPoint:point fromView:nil], divider.bounds))
-        {
-            return YES;
+    for (NSArray<NSView *> *views in @[_dividers, _handles]) {
+        for (NSView *view in views) {
+            if (!view.hidden &&
+                NSPointInRect([view convertPoint:point fromView:nil], view.bounds))
+            {
+                return YES;
+            }
         }
     }
     return NO;
+}
+
+/*
+ * Dropping a pane (dragged by its handle): next to the one it's over,
+ * on the side closest to the mouse (as Ghostty)
+ */
+
+- (struct split *)leafAt:(NSPoint)point
+{
+    for (struct split *it = split_first(_root); it != NULL; it = split_following(it)) {
+        if (NSPointInRect(point, rect_of(it->frame)))
+            return it;
+    }
+    return NULL;
+}
+
+/* The pane dragged by a handle of this view, and where it'd go; NULL: nowhere */
+- (struct split *)dropOf:(id<NSDraggingInfo>)info
+                    into:(struct split **)target
+                    side:(enum split_dir *)side
+{
+    id source = info.draggingSource;
+    if (![source isKindOfClass:[FootGrabHandle class]] ||
+        ((FootGrabHandle *)source).splits != self || _zoomed != NULL)
+    {
+        return NULL;
+    }
+
+    struct wl_window *pane = ((FootGrabHandle *)source).pane;
+    struct split *leaf = pane != NULL ? [self leafOf:pane] : NULL;
+    if (leaf == NULL)
+        return NULL;
+
+    const NSPoint p = [self convertPoint:info.draggingLocation fromView:nil];
+    struct split *to = [self leafAt:p];
+    if (to == NULL || to == leaf)
+        return NULL;
+
+    /* Room for both */
+    const enum split_dir dir = drop_side(p, to->frame);
+    const bool fits = dir == SPLIT_LEFT || dir == SPLIT_RIGHT
+        ? to->frame.width >= to->min_width + SPLIT_DIVIDER + leaf->min_width
+        : to->frame.height >= to->min_height + SPLIT_DIVIDER + leaf->min_height;
+    if (!fits)
+        return NULL;
+
+    *target = to;
+    *side = dir;
+    return leaf;
+}
+
+/* The half of 'leaf' on 'side' is highlighted; NULL: nothing is */
+- (void)showDropZone:(struct split *)leaf side:(enum split_dir)side
+{
+    if (leaf == NULL) {
+        _dropZone.hidden = YES;
+        return;
+    }
+
+    if (_dropZone == nil) {
+        _dropZone = [[NSView alloc] initWithFrame:NSZeroRect];
+        CALayer *layer = view_create_layer();
+        layer.hidden = NO;
+        _dropZone.layer = layer;
+        _dropZone.wantsLayer = YES;
+    }
+
+    /* Above everything (handles are added later) */
+    if (_dropZone.superview != self || self.subviews.lastObject != _dropZone)
+        [self addSubview:_dropZone positioned:NSWindowAbove relativeTo:nil];
+
+    _dropZone.layer.backgroundColor =
+        [NSColor.controlAccentColor colorWithAlphaComponent:.3].CGColor;
+
+    NSRect frame = rect_of(leaf->frame);
+    switch (side) {
+    case SPLIT_LEFT:
+        frame.size.width = floor(frame.size.width / 2);
+        break;
+    case SPLIT_RIGHT:
+        frame.origin.x += floor(frame.size.width / 2);
+        frame.size.width -= floor(frame.size.width / 2);
+        break;
+    case SPLIT_UP:
+        frame.size.height = floor(frame.size.height / 2);
+        break;
+    case SPLIT_DOWN:
+        frame.origin.y += floor(frame.size.height / 2);
+        frame.size.height -= floor(frame.size.height / 2);
+        break;
+    }
+
+    _dropZone.frame = frame;
+    _dropZone.hidden = NO;
+}
+
+- (NSDragOperation)dropUpdated:(id<NSDraggingInfo>)info
+{
+    struct split *to;
+    enum split_dir side;
+    if ([self dropOf:info into:&to side:&side] == NULL) {
+        [self showDropZone:NULL side:SPLIT_RIGHT];
+        return NSDragOperationNone;
+    }
+
+    [self showDropZone:to side:side];
+    return NSDragOperationMove;
+}
+
+- (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)info
+{
+    return [self dropUpdated:info];
+}
+
+- (NSDragOperation)draggingUpdated:(id<NSDraggingInfo>)info
+{
+    return [self dropUpdated:info];
+}
+
+- (void)draggingExited:(id<NSDraggingInfo>)info
+{
+    [self showDropZone:NULL side:SPLIT_RIGHT];
+}
+
+- (BOOL)performDragOperation:(id<NSDraggingInfo>)info
+{
+    [self showDropZone:NULL side:SPLIT_RIGHT];
+
+    struct split *to;
+    enum split_dir side;
+    struct split *leaf = [self dropOf:info into:&to side:&side];
+    if (leaf == NULL)
+        return NO;
+
+    struct wl_window *pane = leaf->pane;
+    split_move(&_root, leaf, to, side);
+    [self relayout];
+    [self focusPane:pane];
+    app_run_hooks();
+    return YES;
+}
+
+- (void)handleDragEnded
+{
+    [self showDropZone:NULL side:SPLIT_RIGHT];
 }
 
 /*
@@ -519,6 +1106,9 @@ rect_of(struct split_rect r)
     struct split *next = split_remove(&_root, leaf);
     [view_of(win) removeFromSuperview];
     win->splits = NULL;
+
+    /* Not its handle (the terminal is being destroyed) */
+    [self updateHandles];
 
     if (_root == NULL) {
         [self updateDividers];
