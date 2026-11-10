@@ -1182,6 +1182,7 @@ drop_side(NSPoint p, struct split_rect r)
         ? [NSString stringWithUTF8String:win->title] : @"foot";
 
     [self updateDecorations];
+    tabs_window_colors_changed(win);
     session_layout_changed();
     app_run_hooks();
 }

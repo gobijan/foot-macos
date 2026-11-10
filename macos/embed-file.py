@@ -22,6 +22,7 @@ MACOS_DEFAULTS = [
      "# macos-follow-appearance=yes  (switches between [colors-dark] and [colors-light] with the system's appearance)\n"
      "# macos-confirm-close=yes  (asks before closing a window, or quitting, with something other than the shell running)\n"
      "# macos-sessions=yes  (terminals keep running when foot quits, and its next start shows them again)\n"
+     "# macos-titlebar-style=native  (tabs: the tab bar is in the titlebar, next to the window's buttons; macOS 26 and later)\n"
      "# macos-quake-hotkey=Mod1+grave  (the quake terminal's hotkey: Option+`, the key below Esc; none: no hotkey)\n"
      "# macos-quake-position=top  (top, bottom, left, right or center)\n"
      "# macos-quake-size=50  (height, or WIDTHxHEIGHT, in percent of the screen; without a width: twice as wide as high)\n"

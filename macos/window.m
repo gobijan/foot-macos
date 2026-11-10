@@ -317,6 +317,7 @@ window_colors_changed(struct wl_window *win)
 {
     update_root_background(win);
     [splits_of(win) paneColorsChanged:win];
+    tabs_window_colors_changed(win);
 }
 
 void
@@ -588,15 +589,8 @@ wayl_win_init(struct terminal *term, const char *token)
         if (win->quake)
             nswindow = quake_window_create(rect);
         else {
-            nswindow = [[NSWindow alloc]
-                initWithContentRect:rect
-                          styleMask:(NSWindowStyleMaskTitled |
-                                     NSWindowStyleMaskClosable |
-                                     NSWindowStyleMaskMiniaturizable |
-                                     NSWindowStyleMaskResizable)
-                            backing:NSBackingStoreBuffered
-                              defer:NO];
-
+            nswindow = tabs_window_create(
+                rect, conf->macos.titlebar_style == MACOS_TITLEBAR_TABS);
             nswindow.collectionBehavior |= NSWindowCollectionBehaviorFullScreenPrimary;
         }
 

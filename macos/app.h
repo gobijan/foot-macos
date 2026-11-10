@@ -152,6 +152,15 @@ void window_close_all(NSWindow *window, NSArray<NSWindow *> *windows);
  */
 bool app_confirm_quit(bool end_sessions);
 
+/*
+ * tabs.m: a terminal window; with 'titlebar_tabs', its tab bar is in the
+ * titlebar (macos-titlebar-style=tabs; macOS 26 and later)
+ */
+NSWindow *tabs_window_create(NSRect content_rect, bool titlebar_tabs);
+
+/* The pane's colors changed, or it got the focus: the titlebar's follow */
+void tabs_window_colors_changed(struct wl_window *win);
+
 /* window.m */
 void window_update_outputs(struct wl_window *win);
 void window_resized(struct wl_window *win);

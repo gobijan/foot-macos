@@ -396,6 +396,7 @@ foot = executable(
   'notifications.m',
   'view.m', 'view.h',
   'split-view.m', 'split-view.h',
+  'tabs.m',
   'accessibility.m',
   'keyboard.m', 'keyboard.h',
   'clipboard.m',

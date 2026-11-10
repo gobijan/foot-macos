@@ -1177,6 +1177,11 @@ parse_section_main(struct context *ctx)
     else if (streq(key, "macos-sessions"))
         return value_to_bool(ctx, &conf->macos.sessions);
 
+    else if (streq(key, "macos-titlebar-style")) {
+        return value_to_enum(
+            ctx, (const char *[]){"native", "tabs", NULL}, &conf->macos.titlebar_style);
+    }
+
     else if (streq(key, "macos-quake-position")) {
         return value_to_enum(
             ctx,

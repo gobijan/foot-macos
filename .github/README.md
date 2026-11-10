@@ -133,7 +133,12 @@ frameworks.
   native tabs, so the tab bar, dragging tabs between windows and View >
   Show All Tabs work as in other Mac apps. `Cmd+1` to `Cmd+8` select a
   tab, `Cmd+9` the last one, `Cmd+Shift+[` and `Cmd+Shift+]` the
-  previous and the next one.
+  previous and the next one; each tab shows its shortcut.
+  `macos-titlebar-style=tabs` in `[main]` puts the tab bar in the
+  titlebar, next to the window's buttons, as Ghostty's titlebar tabs,
+  and gives the titlebar the terminal's background color (macOS 26 and
+  later; new windows). There's no API for that: like Ghostty, foot moves
+  AppKit's own views there, so a macOS update could move them back.
 * Splits, like Ghostty's: `Cmd+D` splits the focused terminal into two,
   side by side, `Cmd+Shift+D` stacked (Shell > Split Left and Split Up
   too), with the new one in the same working directory. A click, or

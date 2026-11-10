@@ -235,6 +235,12 @@ enum macos_hotkey_mod {
     MACOS_HOTKEY_COMMAND = 1 << 3,
 };
 
+/* macos-titlebar-style */
+enum macos_titlebar_style {
+    MACOS_TITLEBAR_NATIVE,
+    MACOS_TITLEBAR_TABS,
+};
+
 struct config {
     char *conf_path;
 
@@ -255,6 +261,9 @@ struct config {
 
         /* Terminals are persistent sessions (footd, macos/session.h) */
         bool sessions;
+
+        /* The tab bar in the titlebar (enum macos_titlebar_style) */
+        int titlebar_style;
 
         /* The quake terminal (footclient --quake, macos/quake.m) */
         struct macos_quake {
