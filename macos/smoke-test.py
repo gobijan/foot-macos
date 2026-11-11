@@ -191,6 +191,10 @@ class Tests:
         # What a shell with the integration prints (OSC 133;C and D): a short
         # command, then a long one
         script = f"""
+            # Once foot reads what's printed (it answers): it measures from
+            # when it reads a command's start, and a first start can take long
+            stty -icanon -echo min 1 time 0
+            printf '\\033[6n'; dd bs=1 count=1 > /dev/null 2>&1
             printf '\\033]2;a title\\007'
             printf '\\033]133;C\\007'; printf '\\033]133;D;0\\007'
             printf '\\033]133;C\\007'; sleep 1.2; printf '\\033]133;D;3\\007'
