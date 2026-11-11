@@ -185,6 +185,19 @@ static void
 before_waiting(CFRunLoopObserverRef observer, CFRunLoopActivity activity, void *info)
 {
     app_run_hooks();
+
+    /*
+     * CFFileDescriptor doesn't call back if the kqueue isn't readable
+     * any more when the run loop gets to it, and its callbacks, being
+     * one-shot, are disabled then: for good, as fdm_callback() is what
+     * enables them. That happens when an event is taken back between
+     * the two, by something AppKit calls: e.g. the selection's scroll
+     * timer, stopped (or set again) as the mouse moves. Without this,
+     * nothing is read from then on: the terminals are frozen, and
+     * windows don't close.
+     */
+    if (app.fdm_cffd != NULL && !app.fdm_failed)
+        CFFileDescriptorEnableCallBacks(app.fdm_cffd, kCFFileDescriptorReadCallBack);
 }
 
 /*

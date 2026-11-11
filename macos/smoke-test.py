@@ -234,6 +234,63 @@ class Tests:
         if t.foot.returncode != 0:
             raise Failure(f'foot: exit code {t.foot.returncode}\n{out}')
 
+    def test_selection(self):
+        """A selection dragged beyond the window's edges, and back: the terminal goes on"""
+        t = self.Panes(self, 'selection')
+        answers = os.path.join(t.tmp, 'answers')
+        dragged = os.path.join(t.tmp, 'dragged')
+
+        # Something to scroll; then the terminal is asked for the cursor's
+        # position, over and over (it only answers while foot reads)
+        with open(t.script, 'w') as f:
+            f.write(f"""
+                seq 1 200
+                n=0
+                while [ ! -e {t.tmp}/quit ]; do
+                    printf '\\033[6n'
+                    if read -r -s -t 5 -d R answer; then
+                        n=$((n + 1))
+                        echo $n > {answers}.tmp && mv {answers}.tmp {answers}
+                    fi
+                    sleep .1
+                done
+            """)
+
+        def count():
+            try:
+                with open(answers) as f:
+                    return int(f.read())
+            except FileNotFoundError:
+                return 0
+
+        def wait(what, check):
+            deadline = time.time() + TIMEOUT
+            while not check():
+                if time.time() > deadline or t.foot.poll() is not None:
+                    raise Failure(what)
+                time.sleep(.1)
+
+        t.start()
+        out = ''
+
+        try:
+            wait('the terminal doesn\'t answer', lambda: count() > 0)
+            t.perform('dragSelection')
+            wait('the selection wasn\'t dragged', lambda: os.path.exists(dragged))
+
+            # (Not TIMEOUT: it's what a frozen terminal looks like)
+            before = count()
+            deadline = time.time() + 30
+            while count() <= before + 1:
+                if time.time() > deadline:
+                    raise Failure('the terminal doesn\'t answer any more, after the drag')
+                time.sleep(.1)
+        finally:
+            out = t.quit()
+
+        if t.foot.returncode != 0:
+            raise Failure(f'foot: exit code {t.foot.returncode}\n{out}')
+
     def test_splits(self):
         """Splits: right and down, zoomed, closed; each pane's terminal size"""
         t = self.Panes(self, 'splits')
