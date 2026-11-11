@@ -204,6 +204,12 @@ void window_backing_changed(struct wl_window *win);
  */
 void window_set_fixed_title(struct wl_window *win, const char *title);
 
+/*
+ * 'path' in a pager, in a new window (wayl_set_pager_handler()); the
+ * file is removed when the pager exits
+ */
+bool app_show_in_pager(const char *command, const char *path);
+
 /* The pane gets, or loses, the keyboard focus (its window is key) */
 void window_focus_in(struct wl_window *win);
 void window_focus_out(struct wl_window *win);

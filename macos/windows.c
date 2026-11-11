@@ -298,6 +298,39 @@ run_script(void *data, const char *path)
     return ret;
 }
 
+/*
+ * 'path' in the pager, in a new window, in the user's login shell (e.g.
+ * for $PATH, $LESS); the file is removed when the pager exits. The
+ * quoting is one that fish reads as POSIX shells do.
+ */
+static bool
+open_pager(void *data, const char *command, const char *path)
+{
+    struct new_window_context *ctx = data;
+
+    if (strchr(path, '\'') != NULL || strchr(command, '\'') != NULL) {
+        LOG_ERR("macos-pager: a command, or a file, with a single quote: %s, %s", command, path);
+        return false;
+    }
+
+    char **shell_argv = NULL;
+    if (!tokenize_cmdline(ctx->conf->shell, &shell_argv) || shell_argv[0] == NULL) {
+        free(shell_argv);
+        return false;
+    }
+
+    char *cmd = xasprintf("/bin/sh -c '%s \"$1\"; rm -f \"$1\"' sh '%s'", command, path);
+    char *argv[] = {shell_argv[0], "-l", "-c", cmd, NULL};
+
+    bool ret = new_terminal(ctx, NULL, 4, argv, false);
+
+    free(cmd);
+    for (char **a = shell_argv; *a != NULL; a++)
+        free(*a);
+    free(shell_argv);
+    return ret;
+}
+
 /* Opens the configuration in $EDITOR, in a new window */
 static bool
 open_settings(void *data)
@@ -360,6 +393,7 @@ wayl_enable_new_windows(struct wayland *wayl, const struct config *conf,
     wayl_set_new_window_handler(wayl, &new_window, &context);
     wayl_set_run_script_handler(wayl, &run_script, &context);
     wayl_set_settings_handler(wayl, &open_settings, &context);
+    wayl_set_pager_handler(wayl, &open_pager, &context);
     wayl_set_quake_handler(wayl, &toggle_quake, &context,
                            conf->macos.quake.hotkey.sym,
                            conf->macos.quake.hotkey.mods);

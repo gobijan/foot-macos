@@ -1,4 +1,5 @@
 #import "app.h"
+#include "hints.h"
 #import "session-layout.h"
 #import "split-view.h"
 #import "view.h"
@@ -73,6 +74,9 @@ static struct {
 
     bool (*run_script)(void *data, const char *path);
     void *run_script_data;
+
+    bool (*pager)(void *data, const char *command, const char *path);
+    void *pager_data;
 
     /* The first window of the application, and when it was started */
     struct terminal *initial_term;
@@ -385,6 +389,21 @@ wayl_set_run_script_handler(struct wayland *wayl,
 {
     app.run_script = handler;
     app.run_script_data = data;
+}
+
+void
+wayl_set_pager_handler(struct wayland *wayl,
+                       bool (*handler)(void *data, const char *command, const char *path),
+                       void *data)
+{
+    app.pager = handler;
+    app.pager_data = data;
+}
+
+bool
+app_show_in_pager(const char *command, const char *path)
+{
+    return app.pager != NULL && app.pager(app.pager_data, command, path);
 }
 
 void
@@ -1109,6 +1128,29 @@ create_menu(void)
                                 cmd | NSEventModifierFlagShift)];
         [menu addItem:menu_item(@"Show URLs", @selector(showURLs:), @"o",
                                 cmd | NSEventModifierFlagShift)];
+
+        /* (In the command palette: "Hints: Copy Path") */
+        NSMenuItem *hints = menu_item(@"Hints", nil, @"", 0);
+        hints.submenu = [[NSMenu alloc] initWithTitle:@"Hints"];
+        const struct { NSString *title; enum hint hint; } kinds[] = {
+            {@"Copy Path", HINT_PATH},
+            {@"Open Path", HINT_OPEN_PATH},
+            {@"Copy Git Hash", HINT_HASH},
+            {@"Copy IP Address", HINT_IP},
+            {@"Copy Line", HINT_LINE},
+            {@"Copy Word", HINT_WORD},
+        };
+        for (size_t i = 0; i < ALEN(kinds); i++) {
+            NSMenuItem *item = menu_item(kinds[i].title, @selector(showHints:), @"", 0);
+            item.tag = kinds[i].hint;
+            [hints.submenu addItem:item];
+        }
+        [menu addItem:hints];
+
+        [menu addItem:menu_item(@"Show Scrollback in Pager", @selector(showScrollbackInPager:),
+                                @"", 0)];
+        [menu addItem:menu_item(@"Show Command Output in Pager",
+                                @selector(showCommandOutputInPager:), @"", 0)];
         [menu addItem:menu_item(@"Change Title…", @selector(changeTitle:), @"", 0)];
         [menu addItem:[NSMenuItem separatorItem]];
 

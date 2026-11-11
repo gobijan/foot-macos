@@ -268,6 +268,9 @@ struct config {
         /* foot @ controls the application (macos/control.h) */
         bool remote_control;
 
+        /* View > Show Scrollback in Pager's command (NULL: less) */
+        char *pager;
+
         /* Commands that took that many seconds are notified of; < 0: never */
         float notify_on_command_finish;
 

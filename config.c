@@ -1183,6 +1183,9 @@ parse_section_main(struct context *ctx)
     else if (streq(key, "macos-remote-control"))
         return value_to_bool(ctx, &conf->macos.remote_control);
 
+    else if (streq(key, "macos-pager"))
+        return value_to_str(ctx, &conf->macos.pager);
+
     else if (streq(key, "macos-notify-on-command-finish")) {
         if (streq(value, "never")) {
             conf->macos.notify_on_command_finish = -1.;
@@ -4186,6 +4189,7 @@ config_clone(const struct config *old)
     conf->title = xstrdup(old->title);
     conf->app_id = xstrdup(old->app_id);
     conf->toplevel_tag = xstrdup(old->toplevel_tag);
+    conf->macos.pager = old->macos.pager != NULL ? xstrdup(old->macos.pager) : NULL;
     conf->word_delimiters = xc32dup(old->word_delimiters);
     conf->scrollback.indicator.text = xc32dup(old->scrollback.indicator.text);
     conf->server_socket_path = xstrdup(old->server_socket_path);
@@ -4287,6 +4291,7 @@ config_free(struct config *conf)
     free(conf->title);
     free(conf->app_id);
     free(conf->toplevel_tag);
+    free(conf->macos.pager);
     free(conf->word_delimiters);
     spawn_template_free(&conf->bell.command);
     free(conf->scrollback.indicator.text);

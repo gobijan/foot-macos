@@ -165,6 +165,19 @@ frameworks.
   command on several machines, until it's switched off again. None is
   dimmed meanwhile. They get the same bytes, so they should be in the
   same state (e.g. all at a shell's prompt).
+* View > Hints, as kitty's: what's on the screen and looks like a
+  path, a git hash, an IP address, or each line or word, gets a label,
+  as URLs do with `Cmd+Shift+O`. Typing a label copies its text; typed
+  in upper case, it's typed into the terminal too (foot's
+  `uppercase-regex-insert`). Open Path opens the files there are, as
+  Finder would; `Esc` leaves. Patterns of your own are foot's
+  `[regex:name]` sections, with key bindings.
+* View > Show Scrollback in Pager shows the terminal's text, with the
+  scrollback, in `less`, in a window of its own: to search, or to
+  read on while the terminal goes on. Show Command Output in Pager
+  does that with what the last command printed (with shell
+  integration). `macos-pager=nvim` in `[main]` is another command for
+  it; the text is a file, its last argument.
 * View > Change Title… gives a terminal a title of its own, whatever
   the programs in it set (as Ghostty's; empty: theirs again). It's the
   tab's, and the window's, while that terminal has the focus, and it's

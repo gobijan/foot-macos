@@ -98,8 +98,16 @@ class Tests:
         tmp = os.path.join(self.tmp, 'control')
         os.mkdir(tmp)
         config = os.path.join(tmp, 'foot.ini')
+        # A pager that keeps what it's shown, and where that was
+        pager = os.path.join(tmp, 'pager.sh')
+        paged = os.path.join(tmp, 'paged')
+        with open(pager, 'w') as f:
+            f.write(f'#!/bin/sh\ncat "$1" > {paged}.tmp\necho "$1" > {paged}.path\n'
+                    f'mv {paged}.tmp {paged}\n')
+        os.chmod(pager, 0o755)
+
         with open(config, 'w') as f:
-            f.write('shell=/bin/sh\nlogin-shell=no\nmacos-confirm-close=no\n')
+            f.write(f'shell=/bin/sh\nlogin-shell=no\nmacos-confirm-close=no\nmacos-pager={pager}\n')
 
         env = dict(ENV, FOOT_CONTROL_SOCKET=os.path.join(tmp, 'c.sock'))
         script = 'printf "\\033]2;a title\\007"; echo ready; read x; echo "got $x"; sleep 100'
@@ -138,6 +146,26 @@ class Tests:
             subprocess.run([self.foot, '@', 'send-text', '--stdin'], input=b'as\\tit is',
                            env=env, check=True, timeout=TIMEOUT)
             wait('the input from stdin', lambda: 'as\\tit is' in at('get-text'))
+
+            # The scrollback, in the pager: a window of its own, until it exits;
+            # the text's file is gone then
+            at('run', 'Show Scrollback in Pager')
+            wait('the pager', lambda: os.path.exists(paged))
+            with open(paged) as f:
+                text = f.read()
+            if 'ready' not in text or 'got hello there' not in text:
+                raise Failure(f'the pager was shown: {text!r}')
+            wait('the pager\'s end', lambda: len(json.loads(at('ls'))) == 1)
+            with open(paged + '.path') as f:
+                path = f.read().strip()
+            if not os.path.basename(path).startswith('foot-scrollback-') or os.path.exists(path):
+                raise Failure(f'the pager\'s file: {path}')
+
+            # Hints: the words on the screen get labels (the mode ends with
+            # Escape, or the terminal)
+            if 'Hints: Copy Word\n' not in at('commands'):
+                raise Failure(f'commands: {at("commands")}')
+            at('run', 'Hints: Copy Word')
 
             # The menus' commands, for a terminal: a split, which has the focus then
             if 'Split Right\t' not in at('commands'):

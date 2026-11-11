@@ -432,6 +432,15 @@ void wayl_prepare_environment(void);
 void wayl_set_new_window_handler(
     struct wayland *wayl, bool (*handler)(void *data, const char *cwd), void *data);
 
+/*
+ * Shows a file ('path') in a pager ('command', which gets it as its
+ * last argument), in a new window, and removes it afterwards (View >
+ * Show Scrollback in Pager)
+ */
+void wayl_set_pager_handler(
+    struct wayland *wayl,
+    bool (*handler)(void *data, const char *command, const char *path), void *data);
+
 /* Opens the configuration in an editor (application menu: Settings) */
 void wayl_set_settings_handler(
     struct wayland *wayl, bool (*handler)(void *data), void *data);

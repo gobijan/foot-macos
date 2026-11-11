@@ -411,6 +411,7 @@ foot = executable(
   'window.m',
   'close.m',
   'control.m', 'control-client.c', 'control.h',
+  'hints.c', 'hints.h',
   'connections.m',
   'palette.m',
   'login.m',

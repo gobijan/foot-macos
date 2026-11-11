@@ -19,6 +19,7 @@
 #include "shm.h"
 #include "terminal.h"
 #include "url-mode.h"
+#include "hints.h"
 
 static NSDictionary<NSString *, id<CAAction>> *
 null_actions(void)
@@ -1062,6 +1063,66 @@ url_under_mouse(struct seat *seat, struct terminal *term, bool activate)
     }];
 }
 
+/* View > Hints: the item's tag is the kind (enum hint) */
+- (void)showHints:(id)sender
+{
+    struct terminal *term = self.term;
+    if (term == NULL || !hints_show(term, (enum hint)[sender tag]))
+        NSBeep();
+}
+
+/*
+ * View > Show Scrollback in Pager, Show Command Output in Pager: the
+ * text, in a file the pager's window removes (less starts at its end,
+ * where the screen is, for the scrollback; and doesn't exit by itself
+ * with little of it, whatever $LESS says)
+ */
+- (void)showInPager:(BOOL)output
+{
+    struct terminal *term = self.term;
+    char *text = NULL;
+    size_t len = 0;
+
+    if (term == NULL ||
+        !(output ? term_command_output_to_text(term, &text, &len)
+                 : term_scrollback_to_text(term, &text, &len)) ||
+        len == 0)
+    {
+        free(text);
+        NSBeep();
+        return;
+    }
+
+    char path[PATH_MAX];
+    snprintf(path, sizeof(path), "%sfoot-%s-XXXXXX.txt",
+             NSTemporaryDirectory().fileSystemRepresentation,
+             output ? "output" : "scrollback");
+
+    const int fd = mkstemps(path, 4);
+    bool ok = fd >= 0;
+    for (size_t done = 0; ok && done < len;) {
+        const ssize_t n = write(fd, text + done, len - done);
+        ok = n > 0 || (n < 0 && errno == EINTR);
+        done += n > 0 ? (size_t)n : 0;
+    }
+    if (fd >= 0)
+        close(fd);
+    free(text);
+
+    const char *pager = term->conf->macos.pager;
+    if (pager == NULL || pager[0] == '\0')
+        pager = output ? "less -+F" : "less -+F +G";
+
+    if (!ok || !app_show_in_pager(pager, path)) {
+        LOG_ERR("%s: failed to show it in the pager", path);
+        if (fd >= 0)
+            unlink(path);
+    }
+}
+
+- (void)showScrollbackInPager:(id)sender     { [self showInPager:NO]; }
+- (void)showCommandOutputInPager:(id)sender  { [self showInPager:YES]; }
+
 - (void)copyCommandOutput:(id)sender
 {
     struct terminal *term = self.term;
@@ -1110,13 +1171,15 @@ url_under_mouse(struct seat *seat, struct terminal *term, bool activate)
         return selection_clipboard_has_data(app_seat());
     if (item.action == @selector(pasteSelection:))
         return selection_primary_has_data(app_seat());
-    if (item.action == @selector(showURLs:))
+    if (item.action == @selector(showURLs:) || item.action == @selector(showHints:))
         return !urls_mode_is_active(term);
 
     /* Not in a program with the alternate screen: the shell's are in the other one */
     if (item.action == @selector(jumpToPreviousPrompt:) ||
         item.action == @selector(jumpToNextPrompt:) ||
-        item.action == @selector(copyCommandOutput:))
+        item.action == @selector(copyCommandOutput:) ||
+        item.action == @selector(showScrollbackInPager:) ||
+        item.action == @selector(showCommandOutputInPager:))
     {
         return term->grid == &term->normal;
     }
