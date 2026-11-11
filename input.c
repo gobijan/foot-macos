@@ -496,6 +496,16 @@ execute_binding(struct seat *seat, struct terminal *term,
         return true;
 
     case BIND_ACTION_SELECT_BEGIN:
+        /* macOS: with Shift, a selection there is is extended instead
+         * (and by dragging on), as in other Mac apps */
+        if (seat->kbd.shift && seat->mouse.count == 1 &&
+            term->selection.coords.end.row >= 0)
+        {
+            selection_extend(
+                seat, term, seat->mouse.col, seat->mouse.row, term->selection.kind);
+            return true;
+        }
+
         selection_start(
             term, seat->mouse.col, seat->mouse.row, SELECTION_CHAR_WISE, false);
         return true;
