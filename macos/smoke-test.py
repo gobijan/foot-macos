@@ -93,6 +93,76 @@ class Tests:
             if lines[-1] != 'done' or len(lines) != (3 if only is not None else 8):
                 raise Failure(f'{size}: unexpected results: {lines}')
 
+    def test_control(self):
+        """foot @: the terminals are listed, typed into, read and split from outside"""
+        tmp = os.path.join(self.tmp, 'control')
+        os.mkdir(tmp)
+        config = os.path.join(tmp, 'foot.ini')
+        with open(config, 'w') as f:
+            f.write('shell=/bin/sh\nlogin-shell=no\nmacos-confirm-close=no\n')
+
+        env = dict(ENV, FOOT_CONTROL_SOCKET=os.path.join(tmp, 'c.sock'))
+        script = 'printf "\\033]2;a title\\007"; echo ready; read x; echo "got $x"; sleep 100'
+        foot = subprocess.Popen(
+            [self.foot, f'--config={config}', '--window-size-chars=100x30', 'sh', '-c', script],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, env=env)
+
+        def at(*args, expect=0):
+            return run(self.foot, '@', *args, expect=expect, env=env)
+
+        def wait(what, check):
+            deadline = time.time() + TIMEOUT
+            while not check():
+                if time.time() > deadline or foot.poll() is not None:
+                    raise Failure(f'{what}: not reached')
+                time.sleep(.1)
+
+        try:
+            wait_for(env['FOOT_CONTROL_SOCKET'])
+            wait('the program', lambda: 'ready' in at('get-text'))
+
+            terminals = json.loads(at('ls'))
+            if len(terminals) != 1:
+                raise Failure(f'ls: {terminals}')
+            first = terminals[0]
+            if (first['title'], first['columns'], first['rows'], first['focused']) != \
+                    ('a title', 100, 30, True):
+                raise Failure(f'ls: {first}')
+
+            # Typed, with Return; and what the terminal shows then
+            at('send-text', 'hello', 'there\\r')
+            wait('the input', lambda: 'got hello there' in at('get-text', '--scrollback'))
+
+            # From stdin, as it is (the terminal echoes it)
+            subprocess.run([self.foot, '@', 'send-text', '--stdin'], input=b'as\\tit is',
+                           env=env, check=True, timeout=TIMEOUT)
+            wait('the input from stdin', lambda: 'as\\tit is' in at('get-text'))
+
+            # The menus' commands, for a terminal: a split, which has the focus then
+            if 'Split Right\t' not in at('commands'):
+                raise Failure(f'commands: {at("commands")}')
+            at('run', 'split', 'right')
+            wait('the split', lambda: len(json.loads(at('ls'))) == 2)
+            second = [t for t in json.loads(at('ls')) if t['id'] != first['id']][0]
+            if not second['focused'] or second['window'] != first['window']:
+                raise Failure(f'ls, after the split: {second}')
+
+            # By its ID: the first one still is what it was, and closes
+            if 'got hello there' not in at('get-text', f'--id={first["id"]}'):
+                raise Failure('get-text --id: not the first terminal')
+            at('run', '--id', str(first['id']), 'Close Split')
+            wait('the close', lambda: [t['id'] for t in json.loads(at('ls'))] == [second['id']])
+
+            for args in (['run', 'no such command'], ['get-text', '--id=99'], ['dance']):
+                at(*args, expect=1)
+        finally:
+            foot.terminate()
+            out = foot.communicate()[0]
+
+        if 'ERROR' in out:
+            raise Failure(f'foot:\n{out}')
+
     def test_command_finish(self):
         """A command that took long is notified of, with its exit status; a short one isn't"""
         tmp = os.path.join(self.tmp, 'command-finish')

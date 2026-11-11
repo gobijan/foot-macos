@@ -24,6 +24,7 @@ MACOS_DEFAULTS = [
      "# macos-sessions=yes  (terminals keep running when foot quits, and its next start shows them again)\n"
      "# macos-shell-integration=yes  (zsh, bash and fish mark their prompts and report the working directory, without setting it up)\n"
      "# macos-notify-on-command-finish=never  (or seconds, e.g. 10: a notification when a command that took that long ends, in a terminal without the keyboard focus)\n"
+     "# macos-remote-control=yes  (foot @ COMMAND controls the application: foot @ --help)\n"
      "# macos-titlebar-style=native  (tabs: the tab bar is in the titlebar, next to the window's buttons; macOS 26 and later)\n"
      "# macos-quake-hotkey=Mod1+grave  (the quake terminal's hotkey: Option+`, the key below Esc; none: no hotkey)\n"
      "# macos-quake-position=top  (top, bottom, left, right or center)\n"

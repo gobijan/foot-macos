@@ -35,6 +35,10 @@
 #include "xsnprintf.h"
 #include "uri.h"
 
+#if defined(__APPLE__)
+ #include "control.h"
+#endif
+
 #if !defined(__STDC_UTF_32__) || !__STDC_UTF_32__
  #error "char32_t does not use UTF-32"
 #endif
@@ -202,6 +206,12 @@ main(int argc, char *const *argv)
      * itself failing, and the client application failing */
     static const int foot_exit_failure = -26;
     int ret = foot_exit_failure;
+
+#if defined(__APPLE__)
+    /* foot @ COMMAND: controls the running foot (macos/control.h) */
+    if (argc >= 2 && streq(argv[1], "@"))
+        return control_client(argc - 2, argv + 2);
+#endif
 
     sanitize_signals();
 

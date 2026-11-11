@@ -324,6 +324,9 @@ struct wl_window {
 
     char *title;     /* The window title, while the pane has the focus */
 
+    /* For foot @ (macos/control.m): the pane's ID; 0: none yet */
+    uint32_t control_id;
+
     /* Since when the shell's command runs (wayl_command_executed()) */
     bool command_running;
     struct timespec command_started;

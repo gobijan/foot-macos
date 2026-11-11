@@ -410,6 +410,7 @@ foot = executable(
   'app.m', 'app.h',
   'window.m',
   'close.m',
+  'control.m', 'control-client.c', 'control.h',
   'connections.m',
   'palette.m',
   'login.m',

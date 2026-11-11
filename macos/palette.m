@@ -19,13 +19,6 @@
 #define MARGIN 6        /* Around the list */
 #define MAX_ROWS 12
 
-@interface FootCommand : NSObject
-@property (nonatomic, copy) NSString *title;
-@property (nonatomic, copy) NSString *shortcut;
-@property (nonatomic) NSMenuItem *item;
-@property (nonatomic) id target;
-@end
-
 @implementation FootCommand
 @end
 
@@ -83,8 +76,43 @@ shortcut(NSMenuItem *item)
  * a submenu have its title first (e.g. "Theme: Nord"); 'prefix' is the
  * outermost one's (nil: 'menu' is one of the menu bar's).
  */
+/*
+ * As NSApp's targetForAction:to:from: finds it, in 'first's responder
+ * chain instead of the key window's: and whether it can be chosen there
+ */
+static id
+target_from(NSResponder *first, NSMenuItem *item)
+{
+    id target = item.target;
+
+    if (target == nil) {
+        for (NSResponder *r = first; r != nil && target == nil; r = r.nextResponder) {
+            if ([r respondsToSelector:item.action])
+                target = r;
+        }
+
+        NSWindow *window = [first isKindOfClass:NSView.class] ? ((NSView *)first).window : nil;
+        const id candidates[] = {window.delegate, NSApp, NSApp.delegate};
+        for (size_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]); i++) {
+            if (target == nil && [candidates[i] respondsToSelector:item.action])
+                target = candidates[i];
+        }
+    }
+
+    if (target == nil || ![target respondsToSelector:item.action])
+        return nil;
+
+    if ([target respondsToSelector:@selector(validateMenuItem:)])
+        return [target validateMenuItem:item] ? target : nil;
+    if ([target respondsToSelector:@selector(validateUserInterfaceItem:)])
+        return [target validateUserInterfaceItem:item] ? target : nil;
+    return target;
+}
+
+/* 'first': the terminal's view (foot @, control.m); nil: the key window's */
 static void
-collect(NSMenu *menu, NSString *prefix, NSMutableArray<FootCommand *> *commands)
+collect(NSMenu *menu, NSString *prefix, NSResponder *first,
+        NSMutableArray<FootCommand *> *commands)
 {
     /* Some are filled when they're opened */
     id<NSMenuDelegate> delegate = menu.delegate;
@@ -98,14 +126,19 @@ collect(NSMenu *menu, NSString *prefix, NSMutableArray<FootCommand *> *commands)
 
         if (item.submenu != nil) {
             if (item.submenu != NSApp.servicesMenu)
-                collect(item.submenu, prefix != nil ? prefix : item.title, commands);
+                collect(item.submenu, prefix != nil ? prefix : item.title, first, commands);
             continue;
         }
 
-        if (item.action == NULL || item.action == @selector(showCommandPalette:) || !item.enabled)
+        if (item.action == NULL || item.action == @selector(showCommandPalette:))
             continue;
 
-        id target = [NSApp targetForAction:item.action to:item.target from:item];
+        /* (The menu enables its items for the key window) */
+        id target;
+        if (first != nil)
+            target = target_from(first, item);
+        else
+            target = item.enabled ? [NSApp targetForAction:item.action to:item.target from:item] : nil;
         if (target == nil)
             continue;
 
@@ -142,6 +175,24 @@ cell_view(NSTableView *table, NSString *identifier, NSTextAlignment alignment)
         [label.centerYAnchor constraintEqualToAnchor:cell.centerYAnchor],
     ]];
     return cell;
+}
+
+NSArray<FootCommand *> *
+palette_commands(NSResponder *first)
+{
+    NSMutableArray<FootCommand *> *commands = [NSMutableArray array];
+    for (NSMenuItem *item in NSApp.mainMenu.itemArray) {
+        if (item.submenu != nil)
+            collect(item.submenu, nil, first, commands);
+    }
+    return commands;
+}
+
+void
+palette_run(FootCommand *command)
+{
+    /* The item's menu may be filled anew meanwhile: the item itself is the sender */
+    [NSApp sendAction:command.item.action to:command.target from:command.item];
 }
 
 @interface FootPalette : NSObject <NSTableViewDataSource, NSTableViewDelegate,
@@ -316,12 +367,7 @@ cell_view(NSTableView *table, NSString *identifier, NSTextAlignment alignment)
 
     /* While the terminal's window is key: the commands are those it has */
     NSWindow *window = NSApp.keyWindow != nil ? NSApp.keyWindow : NSApp.mainWindow;
-    NSMutableArray<FootCommand *> *commands = [NSMutableArray array];
-    for (NSMenuItem *item in NSApp.mainMenu.itemArray) {
-        if (item.submenu != nil)
-            collect(item.submenu, nil, commands);
-    }
-    self.commands = commands;
+    self.commands = palette_commands(nil);
     self.window = window;
 
     /* Over the window's upper part; without one, the screen's */
@@ -368,12 +414,8 @@ cell_view(NSTableView *table, NSString *identifier, NSTextAlignment alignment)
 
 - (void)run:(FootCommand *)command
 {
-    /* The item's menu may be filled anew meanwhile: the item itself is the sender */
-    NSMenuItem *item = command.item;
-    id target = command.target;
-
     [self close];
-    [NSApp sendAction:item.action to:target from:item];
+    palette_run(command);
 }
 
 - (void)runSelected

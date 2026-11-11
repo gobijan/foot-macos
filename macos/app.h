@@ -86,6 +86,22 @@ NSString *connections_address(NSString *text);
 void palette_toggle(void);
 bool palette_is_open(void);
 
+/* One of its commands: a menu item, and the target it has */
+@interface FootCommand : NSObject
+@property (nonatomic, copy) NSString *title;     /* A submenu's first, e.g. "Theme: nord" */
+@property (nonatomic, copy) NSString *shortcut;  /* As the menus show it, e.g. ⇧⌘P */
+@property (nonatomic) NSMenuItem *item;
+@property (nonatomic) id target;
+@end
+
+/*
+ * The commands that can be chosen now: for the key window (nil), or
+ * for 'first' (a terminal's view, whose window needn't be key: foot @,
+ * control.m). And running one.
+ */
+NSArray<FootCommand *> *palette_commands(NSResponder *first);
+void palette_run(FootCommand *command);
+
 /*
  * login.m: logging in to other machines: what ssh asks (e.g. a
  * password) is asked in a window there (and may be kept in the Keychain)

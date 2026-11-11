@@ -351,6 +351,47 @@ is sent while the windows are idle.
 * Not there yet: asking before closing a window when something runs in
   it, and dragging files into it (their paths are this Mac's).
 
+## Remote control
+
+`foot @ COMMAND` controls the running foot from a script, as `kitty @`
+does kitty: it lists the terminals, types into them, reads what they
+show, and runs what the menus have.
+
+```sh
+foot @ ls                             # the terminals, as JSON
+foot @ send-text 'make test\r'        # typed into the focused one (\r: Return)
+foot @ send-text --id=3 --stdin < f   # into that one, from stdin, as it is
+foot @ get-text --scrollback          # what it shows; all of it
+foot @ get-text --command-output      # what the last command printed
+foot @ focus --id=3                   # to the front
+foot @ commands                       # what the menus have, with shortcuts
+foot @ run New Tab                    # one of them
+foot @ run --id=3 Split Right
+foot @ run Theme: nord
+```
+
+* A terminal is a window, a tab or a split. `ls` has each one's `id`
+  (it keeps it while it's open), `window`, `title`, `cwd`, `columns`
+  and `rows`, whether it's the `focused` one, and its `session` (and
+  `host`, on another machine). Without `--id`, a command is for the
+  focused terminal: the frontmost window's.
+* `commands` and `run` are the [command palette](#macos-specifics)'s:
+  the menus' items, by their titles (case doesn't matter), those of a
+  submenu with its title first. So what the menus get, scripts have
+  too: windows, tabs and splits, the other machines (`New Window on:
+  …`), the color themes, the font size, clearing, reloading the
+  configuration. They are those that can be chosen for that terminal
+  now, with the titles they have then (e.g. `Close Split`, with several).
+* `send-text` takes `\r` (Return), `\n`, `\t`, `\e` (Escape), `\\` and
+  `\xHH`; its arguments are joined with spaces.
+* `get-text --command-output` needs the shell's integration (see
+  [macOS specifics](#macos-specifics)).
+* It's foot as the application that listens (started from the Finder,
+  the Dock or at login, not from a shell), on a socket in
+  `~/Library/Application Support/foot/`, for your own processes only.
+  `macos-remote-control=no` in `[main]` turns it off (foot has to be
+  started again).
+
 ## Quake terminal
 
 A drop-down terminal: it slides in from an edge of the screen, over

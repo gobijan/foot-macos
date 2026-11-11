@@ -1180,6 +1180,9 @@ parse_section_main(struct context *ctx)
     else if (streq(key, "macos-shell-integration"))
         return value_to_bool(ctx, &conf->macos.shell_integration);
 
+    else if (streq(key, "macos-remote-control"))
+        return value_to_bool(ctx, &conf->macos.remote_control);
+
     else if (streq(key, "macos-notify-on-command-finish")) {
         if (streq(value, "never")) {
             conf->macos.notify_on_command_finish = -1.;
@@ -3739,6 +3742,7 @@ config_load(struct config *conf, const char *conf_path,
             .sessions = true,
             .shell_integration = true,
             .notify_on_command_finish = -1.,
+            .remote_control = true,
             .quake = {
                 .width = 0.,    /* Twice the height */
                 .height = 50.,

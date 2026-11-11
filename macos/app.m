@@ -20,6 +20,7 @@
 #define LOG_ENABLE_DBG 0
 #include "log.h"
 #include "config.h"
+#include "control.h"
 #include "debug.h"
 #include "fdm.h"
 #include "ime.h"
@@ -29,6 +30,7 @@
 #include "session.h"
 #include "terminal.h"
 #include "util.h"
+#include "windows.h"
 #include "xmalloc.h"
 
 /*
@@ -345,9 +347,15 @@ wayl_run(struct wayland *wayl, volatile sig_atomic_t *aborted, bool keep_running
     if (app.launched_as_app && !app.server && app.quake != NULL)
         hotkey_register(app.hotkey_sym, app.hotkey_mods, &toggle_quake);
 
+    /* foot @ (control.h): the application's too */
+    control_init(wayl->fdm, wayl,
+                 app.launched_as_app && !app.server &&
+                 windows_initial_config()->macos.remote_control);
+
     app.running = true;
     [NSApp run];
     app.running = false;
+    control_fini();
 
     /*
      * However the run loop ended, the terminals that are left are

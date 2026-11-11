@@ -48,6 +48,12 @@ Application Support; on Linux, the state folder). The scripts are the
 port's own (MIT): don't copy from kitty's or Ghostty's, which are GPL.
 `meson test footd` runs the shells there are, `make linux` Debian's.
 
+Remote control: `foot @ COMMAND` (`macos/control-client.c`, in foot's
+binary) asks the running application (`macos/control.m`, a socket of
+its own; tests: `FOOT_CONTROL_SOCKET=<path>`). Its `commands` and `run`
+are the command palette's (`macos/palette.m`): the menus' items. A new
+menu item is in the palette and scriptable; nothing is listed twice.
+
 Persistent sessions: the programs run in footd (`macos/footd.c`), a
 daemon foot starts; a window's terminal reads footd's socket instead of
 a PTY (`macos/session.c`), and the windows' layout is kept by footd
