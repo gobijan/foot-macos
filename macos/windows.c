@@ -96,7 +96,7 @@ window_config_free(void *data, int exit_code)
  */
 static bool
 new_terminal(struct new_window_context *ctx, const char *cwd,
-             int argc, char *const *argv, bool hold)
+             int argc, char *const *argv, const char *const *envp, bool hold)
 {
     if (cwd == NULL)
         cwd = getenv("HOME");
@@ -115,7 +115,7 @@ new_terminal(struct new_window_context *ctx, const char *cwd,
 
     /* The terminal destroys itself when done; then we free its config */
     if (term_init(conf, ctx->fdm, ctx->reaper, ctx->wayl, "foot", cwd, NULL,
-                  NULL, argc, argv, NULL, &window_config_free, conf) == NULL)
+                  NULL, argc, argv, envp, &window_config_free, conf) == NULL)
     {
         window_config_free(conf, 0);
         return false;
@@ -127,7 +127,15 @@ new_terminal(struct new_window_context *ctx, const char *cwd,
 static bool
 new_window(void *data, const char *cwd)
 {
-    return new_terminal(data, cwd, 0, NULL, false);
+    return new_terminal(data, cwd, 0, NULL, NULL, false);
+}
+
+/* foot @ launch: a command (none: the shell), with an environment (NULL: ours) */
+static bool
+launch(void *data, const char *cwd, int argc, char *const *argv,
+       const char *const *envp, bool hold)
+{
+    return new_terminal(data, cwd, argc, argv, envp, hold);
 }
 
 /*
@@ -288,7 +296,7 @@ run_script(void *data, const char *path)
 
     bool ret = new_terminal(
         ctx, dir[0] != '\0' ? dir : "/", use_shell ? 4 : 1,
-        use_shell ? shell_cmd : direct_cmd, true);
+        use_shell ? shell_cmd : direct_cmd, NULL, true);
 
     free(dir);
     free(cmd);
@@ -322,7 +330,7 @@ open_pager(void *data, const char *command, const char *path)
     char *cmd = xasprintf("/bin/sh -c '%s \"$1\"; rm -f \"$1\"' sh '%s'", command, path);
     char *argv[] = {shell_argv[0], "-l", "-c", cmd, NULL};
 
-    bool ret = new_terminal(ctx, NULL, 4, argv, false);
+    bool ret = new_terminal(ctx, NULL, 4, argv, NULL, false);
 
     free(cmd);
     for (char **a = shell_argv; *a != NULL; a++)
@@ -365,7 +373,7 @@ open_settings(void *data)
     *strrchr(dir, '/') = '\0';
 
     LOG_INFO("opening settings: %s", cmd);
-    bool ret = new_terminal(ctx, dir, 4, argv, false);
+    bool ret = new_terminal(ctx, dir, 4, argv, NULL, false);
 
     free(dir);
     free(cmd);
@@ -394,6 +402,7 @@ wayl_enable_new_windows(struct wayland *wayl, const struct config *conf,
     wayl_set_run_script_handler(wayl, &run_script, &context);
     wayl_set_settings_handler(wayl, &open_settings, &context);
     wayl_set_pager_handler(wayl, &open_pager, &context);
+    wayl_set_launch_handler(wayl, &launch, &context);
     wayl_set_quake_handler(wayl, &toggle_quake, &context,
                            conf->macos.quake.hotkey.sym,
                            conf->macos.quake.hotkey.mods);

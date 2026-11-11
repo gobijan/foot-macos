@@ -20,13 +20,16 @@
 #include "session-protocol.h"
 #include "xmalloc.h"
 
+extern char **environ;
+
 static const char usage[] =
     "Usage: foot @ COMMAND [OPTIONS...]\n"
     "\n"
     "Controls the running foot (the application).\n"
     "\n"
     "Commands:\n"
-    "  ls                      the terminals, as JSON: their ID, title, directory, size\n"
+    "  ls                      the terminals, as JSON: their ID, title, directory,\n"
+    "                          program, size (with --id, or --match: those)\n"
     "  send-text [TEXT...]     types TEXT (\\r is Return; also \\n, \\t, \\e, \\\\, \\xHH),\n"
     "                          or with --stdin, what's read from there (as it is)\n"
     "  get-text                prints what the terminal shows; with --scrollback, all\n"
@@ -34,11 +37,19 @@ static const char usage[] =
     "  focus                   brings the terminal to the front\n"
     "  set-title [TITLE]       its title, whatever the programs in it set; without\n"
     "                          one, theirs again\n"
+    "  launch [COMMAND...]     a new terminal that runs COMMAND (none: the shell), in\n"
+    "                          this directory and with this environment; prints its ID.\n"
+    "                          --type=window (the default), tab or split: next to the\n"
+    "                          terminal; --direction=right, down, left or up (a split);\n"
+    "                          --cwd=DIR; --title=TITLE; --hold: stays when it exits\n"
     "  commands                what the menus (and the command palette) have\n"
     "  run COMMAND             one of them, by its title: e.g. foot @ run New Tab\n"
     "\n"
     "Options:\n"
-    "  --id=ID                 the terminal (see ls); the focused one otherwise\n";
+    "  --id=ID                 the terminal (see ls); the focused one otherwise\n"
+    "  --match=FIELD:REGEX     those whose title, cwd, program or host has a match of\n"
+    "                          the regular expression (or id:ID): all of them for\n"
+    "                          send-text and set-title, the first one for the others\n";
 
 char *
 control_socket_path(void)
@@ -143,11 +154,13 @@ control_client(int argc, char *const *argv)
      * is the application's to make sense of
      */
     const bool send_text = strcmp(argv[0], "send-text") == 0;
-    const char **args = xcalloc(argc + 1, sizeof(args[0]));
+    const bool launch = strcmp(argv[0], "launch") == 0;
+    const char **args = xcalloc(argc + 2, sizeof(args[0]));
     size_t arg_count = 0;
     char *data = NULL;
     size_t data_len = 0;
     bool from_stdin = false;
+    char *launch_cwd = NULL;
 
     for (int i = 0; i < argc; i++) {
         const bool option = i == 0 || (strncmp(argv[i], "--", 2) == 0 && argv[i][2] != '\0');
@@ -157,8 +170,22 @@ control_client(int argc, char *const *argv)
             args[arg_count++] = argv[i];
 
             /* --id ID */
-            if (strcmp(argv[i], "--id") == 0 && i + 1 < argc)
+            if ((strcmp(argv[i], "--id") == 0 || strcmp(argv[i], "--match") == 0) &&
+                i + 1 < argc)
+            {
                 args[arg_count++] = argv[++i];
+            }
+
+            /*
+             * launch's command runs here, as far as the application is
+             * concerned: in this directory, with this environment
+             */
+            if (launch && i == 0) {
+                char *cwd = getcwd(NULL, 0);
+                if (cwd != NULL)
+                    args[arg_count++] = launch_cwd = xasprintf("--client-cwd=%s", cwd);
+                free(cwd);
+            }
         } else {
             const size_t len = strlen(argv[i]);
             data = xrealloc(data, data_len + len + 2);
@@ -169,7 +196,14 @@ control_client(int argc, char *const *argv)
         }
     }
 
-    if (from_stdin) {
+    if (launch) {
+        for (char **e = environ; *e != NULL; e++) {
+            const size_t len = strlen(*e) + 1;
+            data = xrealloc(data, data_len + len);
+            memcpy(data + data_len, *e, len);
+            data_len += len;
+        }
+    } else if (from_stdin) {
         free(data);
         data = read_all(STDIN_FILENO, &data_len);
     } else if (data != NULL)
@@ -256,6 +290,7 @@ control_client(int argc, char *const *argv)
     session_conn_close(&conn);
     free(args);
     free(data);
+    free(launch_cwd);
     free(path);
     return fflush(stdout) == 0 ? status : EXIT_FAILURE;
 }

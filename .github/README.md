@@ -383,7 +383,7 @@ is sent while the windows are idle.
 
 `foot @ COMMAND` controls the running foot from a script, as `kitty @`
 does kitty: it lists the terminals, types into them, reads what they
-show, and runs what the menus have.
+show, starts programs in new ones, and runs what the menus have.
 
 ```sh
 foot @ ls                             # the terminals, as JSON
@@ -394,6 +394,10 @@ foot @ get-text --command-output      # what the last command printed
 foot @ focus --id=3                   # to the front
 foot @ set-title --id=3 build         # its title, whatever runs in it
 foot @ set-title --id=3               # the programs' title again
+foot @ launch --type=split nvim       # a program, in a split of the focused one
+foot @ launch --type=tab --cwd=/tmp   # the shell, in a tab
+foot @ send-text --match=program:^less$ q     # to all that run less
+foot @ get-text --match=title:build   # of the one with such a title
 foot @ commands                       # what the menus have, with shortcuts
 foot @ run New Tab                    # one of them
 foot @ run --id=3 Split Right
@@ -403,8 +407,23 @@ foot @ run Theme: nord
 * A terminal is a window, a tab or a split. `ls` has each one's `id`
   (it keeps it while it's open), `window`, `title`, `cwd`, `columns`
   and `rows`, whether it's the `focused` one, and its `session` (and
-  `host`, on another machine). Without `--id`, a command is for the
-  focused terminal: the frontmost window's.
+  `host`, on another machine), and the `program` that runs in it (its
+  foreground process; on this machine). Without `--id`, a command is
+  for the focused terminal: the frontmost window's.
+* `--match=FIELD:REGEX` is for the terminals whose `title`, `cwd`,
+  `program` or `host` has a match of the regular expression (`^` and
+  `$` for all of it), or `id:ID`: all of them for `send-text` and
+  `set-title`, the first one (in `ls`' order, which they were opened
+  in) for the other commands. `ls --match` lists them.
+* `launch [COMMAND…]` opens a terminal that runs the command (none: the
+  shell), and prints its `id`: in a window (`--type=window`, the
+  default), a tab (`tab`) or a split (`split`, with
+  `--direction=right`, `down`, `left` or `up`) of the terminal that's
+  meant. As with footclient, the command runs in the directory
+  `foot @` was called in (or `--cwd=DIR`), with its environment.
+  `--title=TITLE` is its title, as `set-title`'s; with `--hold`, it
+  stays when the command exits. Next to a terminal on another machine,
+  a tab or a split runs there (in that machine's home directory).
 * `commands` and `run` are the [command palette](#macos-specifics)'s:
   the menus' items, by their titles (case doesn't matter), those of a
   submenu with its title first. So what the menus get, scripts have

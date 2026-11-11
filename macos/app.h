@@ -205,6 +205,19 @@ void window_backing_changed(struct wl_window *win);
 void window_set_fixed_title(struct wl_window *win, const char *title);
 
 /*
+ * foot @ launch: a new terminal that runs 'argv' (argc 0: the shell)
+ * in 'cwd', with 'envp' (NULL for these: as the menus' new terminals,
+ * i.e. 'near's directory and foot's environment). A window of its own,
+ * or a tab of 'near's window, or a split of 'near' (in 'dir'); tabs and
+ * splits run where 'near' does (another machine: without 'cwd' and
+ * 'envp', which are this one's). Returns it, or NULL.
+ */
+enum launch_type { LAUNCH_WINDOW, LAUNCH_TAB, LAUNCH_SPLIT };
+struct terminal *app_launch(struct terminal *near, enum launch_type type, enum split_dir dir,
+                            const char *cwd, int argc, char *const *argv,
+                            const char *const *envp, bool hold);
+
+/*
  * 'path' in a pager, in a new window (wayl_set_pager_handler()); the
  * file is removed when the pager exits
  */

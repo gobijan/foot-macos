@@ -78,6 +78,10 @@ static struct {
     bool (*pager)(void *data, const char *command, const char *path);
     void *pager_data;
 
+    bool (*launch)(void *data, const char *cwd, int argc, char *const *argv,
+                   const char *const *envp, bool hold);
+    void *launch_data;
+
     /* The first window of the application, and when it was started */
     struct terminal *initial_term;
     CFAbsoluteTime started;
@@ -400,6 +404,16 @@ wayl_set_pager_handler(struct wayland *wayl,
     app.pager_data = data;
 }
 
+void
+wayl_set_launch_handler(struct wayland *wayl,
+                        bool (*handler)(void *data, const char *cwd, int argc,
+                                        char *const *argv, const char *const *envp, bool hold),
+                        void *data)
+{
+    app.launch = handler;
+    app.launch_data = data;
+}
+
 bool
 app_show_in_pager(const char *command, const char *path)
 {
@@ -539,6 +553,47 @@ main_window_host(void)
 
     const struct wl_window *win = ((FootSplitView *)main.contentView).focused;
     return win != NULL && win->term != NULL ? session_link_host(win->term->session) : NULL;
+}
+
+struct terminal *
+app_launch(struct terminal *near, enum launch_type type, enum split_dir dir,
+           const char *cwd, int argc, char *const *argv, const char *const *envp, bool hold)
+{
+    if (app.launch == NULL || (near == NULL && type != LAUNCH_WINDOW))
+        return NULL;
+
+    struct wl_window *win = near != NULL ? near->window : NULL;
+    NSWindow *nswindow = win != NULL ? (__bridge NSWindow *)win->nswindow : nil;
+    if (type == LAUNCH_TAB && nswindow.tabbingMode == NSWindowTabbingModeDisallowed)
+        return NULL;
+
+    /* A tab, or a split, of a terminal on another machine runs there */
+    const char *host = type != LAUNCH_WINDOW ? session_link_host(near->session) : NULL;
+    if (host != NULL && host[0] != '\0') {
+        cwd = NULL;
+        envp = NULL;
+    }
+
+    char near_cwd[PATH_MAX];
+    if (cwd == NULL && near != NULL && (host == NULL || host[0] == '\0') &&
+        term_cwd(near, near_cwd))
+    {
+        cwd = near_cwd;
+    }
+
+    const size_t count = tll_length(app.wayl->terms);
+
+    sessions_create_next_on(host);
+    app.tab_parent = type == LAUNCH_TAB ? nswindow : nil;
+    app.split_parent = type == LAUNCH_SPLIT ? win : NULL;
+    app.split_dir = dir;
+    const bool ok = app.launch(app.launch_data, cwd, argc, argv, envp, hold);
+    app.tab_parent = nil;
+    app.split_parent = NULL;
+    sessions_create_next_on(NULL);
+
+    /* term_init() adds it last */
+    return ok && tll_length(app.wayl->terms) > count ? tll_back(app.wayl->terms) : NULL;
 }
 
 void

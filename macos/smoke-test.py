@@ -195,6 +195,48 @@ class Tests:
             at('run', '--id', str(first['id']), 'Close Split')
             wait('the close', lambda: [t['id'] for t in json.loads(at('ls'))] == [second['id']])
 
+            # launch: a command in a split of that one, in the caller's directory
+            # and with its environment; it prints the new terminal's ID
+            where = os.path.realpath(tmp)
+            out = subprocess.run(
+                [self.foot, '@', 'launch', '--type=split', '--direction=down', '--title=launched',
+                 'sh', '-c', 'echo "in $PWD with $FOOT_TEST_VAR"; sleep 100'],
+                cwd=where, env=dict(env, FOOT_TEST_VAR='a value'), check=True, timeout=TIMEOUT,
+                stdout=subprocess.PIPE, text=True).stdout
+            launched = int(out)
+            wait('the launched command',
+                 lambda: f'in {where} with a value' in at('get-text', f'--id={launched}'))
+            entry = [t for t in json.loads(at('ls')) if t['id'] == launched][0]
+            if (entry['title'], entry['window']) != ('launched', second['window']):
+                raise Failure(f'ls, after launch: {entry}')
+
+            # In a tab (a window of its own, to macOS), with another directory;
+            # and the shell, in a window
+            tab = int(at('launch', '--type=tab', '--cwd=/usr', 'sh', '-c', 'pwd; sleep 100'))
+            wait('the tab', lambda: '/usr' in at('get-text', f'--id={tab}'))
+            shell = int(at('launch'))
+            if len({launched, tab, shell, second['id']}) != 4 or len(json.loads(at('ls'))) != 4:
+                raise Failure(f'launch: {at("ls")}')
+
+            # --match: the terminals with such a title (all of them, for
+            # set-title), directory, program
+            if f'in {where}' not in at('get-text', '--match', 'title:^launch'):
+                raise Failure('--match title: not the launched terminal')
+            at('set-title', '--match=title:^launched$', 'renamed')
+            at('set-title', f'--match=id:{tab}', 'renamed')
+            renamed = sorted(t['id'] for t in json.loads(at('ls')) if t['title'] == 'renamed')
+            if renamed != sorted([launched, tab]):
+                raise Failure(f'--match: renamed {renamed}')
+            at('send-text', '--match', 'title:renamed', 'q')
+            # (macOS' sh runs bash)
+            program = [t['program'] for t in json.loads(at('ls')) if t['id'] == second['id']][0]
+            if program not in ('sh', 'bash') or \
+                    str(second['id']) not in at('ls', '--match', f'program:^{program}$'):
+                raise Failure(f'ls: the program: {at("ls")}')
+            for args in (['get-text', '--match=title:no such'], ['get-text', '--match=color:red'],
+                         ['get-text', '--match=title:('], ['launch', '--type=cube']):
+                at(*args, expect=1)
+
             for args in (['run', 'no such command'], ['get-text', '--id=99'], ['dance']):
                 at(*args, expect=1)
         finally:
@@ -559,7 +601,7 @@ class Tests:
                 f.write(f'shell=/bin/sh {script}\nlogin-shell=no\nmacos-confirm-close=no\n')
 
             self.env = dict(ENV, FOOT_SESSIONS_SOCKET=self.sock, DYLD_INSERT_LIBRARIES=tests.driver,
-                            FOOT_SMOKE_DIR=tmp)
+                            FOOT_SMOKE_DIR=tmp, FOOT_CONTROL_SOCKET=os.path.join(tmp, 'c.sock'))
 
         def start(self):
             return subprocess.Popen(
@@ -647,6 +689,20 @@ class Tests:
             t.footd_pid(a)
             if t.size(a) != (30, 100):
                 raise Failure(f'size: {t.size(a)}')
+
+            # foot @ launch: a session too, with the caller's directory and
+            # environment; gone with its command
+            launched = os.path.join(t.tmp, 'launched')
+            subprocess.run(
+                [self.foot, '@', 'launch', '--type=split', 'sh', '-c',
+                 f'echo "$FOOT_TEST_VAR in $PWD" > {launched}.tmp; mv {launched}.tmp {launched}'],
+                cwd='/usr', env=dict(t.env, FOOT_TEST_VAR='a value'), check=True, timeout=TIMEOUT,
+                stdout=subprocess.DEVNULL)
+            t.wait('the launched command', lambda: os.path.exists(launched), foot)
+            with open(launched) as f:
+                if f.read() != 'a value in /usr\n':
+                    raise Failure('launch: not with the caller\'s directory and environment')
+            t.wait('the launched session\'s end', lambda: len(t.sessions()) == 1, foot)
 
             t.perform('splitRight:')
             t.wait('a split', lambda: len(t.shells()) == 2, foot)

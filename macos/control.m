@@ -2,6 +2,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <libproc.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -31,8 +32,8 @@
  * connects, sends its arguments, and gets the command's output.
  *
  * A terminal is a pane (struct wl_window), known by a number that it
- * keeps while it's open. Without --id, a command is for the focused
- * one: the key window's, or else the frontmost window's.
+ * keeps while it's open. Without --id, or --match, a command is for the
+ * focused one: the key window's, or else the frontmost window's.
  *
  * commands and run are the menus' items, as the command palette has
  * them (palette.m), for that terminal: what can be chosen there can be
@@ -136,42 +137,148 @@ focused_terminal(void)
     return term;
 }
 
-/* --id=ID, or --id ID: removed from 'args'. Returns false if it's not a terminal's */
+/* What runs in it: its foreground process' name (not on other machines) */
+static NSString *
+program_of(const struct terminal *term)
+{
+    const pid_t pids[] = {terminal_foreground_pgrp(term), terminal_pid(term)};
+    for (size_t i = 0; i < ALEN(pids); i++) {
+        char name[2 * MAXCOMLEN + 1];
+        if (pids[i] > 0 && proc_name(pids[i], name, sizeof(name)) > 0)
+            return string(name);
+    }
+    return @"";
+}
+
+/* --match's FIELD:REGEX; the regular expression is searched for in the field */
+static bool
+matches(const struct terminal *term, NSString *field, NSRegularExpression *regex)
+{
+    const struct wl_window *win = term->window;
+    NSString *value;
+
+    if ([field isEqualToString:@"id"])
+        value = [NSString stringWithFormat:@"%u", win->control_id];
+    else if ([field isEqualToString:@"title"])
+        value = string(win->fixed_title != NULL ? win->fixed_title : term->window_title);
+    else if ([field isEqualToString:@"cwd"])
+        value = string(term->cwd);
+    else if ([field isEqualToString:@"program"])
+        value = program_of(term);
+    else {
+        const char *host = term->session != NULL ? session_link_host(term->session) : NULL;
+        value = string(host);
+    }
+
+    /* An ID is that one, not one that has it */
+    if ([field isEqualToString:@"id"])
+        return [value isEqualToString:regex.pattern];
+
+    return [regex firstMatchInString:value options:0
+                               range:NSMakeRange(0, value.length)] != nil;
+}
+
+/*
+ * --id=ID and --match=FIELD:REGEX (or with the value as the next
+ * argument), removed from 'args': the terminals that are meant, in the
+ * order they were opened in; without these options, the focused one.
+ * Returns nil, with an error, if there's none.
+ */
+static NSArray<NSValue *> *
+targets(NSMutableArray<NSString *> *args, NSString **error)
+{
+    NSMutableArray<NSValue *> *terms = [NSMutableArray array];
+
+    for (NSUInteger i = 0; i < args.count; i++) {
+        NSString *option = nil, *value = nil;
+        for (NSString *name in @[@"--id", @"--match"]) {
+            if ([args[i] hasPrefix:[name stringByAppendingString:@"="]]) {
+                option = name;
+                value = [args[i] substringFromIndex:name.length + 1];
+                [args removeObjectAtIndex:i];
+            } else if ([args[i] isEqualToString:name] && i + 1 < args.count) {
+                option = name;
+                value = args[i + 1];
+                [args removeObjectsInRange:NSMakeRange(i, 2)];
+            }
+            if (option != nil)
+                break;
+        }
+        if (option == nil)
+            continue;
+
+        if ([option isEqualToString:@"--id"]) {
+            struct terminal *term = terminal_with_id((uint32_t)value.longLongValue);
+            if (term == NULL) {
+                *error = [NSString stringWithFormat:
+                    @"%@: no terminal with this ID (see foot @ ls)", value];
+                return nil;
+            }
+            return @[[NSValue valueWithPointer:term]];
+        }
+
+        const NSRange colon = [value rangeOfString:@":"];
+        NSString *field = colon.location != NSNotFound ? [value substringToIndex:colon.location] : @"";
+        if (![@[@"id", @"title", @"cwd", @"program", @"host"] containsObject:field]) {
+            *error = [NSString stringWithFormat:
+                @"--match %@: it's FIELD:REGEX, with id, title, cwd, program or host", value];
+            return nil;
+        }
+
+        NSRegularExpression *regex = [NSRegularExpression
+            regularExpressionWithPattern:[value substringFromIndex:colon.location + 1]
+                                 options:0 error:NULL];
+        if (regex == nil) {
+            *error = [NSString stringWithFormat:@"--match %@: not a regular expression", value];
+            return nil;
+        }
+
+        tll_foreach(control.wayl->terms, it) {
+            if (it->item->window != NULL && !it->item->shutdown.in_progress &&
+                matches(it->item, field, regex))
+            {
+                [terms addObject:[NSValue valueWithPointer:it->item]];
+            }
+        }
+
+        if (terms.count == 0) {
+            *error = [NSString stringWithFormat:@"--match %@: no such terminal (see foot @ ls)", value];
+            return nil;
+        }
+        return terms;
+    }
+
+    struct terminal *term = focused_terminal();
+    if (term == NULL) {
+        *error = @"there is no terminal";
+        return nil;
+    }
+    return @[[NSValue valueWithPointer:term]];
+}
+
+/* For what one terminal does: the first of them */
 static bool
 target(NSMutableArray<NSString *> *args, struct terminal **term, NSString **error)
 {
-    *term = NULL;
-
-    for (NSUInteger i = 0; i < args.count; i++) {
-        NSString *value = nil;
-        if ([args[i] hasPrefix:@"--id="]) {
-            value = [args[i] substringFromIndex:5];
-            [args removeObjectAtIndex:i];
-        } else if ([args[i] isEqualToString:@"--id"] && i + 1 < args.count) {
-            value = args[i + 1];
-            [args removeObjectsInRange:NSMakeRange(i, 2)];
-        } else
-            continue;
-
-        *term = terminal_with_id((uint32_t)value.longLongValue);
-        if (*term == NULL) {
-            *error = [NSString stringWithFormat:@"%@: no terminal with this ID (see foot @ ls)", value];
-            return false;
-        }
-        return true;
-    }
-
-    *term = focused_terminal();
-    if (*term == NULL) {
-        *error = @"there is no terminal";
-        return false;
-    }
-    return true;
+    NSArray<NSValue *> *terms = targets(args, error);
+    *term = terms != nil ? terms[0].pointerValue : NULL;
+    return terms != nil;
 }
 
+/* All of them; with --id, or --match, those */
 static struct reply
-ls(void)
+ls(NSMutableArray<NSString *> *args)
 {
+    NSArray<NSValue *> *only = nil;
+    if (args.count > 0) {
+        NSString *error;
+        only = targets(args, &error);
+        if (only == nil)
+            return failed(error);
+        if (args.count > 0)
+            return failed([NSString stringWithFormat:@"ls: %@: unknown option", args[0]]);
+    }
+
     const struct terminal *focused = focused_terminal();
     NSMutableArray *list = [NSMutableArray array];
 
@@ -180,6 +287,8 @@ ls(void)
         const struct wl_window *win = term->window;
         if (win == NULL || term->shutdown.in_progress)
             continue;
+        if (only != nil && ![only containsObject:[NSValue valueWithPointer:term]])
+            continue;
 
         NSMutableDictionary *entry = [NSMutableDictionary dictionary];
         entry[@"id"] = @(win->control_id);
@@ -187,6 +296,7 @@ ls(void)
         entry[@"focused"] = term == focused ? @YES : @NO;
         entry[@"title"] = string(win->fixed_title != NULL ? win->fixed_title : term->window_title);
         entry[@"cwd"] = string(term->cwd);
+        entry[@"program"] = program_of(term);
         entry[@"columns"] = @(term->cols);
         entry[@"rows"] = @(term->rows);
         if (win->quake)
@@ -216,16 +326,18 @@ ls(void)
 static struct reply
 send_text(NSMutableArray<NSString *> *args, NSData *data)
 {
-    struct terminal *term;
+    /* All that match */
     NSString *error;
-    if (!target(args, &term, &error))
+    NSArray<NSValue *> *terms = targets(args, &error);
+    if (terms == nil)
         return failed(error);
     if (args.count > 0)
         return failed([NSString stringWithFormat:@"send-text: %@: unknown option", args[0]]);
 
-    if (data.length > 0 && !term_to_slave(term, data.bytes, data.length))
-        return failed(@"send-text: the terminal didn't take it");
-    return succeeded(nil);
+    bool ok = true;
+    for (NSValue *term in terms)
+        ok = (data.length == 0 || term_to_slave(term.pointerValue, data.bytes, data.length)) && ok;
+    return ok ? succeeded(nil) : failed(@"send-text: the terminal didn't take it");
 }
 
 static struct reply
@@ -259,13 +371,130 @@ get_text(NSMutableArray<NSString *> *args)
 static struct reply
 set_title(NSMutableArray<NSString *> *args)
 {
-    struct terminal *term;
     NSString *error;
-    if (!target(args, &term, &error))
+    NSArray<NSValue *> *terms = targets(args, &error);
+    if (terms == nil)
         return failed(error);
 
-    window_set_fixed_title(term->window, [args componentsJoinedByString:@" "].UTF8String);
+    for (NSValue *term in terms) {
+        window_set_fixed_title(((struct terminal *)term.pointerValue)->window,
+                               [args componentsJoinedByString:@" "].UTF8String);
+    }
     return succeeded(nil);
+}
+
+/*
+ * launch [OPTIONS] [COMMAND...]: a new terminal, in a window, a tab or
+ * a split, next to the terminal that's meant. 'data' is the client's
+ * environment (each variable ends with a NUL): the command's, as with
+ * footclient. Prints the new terminal's ID.
+ */
+static struct reply
+launch(NSMutableArray<NSString *> *args, NSData *data)
+{
+    /* The options end where the command begins */
+    NSMutableArray<NSString *> *options = [NSMutableArray array];
+    while (args.count > 0 && [args[0] hasPrefix:@"--"]) {
+        NSString *option = args[0];
+        [args removeObjectAtIndex:0];
+        if ([option isEqualToString:@"--"])
+            break;
+        [options addObject:option];
+
+        /* --id ID */
+        if (([option isEqualToString:@"--id"] || [option isEqualToString:@"--match"]) &&
+            args.count > 0)
+        {
+            [options addObject:args[0]];
+            [args removeObjectAtIndex:0];
+        }
+    }
+
+    /* Without terminals, there's still a new window */
+    struct terminal *near = NULL;
+    NSString *error;
+    const bool chosen = [options indexOfObjectPassingTest:^BOOL(NSString *o, NSUInteger i, BOOL *s) {
+        return [o hasPrefix:@"--id"] || [o hasPrefix:@"--match"];
+    }] != NSNotFound;
+    if (!target(options, &near, &error) && (chosen || tll_length(control.wayl->terms) > 0))
+        return failed(error);
+
+    enum launch_type type = LAUNCH_WINDOW;
+    enum split_dir dir = SPLIT_RIGHT;
+    NSString *cwd = nil, *client_cwd = nil, *title = nil;
+    bool hold = false;
+
+    for (NSString *option in options) {
+        NSString *value = [option substringFromIndex:
+            MIN(option.length, [option rangeOfString:@"="].location + 1)];
+
+        if ([option isEqualToString:@"--type=window"])
+            type = LAUNCH_WINDOW;
+        else if ([option isEqualToString:@"--type=tab"])
+            type = LAUNCH_TAB;
+        else if ([option isEqualToString:@"--type=split"])
+            type = LAUNCH_SPLIT;
+        else if ([option isEqualToString:@"--direction=right"])
+            dir = SPLIT_RIGHT;
+        else if ([option isEqualToString:@"--direction=down"])
+            dir = SPLIT_DOWN;
+        else if ([option isEqualToString:@"--direction=left"])
+            dir = SPLIT_LEFT;
+        else if ([option isEqualToString:@"--direction=up"])
+            dir = SPLIT_UP;
+        else if ([option hasPrefix:@"--cwd="])
+            cwd = value;
+        else if ([option hasPrefix:@"--client-cwd="])
+            client_cwd = value;
+        else if ([option hasPrefix:@"--title="])
+            title = value;
+        else if ([option isEqualToString:@"--hold"])
+            hold = true;
+        else
+            return failed([NSString stringWithFormat:@"launch: %@: unknown option", option]);
+    }
+
+    if (near == NULL && type != LAUNCH_WINDOW)
+        return failed(@"launch: there is no terminal for a tab, or a split");
+    if (cwd == nil)
+        cwd = client_cwd;
+
+    /* The command, and the client's environment */
+    const size_t argc = args.count;
+    char **argv = xcalloc(argc + 1, sizeof(argv[0]));
+    for (size_t i = 0; i < argc; i++)
+        argv[i] = xstrdup(args[i].UTF8String);
+
+    size_t env_count = 0;
+    const char *bytes = data.bytes;
+    const bool have_env = data.length > 0 && bytes[data.length - 1] == '\0';
+    for (size_t i = 0; have_env && i < data.length; i++)
+        env_count += bytes[i] == '\0';
+
+    const char **envp = xcalloc(env_count + 1, sizeof(envp[0]));
+    for (size_t i = 0, n = 0; have_env && n < env_count; i += strlen(bytes + i) + 1)
+        envp[n++] = bytes + i;
+
+    struct terminal *term = app_launch(
+        near, type, dir, cwd.length > 0 ? cwd.fileSystemRepresentation : NULL,
+        (int)argc, argv, have_env ? envp : NULL, hold);
+
+    for (size_t i = 0; i < argc; i++)
+        free(argv[i]);
+    free(argv);
+    free(envp);
+
+    if (term == NULL || term->window == NULL) {
+        return failed(type == LAUNCH_TAB
+            ? @"launch: failed (this window has no tabs?)" : @"launch: failed");
+    }
+
+    if (title.length > 0)
+        window_set_fixed_title(term->window, title.UTF8String);
+
+    assign_ids();
+    return succeeded([[NSString stringWithFormat:@"%u\n", term->window->control_id]
+                      dataUsingEncoding:NSUTF8StringEncoding]);
 }
 
 static void
@@ -349,7 +578,7 @@ execute(NSMutableArray<NSString *> *args, NSData *data)
     assign_ids();
 
     if ([command isEqualToString:@"ls"])
-        return ls();
+        return ls(args);
     if ([command isEqualToString:@"send-text"])
         return send_text(args, data);
     if ([command isEqualToString:@"get-text"])
@@ -358,6 +587,8 @@ execute(NSMutableArray<NSString *> *args, NSData *data)
         return focus(args);
     if ([command isEqualToString:@"set-title"])
         return set_title(args);
+    if ([command isEqualToString:@"launch"])
+        return launch(args, data);
     if ([command isEqualToString:@"commands"])
         return commands(args, false);
     if ([command isEqualToString:@"run"])

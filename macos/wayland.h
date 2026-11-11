@@ -441,6 +441,16 @@ void wayl_set_pager_handler(
     struct wayland *wayl,
     bool (*handler)(void *data, const char *command, const char *path), void *data);
 
+/*
+ * A new terminal that runs 'argv' (argc 0: the shell), with 'envp' for
+ * its environment (NULL: foot's): foot @ launch
+ */
+void wayl_set_launch_handler(
+    struct wayland *wayl,
+    bool (*handler)(void *data, const char *cwd, int argc, char *const *argv,
+                    const char *const *envp, bool hold),
+    void *data);
+
 /* Opens the configuration in an editor (application menu: Settings) */
 void wayl_set_settings_handler(
     struct wayland *wayl, bool (*handler)(void *data), void *data);
