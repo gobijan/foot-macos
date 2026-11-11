@@ -172,11 +172,12 @@ frameworks.
   `uppercase-regex-insert`). Open Path opens the files there are, as
   Finder would; `Esc` leaves. Patterns of your own are foot's
   `[regex:name]` sections, with key bindings.
-* View > Show Scrollback in Pager shows the terminal's text, with the
-  scrollback, in `less`, in a window of its own: to search, or to
-  read on while the terminal goes on. Show Command Output in Pager
-  does that with what the last command printed (with shell
-  integration). `macos-pager=nvim` in `[main]` is another command for
+* View > Show Scrollback in Pager (`Ctrl+Shift+H`, as kitty's) shows
+  the terminal's text, with the scrollback, in `less`, in a window of
+  its own: to search, or to read on while the terminal goes on. Show
+  Command Output in Pager (`Ctrl+Shift+G`) does that with what the
+  last command printed (with shell integration). Programs with the
+  alternate screen (e.g. an editor) get these keys themselves. `macos-pager=nvim` in `[main]` is another command for
   it; the text is a file, its last argument.
 * View > Change Title… gives a terminal a title of its own, whatever
   the programs in it set (as Ghostty's; empty: theirs again). It's the

@@ -494,6 +494,20 @@ wayl_input_sent(struct terminal *term, const void *data, size_t len)
             event.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask;
 
         if ((flags & NSEventModifierFlagControl) && !(flags & NSEventModifierFlagCommand)) {
+            /*
+             * Control+Shift and a letter is the menu's first, if it has
+             * it (kitty's shortcuts: View > Show Scrollback in Pager);
+             * not while its item is disabled (e.g. in an editor).
+             */
+            NSString *key = event.charactersIgnoringModifiers;
+            if (flags == (NSEventModifierFlagControl | NSEventModifierFlagShift) &&
+                key.length == 1 &&
+                [NSCharacterSet.letterCharacterSet characterIsMember:[key characterAtIndex:0]] &&
+                [NSApp.mainMenu performKeyEquivalent:event])
+            {
+                return YES;
+            }
+
             [self keyDown:event];
             return YES;
         }

@@ -1147,10 +1147,13 @@ create_menu(void)
         }
         [menu addItem:hints];
 
+        /* kitty's shortcuts (view.m: Control+Shift is the menu's first) */
+        const NSEventModifierFlags ctrl_shift =
+            NSEventModifierFlagControl | NSEventModifierFlagShift;
         [menu addItem:menu_item(@"Show Scrollback in Pager", @selector(showScrollbackInPager:),
-                                @"", 0)];
+                                @"H", ctrl_shift)];
         [menu addItem:menu_item(@"Show Command Output in Pager",
-                                @selector(showCommandOutputInPager:), @"", 0)];
+                                @selector(showCommandOutputInPager:), @"G", ctrl_shift)];
         [menu addItem:menu_item(@"Change Title…", @selector(changeTitle:), @"", 0)];
         [menu addItem:[NSMenuItem separatorItem]];
 
