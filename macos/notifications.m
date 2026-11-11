@@ -212,6 +212,71 @@ category_of(NSArray<NSString *> *labels)
     return identifier;
 }
 
+/*
+ * A command of the shell's that took long (macos-notify-on-command-finish):
+ * for when one is elsewhere, in another application, window or split
+ */
+
+void
+wayl_command_executed(struct terminal *term)
+{
+    struct wl_window *win = term->window;
+    if (win == NULL)
+        return;
+
+    win->command_running = true;
+    clock_gettime(CLOCK_MONOTONIC, &win->command_started);
+}
+
+void
+wayl_command_finished(struct terminal *term, const char *status)
+{
+    struct wl_window *win = term->window;
+    if (win == NULL || !win->command_running)
+        return;
+    win->command_running = false;
+
+    const float after = term->conf->macos.notify_on_command_finish;
+    if (after < 0.)
+        return;
+
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    const double elapsed = (now.tv_sec - win->command_started.tv_sec) +
+        (now.tv_nsec - win->command_started.tv_nsec) / 1e9;
+    if (elapsed < after)
+        return;
+
+    /* ";0", ";1": not all shells tell */
+    const long code = status[0] == ';' ? strtol(status + 1, NULL, 10) : 0;
+
+    const long secs = (long)(elapsed + .5);
+    char duration[64];
+    if (secs >= 3600)
+        snprintf(duration, sizeof(duration), "%ldh %ldm", secs / 3600, secs % 3600 / 60);
+    else if (secs >= 60)
+        snprintf(duration, sizeof(duration), "%ldm %lds", secs / 60, secs % 60);
+    else
+        snprintf(duration, sizeof(duration), "%lds", secs);
+
+    /* Which terminal: its title */
+    const char *where = term->window_title != NULL ? term->window_title : "";
+
+    struct notification notif = {
+        .title = xstrdup(code != 0 ? "Command failed" : "Command finished"),
+        .body = code != 0
+            ? xasprintf("%s%sExit status %ld, after %s", where, where[0] != '\0' ? "\n" : "",
+                        code, duration)
+            : xasprintf("%s%sAfter %s", where, where[0] != '\0' ? "\n" : "", duration),
+        .expire_time = -1,
+        .focus = true,
+    };
+
+    /* Not with the keyboard focus, as the programs' (inhibit-when-focused) */
+    notify_notify(term, &notif);
+    notify_free(term, &notif);
+}
+
 bool
 wayl_notify(struct terminal *term, struct notification *notif, const char *title,
             const char *body)

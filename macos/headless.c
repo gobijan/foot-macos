@@ -493,6 +493,8 @@ notify_notify(struct terminal *term, struct notification *notif)
 }
 
 void notify_close(struct terminal *term, const char *id) {}
+void wayl_command_executed(struct terminal *term) {}
+void wayl_command_finished(struct terminal *term, const char *status) {}
 void notify_free(struct terminal *term, struct notification *notif) {}
 
 void

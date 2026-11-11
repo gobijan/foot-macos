@@ -93,6 +93,32 @@ class Tests:
             if lines[-1] != 'done' or len(lines) != (3 if only is not None else 8):
                 raise Failure(f'{size}: unexpected results: {lines}')
 
+    def test_command_finish(self):
+        """A command that took long is notified of, with its exit status; a short one isn't"""
+        tmp = os.path.join(self.tmp, 'command-finish')
+        os.mkdir(tmp)
+        out = os.path.join(tmp, 'notified')
+        config = os.path.join(tmp, 'foot.ini')
+        with open(config, 'w') as f:
+            f.write('macos-notify-on-command-finish=1\n'
+                    '[desktop-notifications]\n'
+                    'inhibit-when-focused=no\n'
+                    f'command=sh -c \'printf "%s|%s|" "$1" "$2" >> {out}\' sh ${{title}} ${{body}}\n')
+
+        # What a shell with the integration prints (OSC 133;C and D): a short
+        # command, then a long one
+        script = f"""
+            printf '\\033]2;a title\\007'
+            printf '\\033]133;C\\007'; printf '\\033]133;D;0\\007'
+            printf '\\033]133;C\\007'; sleep 1.2; printf '\\033]133;D;3\\007'
+            for i in $(seq 100); do test -s {out} && break; sleep .1; done
+        """
+        run(self.foot, f'--config={config}', 'sh', '-c', script)
+        with open(out) as f:
+            got = f.read()
+        if got != 'Command failed|a title\nExit status 3, after 1s|':
+            raise Failure(f'notified: {got!r}')
+
     def test_shell_integration(self):
         """zsh reads foot's integration, and the user's startup files after it"""
         home = os.path.join(self.tmp, 'shell-home')

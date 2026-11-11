@@ -324,6 +324,10 @@ struct wl_window {
 
     char *title;     /* The window title, while the pane has the focus */
 
+    /* Since when the shell's command runs (wayl_command_executed()) */
+    bool command_running;
+    struct timespec command_started;
+
     /* The quake terminal's panel (macos/quake.m) */
     bool quake;
 
@@ -520,6 +524,15 @@ bool wayl_notify(struct terminal *term, struct notification *notif,
                  const char *title, const char *body);
 bool wayl_notify_close(struct terminal *term, struct notification *notif);
 bool wayl_win_ring_bell(const struct wl_window *win);
+
+/*
+ * The shell says a command's output starts (OSC 133;C), and ends
+ * (OSC 133;D, 'status': what follows the D, e.g. ";1"). One that took
+ * long is notified of, in a terminal without the keyboard focus
+ * (macos-notify-on-command-finish; macos/notifications.m).
+ */
+void wayl_command_executed(struct terminal *term);
+void wayl_command_finished(struct terminal *term, const char *status);
 
 /* Requests a frame callback, i.e. a call to render's frame handler
  * at the next display refresh */

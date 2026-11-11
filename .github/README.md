@@ -219,6 +219,13 @@ frameworks.
   are none otherwise, turn them on in System Settings > Notifications >
   foot: macOS doesn't ask again after a no, or when foot exited while
   it was asking.
+* `macos-notify-on-command-finish=10` in `[main]`: a notification when
+  a command that took 10 seconds or longer ends, with its exit status
+  if it failed, and how long it took (as kitty's and Ghostty's; like
+  theirs, off by default: `never`). Like other notifications, not for
+  the terminal with the keyboard focus (`inhibit-when-focused`), and
+  clicking it leads back to its terminal. It needs the shell's
+  integration, see below.
 * Drop a folder on the Dock icon, or use Open With in the Finder, to
   open a window in it; a script opened that way runs in a window that
   stays until it's closed. The Finder's context menu has New foot Window

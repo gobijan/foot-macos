@@ -1180,6 +1180,25 @@ parse_section_main(struct context *ctx)
     else if (streq(key, "macos-shell-integration"))
         return value_to_bool(ctx, &conf->macos.shell_integration);
 
+    else if (streq(key, "macos-notify-on-command-finish")) {
+        if (streq(value, "never")) {
+            conf->macos.notify_on_command_finish = -1.;
+            return true;
+        }
+
+        float seconds;
+        if (!value_to_float(ctx, &seconds))
+            return false;
+
+        if (!(seconds >= 0.)) {
+            LOG_CONTEXTUAL_ERR("not never, or a number of seconds");
+            return false;
+        }
+
+        conf->macos.notify_on_command_finish = seconds;
+        return true;
+    }
+
     else if (streq(key, "macos-titlebar-style")) {
         return value_to_enum(
             ctx, (const char *[]){"native", "tabs", NULL}, &conf->macos.titlebar_style);
@@ -3719,6 +3738,7 @@ config_load(struct config *conf, const char *conf_path,
             .confirm_close = true,
             .sessions = true,
             .shell_integration = true,
+            .notify_on_command_finish = -1.,
             .quake = {
                 .width = 0.,    /* Twice the height */
                 .height = 50.,

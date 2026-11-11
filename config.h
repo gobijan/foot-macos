@@ -265,6 +265,9 @@ struct config {
         /* zsh, bash and fish read foot's integration (macos/shell-integration.h) */
         bool shell_integration;
 
+        /* Commands that took that many seconds are notified of; < 0: never */
+        float notify_on_command_finish;
+
         /* The tab bar in the titlebar (enum macos_titlebar_style) */
         int titlebar_style;
 

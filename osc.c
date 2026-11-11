@@ -1641,6 +1641,9 @@ osc_dispatch(struct terminal *term)
                     term->grid->cursor.point.row,
                     term->grid->cursor.point.col);
             term->grid->cur_row->shell_integration.cmd_start = term->grid->cursor.point.col;
+#if defined(__APPLE__) || defined(FOOT_HEADLESS)
+            wayl_command_executed(term);
+#endif
             break;
 
         case 'D':
@@ -1648,6 +1651,9 @@ osc_dispatch(struct terminal *term)
                     term->grid->cursor.point.row,
                     term->grid->cursor.point.col);
             term->grid->cur_row->shell_integration.cmd_end = term->grid->cursor.point.col;
+#if defined(__APPLE__) || defined(FOOT_HEADLESS)
+            wayl_command_finished(term, string + 1);
+#endif
             break;
         }
         break;
