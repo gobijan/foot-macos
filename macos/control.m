@@ -185,7 +185,7 @@ ls(void)
         entry[@"id"] = @(win->control_id);
         entry[@"window"] = @(((__bridge NSWindow *)win->nswindow).windowNumber);
         entry[@"focused"] = term == focused ? @YES : @NO;
-        entry[@"title"] = string(term->window_title);
+        entry[@"title"] = string(win->fixed_title != NULL ? win->fixed_title : term->window_title);
         entry[@"cwd"] = string(term->cwd);
         entry[@"columns"] = @(term->cols);
         entry[@"rows"] = @(term->rows);
@@ -253,6 +253,19 @@ get_text(NSMutableArray<NSString *> *args)
     }
 
     return succeeded([NSData dataWithBytesNoCopy:text length:len freeWhenDone:YES]);
+}
+
+/* View > Change Title's; none: the programs' title again */
+static struct reply
+set_title(NSMutableArray<NSString *> *args)
+{
+    struct terminal *term;
+    NSString *error;
+    if (!target(args, &term, &error))
+        return failed(error);
+
+    window_set_fixed_title(term->window, [args componentsJoinedByString:@" "].UTF8String);
+    return succeeded(nil);
 }
 
 static void
@@ -343,6 +356,8 @@ execute(NSMutableArray<NSString *> *args, NSData *data)
         return get_text(args);
     if ([command isEqualToString:@"focus"])
         return focus(args);
+    if ([command isEqualToString:@"set-title"])
+        return set_title(args);
     if ([command isEqualToString:@"commands"])
         return commands(args, false);
     if ([command isEqualToString:@"run"])

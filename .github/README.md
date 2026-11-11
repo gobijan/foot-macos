@@ -160,6 +160,20 @@ frameworks.
   its font size). To move one, drag it by the dots at its top (they
   show when the mouse is near them) onto another one: it goes to the
   side of that one that's highlighted.
+* Shell > Send Input to All Splits: what's typed, or pasted, in one
+  split goes to the window's (or tab's) others too, e.g. the same
+  command on several machines, until it's switched off again. None is
+  dimmed meanwhile. They get the same bytes, so they should be in the
+  same state (e.g. all at a shell's prompt).
+* View > Change Title… gives a terminal a title of its own, whatever
+  the programs in it set (as Ghostty's; empty: theirs again). It's the
+  tab's, and the window's, while that terminal has the focus, and it's
+  kept with persistent sessions. From a script: `foot @ set-title`.
+* `blur=yes` in `[colors-dark]` and `[colors-light]` blurs what's
+  behind a transparent window (`alpha` below 1), as foot's own option
+  does on Wayland. macOS has no public API for that: like kitty,
+  Ghostty and iTerm2, foot asks the window server directly, so a macOS
+  update could end it (the window is transparent without blur then).
 * `Cmd`+click opens a URL or a hyperlink (OSC 8), with `[url]`'s
   `launch`; the mouse pointer shows which text is one while `Cmd` is
   down.
@@ -364,6 +378,8 @@ foot @ send-text --id=3 --stdin < f   # into that one, from stdin, as it is
 foot @ get-text --scrollback          # what it shows; all of it
 foot @ get-text --command-output      # what the last command printed
 foot @ focus --id=3                   # to the front
+foot @ set-title --id=3 build         # its title, whatever runs in it
+foot @ set-title --id=3               # the programs' title again
 foot @ commands                       # what the menus have, with shortcuts
 foot @ run New Tab                    # one of them
 foot @ run --id=3 Split Right

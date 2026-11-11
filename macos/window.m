@@ -5,6 +5,7 @@
 
 #import <QuartzCore/QuartzCore.h>
 
+#include <dlfcn.h>
 #include <math.h>
 
 #include <tllist.h>
@@ -291,18 +292,50 @@ is_transparent(const struct wl_window *win)
     return win->term->colors.alpha < 0xffff && !win->is_fullscreen;
 }
 
+/*
+ * [colors]' blur: what's behind a transparent window is blurred. AppKit
+ * has nothing for a window's own contents to be drawn over a blur; this
+ * is the window server's, which kitty and Ghostty use too (a private
+ * function: a macOS update could take it away, hence the dlsym())
+ */
+#define BLUR_RADIUS 20
+
+static void
+set_blur(NSWindow *nswindow, bool blur)
+{
+    static int (*connection)(void);
+    static int (*set_radius)(int connection, uint32_t window, int radius);
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        /* (ISO C has no cast from an object pointer to a function's) */
+        void *symbol = dlsym(RTLD_DEFAULT, "CGSDefaultConnectionForThread");
+        memcpy(&connection, &symbol, sizeof(symbol));
+        symbol = dlsym(RTLD_DEFAULT, "CGSSetWindowBackgroundBlurRadius");
+        memcpy(&set_radius, &symbol, sizeof(symbol));
+        if (connection == NULL || set_radius == NULL)
+            LOG_WARN("blur: not available on this macOS");
+    });
+
+    if (connection != NULL && set_radius != NULL && nswindow.windowNumber > 0)
+        set_radius(connection(), (uint32_t)nswindow.windowNumber, blur ? BLUR_RADIUS : 0);
+}
+
 void
 wayl_win_alpha_changed(struct wl_window *win)
 {
     NSWindow *nswindow = nswindow_of(win);
     const bool transparent = is_transparent(win);
 
-    /* The window is opaque while all its panes are */
+    /* The window is opaque while all its panes are; and blurred, if one wants it */
     bool any_transparent = transparent;
+    bool any_blur = transparent && term_theme_get(win->term)->blur;
     for (FootView *view in splits_of(win).panes) {
-        if (view.win != NULL && view.win != win)
-            any_transparent = any_transparent || is_transparent(view.win);
+        if (view.win != NULL && view.win != win && is_transparent(view.win)) {
+            any_transparent = true;
+            any_blur = any_blur || term_theme_get(view.win->term)->blur;
+        }
     }
+    set_blur(nswindow, any_blur);
 
     nswindow.opaque = !any_transparent;
     nswindow.backgroundColor = any_transparent
@@ -715,6 +748,7 @@ wayl_win_destroy(struct wl_window *win)
 
     tll_free(win->on_outputs);
     free(win->title);
+    free(win->fixed_title);
 
     if (win->view != NULL)
         [view_of(win) invalidate];
@@ -777,6 +811,10 @@ wayl_win_set_title(struct wl_window *win, const char *title)
     const char *host = win->term != NULL ? session_link_host(win->term->session) : NULL;
     NSString *badge = host != NULL ? connections_badge([NSString stringWithUTF8String:host]) : nil;
 
+    /* View > Change Title */
+    if (win->fixed_title != NULL)
+        title = win->fixed_title;
+
     free(win->title);
     win->title = badge != nil ? xasprintf("%s — %s", badge.UTF8String, title) : xstrdup(title);
     title = win->title;
@@ -788,6 +826,17 @@ wayl_win_set_title(struct wl_window *win, const char *title)
 
     NSString *str = [NSString stringWithUTF8String:title];
     nswindow_of(win).title = str != nil ? str : @"foot";
+}
+
+void
+window_set_fixed_title(struct wl_window *win, const char *title)
+{
+    free(win->fixed_title);
+    win->fixed_title = title != NULL && title[0] != '\0' ? xstrdup(title) : NULL;
+
+    const char *current = win->term != NULL ? win->term->window_title : NULL;
+    wayl_win_set_title(win, current != NULL ? current : "foot");
+    session_layout_changed();
 }
 
 void

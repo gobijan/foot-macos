@@ -811,7 +811,7 @@ drop_side(NSPoint p, struct split_rect r)
 
     for (struct split *it = split_first(_root); it != NULL; it = split_following(it)) {
         const struct wl_window *win = it->pane;
-        const BOOL dimmed = many && win != _focused && _zoomed == NULL;
+        const BOOL dimmed = many && win != _focused && _zoomed == NULL && !_sendsInputToAll;
 
         CGColorRef color = dimmed
             ? create_color(win->term->colors.bg, 1. - UNFOCUSED_OPACITY) : NULL;
@@ -1325,6 +1325,17 @@ drop_side(NSPoint p, struct split_rect r)
 - (void)moveDividerLeft:(id)sender   { [self moveDividerInDirection:SPLIT_LEFT]; }
 - (void)moveDividerRight:(id)sender  { [self moveDividerInDirection:SPLIT_RIGHT]; }
 
+/*
+ * Send Input to All Splits: what's typed (and pasted) in one pane, the
+ * window's others get too (view.m). None is dimmed meanwhile.
+ */
+- (void)toggleInputToAll:(id)sender
+{
+    _sendsInputToAll = !_sendsInputToAll;
+    [self updateDecorations];
+    app_run_hooks();
+}
+
 /* Close (Cmd+W): the focused pane, if there are others; else the window (or tab) */
 - (void)performClose:(id)sender
 {
@@ -1366,6 +1377,11 @@ drop_side(NSPoint p, struct split_rect r)
         action == @selector(splitLeft:) || action == @selector(splitUp:))
     {
         return _focused != NULL && !quake;
+    }
+
+    if (action == @selector(toggleInputToAll:)) {
+        item.state = _sendsInputToAll ? NSControlStateValueOn : NSControlStateValueOff;
+        return many || _sendsInputToAll;
     }
 
     if (action == @selector(toggleSplitZoom:)) {

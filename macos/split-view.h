@@ -25,6 +25,9 @@
 @property (nonatomic, strong) id<NSWindowDelegate> windowDelegate;
 
 @property (nonatomic, readonly) struct wl_window *focused;
+
+/* Shell > Send Input to All Splits: what's typed in one pane, all get */
+@property (nonatomic) BOOL sendsInputToAll;
 @property (nonatomic, readonly) size_t count;
 
 /* The panes, in order (their 'win' is NULL once destroyed) */

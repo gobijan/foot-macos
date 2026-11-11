@@ -60,7 +60,13 @@ save_node(const struct split *node)
 {
     if (node->kind == SPLIT_LEAF) {
         const uint64_t id = pane_session(node->pane);
-        return id != 0 ? @{@"session": @(id)} : nil;
+        if (id == 0)
+            return nil;
+
+        /* View > Change Title */
+        const struct wl_window *pane = node->pane;
+        NSString *title = pane->fixed_title != NULL ? @(pane->fixed_title) : nil;
+        return title != nil ? @{@"session": @(id), @"title": title} : @{@"session": @(id)};
     }
 
     NSDictionary *first = save_node(node->first);
@@ -288,6 +294,8 @@ restore_node(NSDictionary *node, struct wl_window *leaf,
 {
     if (node[@"session"] != nil) {
         panes[node[@"session"]] = [NSValue valueWithPointer:leaf];
+        if ([node[@"title"] isKindOfClass:[NSString class]])
+            window_set_fixed_title(leaf, [node[@"title"] UTF8String]);
         return;
     }
 

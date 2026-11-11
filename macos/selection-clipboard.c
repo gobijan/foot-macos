@@ -384,8 +384,8 @@ receive_offer_done(void *user)
         fdm_event_add(term->fdm, term->ptmx, EPOLLOUT);
 }
 
-void
-selection_from_clipboard(struct seat *seat, struct terminal *term, uint32_t serial)
+static void
+paste_clipboard(struct seat *seat, struct terminal *term)
 {
     if (term->is_sending_paste_data) {
         /* We're already pasting... */
@@ -402,6 +402,21 @@ selection_from_clipboard(struct seat *seat, struct terminal *term, uint32_t seri
 
     text_from_clipboard(
         seat, term, false, &receive_offer, &receive_offer_done, term);
+}
+
+static void
+paste_clipboard_other(struct terminal *other, void *data)
+{
+    paste_clipboard(data, other);
+}
+
+void
+selection_from_clipboard(struct seat *seat, struct terminal *term, uint32_t serial)
+{
+    paste_clipboard(seat, term);
+
+    /* Send Input to All Splits: each with its own bracketing */
+    wayl_for_each_input_target(term, &paste_clipboard_other, seat);
 }
 
 bool
@@ -444,8 +459,8 @@ text_from_primary(
         DATA_OFFER_MIME_TEXT_UTF8, cb, done, user);
 }
 
-void
-selection_from_primary(struct seat *seat, struct terminal *term)
+static void
+paste_primary(struct seat *seat, struct terminal *term)
 {
     if (term->is_sending_paste_data) {
         /* We're already pasting... */
@@ -461,6 +476,19 @@ selection_from_primary(struct seat *seat, struct terminal *term)
 
     text_from_primary(
         seat, term, false, &receive_offer, &receive_offer_done, term);
+}
+
+static void
+paste_primary_other(struct terminal *other, void *data)
+{
+    paste_primary(data, other);
+}
+
+void
+selection_from_primary(struct seat *seat, struct terminal *term)
+{
+    paste_primary(seat, term);
+    wayl_for_each_input_target(term, &paste_primary_other, seat);
 }
 
 void

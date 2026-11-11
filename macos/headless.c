@@ -313,6 +313,7 @@ wayl_win_destroy(struct wl_window *win)
 }
 
 void wayl_win_alpha_changed(struct wl_window *win) {}
+void wayl_input_sent(struct terminal *term, const void *data, size_t len) {}
 bool wayl_win_set_urgent(struct wl_window *win) { return true; }
 bool wayl_win_ring_bell(const struct wl_window *win) { return true; }
 void wayl_win_set_fullscreen(struct wl_window *win, bool fullscreen) {}

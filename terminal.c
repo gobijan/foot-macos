@@ -126,6 +126,11 @@ term_paste_data_to_slave(struct terminal *term, const void *data, size_t len)
 bool
 term_to_slave(struct terminal *term, const void *data, size_t len)
 {
+#if defined(__APPLE__)
+    /* Send Input to All Splits */
+    wayl_input_sent(term, data, len);
+#endif
+
     if (term->ptmx < 0) {
         /* We're probably in "hold" */
         return false;

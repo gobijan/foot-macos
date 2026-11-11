@@ -305,12 +305,71 @@ keymap_produces(const struct seat *seat, uint32_t key, NSString *text)
     return count > 0 && (size_t)count < sizeof(buf) && strcmp(buf, text.UTF8String) == 0;
 }
 
+/*
+ * Shell > Send Input to All Splits. What a key typed in 'typing' sends
+ * (term_to_slave()), the window's other panes get as well: the same
+ * bytes, so they should be in the same mode (e.g. all at a shell's
+ * prompt). Not what a terminal answers the programs, nor the mouse.
+ */
+static struct terminal *typing;
+
+void
+wayl_for_each_input_target(struct terminal *term,
+                           void (*cb)(struct terminal *other, void *data), void *data)
+{
+    struct wl_window *win = term->window;
+    FootSplitView *splits = win != NULL ? (__bridge FootSplitView *)win->splits : nil;
+    if (splits == nil || !splits.sendsInputToAll)
+        return;
+
+    for (FootView *view in splits.panes) {
+        struct wl_window *other = view.win;
+        if (other != NULL && other != win && other->term != NULL &&
+            !other->term->shutdown.in_progress)
+        {
+            cb(other->term, data);
+        }
+    }
+}
+
+struct typed {
+    const void *data;
+    size_t len;
+};
+
+static void
+send_typed(struct terminal *other, void *data)
+{
+    const struct typed *typed = data;
+    term_to_slave(other, typed->data, typed->len);
+}
+
+void
+wayl_input_sent(struct terminal *term, const void *data, size_t len)
+{
+    if (term != typing)
+        return;
+
+    /* (Theirs isn't passed on) */
+    typing = NULL;
+    wayl_for_each_input_target(term, &send_typed, &(struct typed){data, len});
+    typing = term;
+}
+
 - (void)keyDown:(NSEvent *)event
 {
     struct terminal *term = self.term;
     struct seat *seat = app_seat();
     if (term == NULL || seat == NULL || seat->kbd_focus != term)
         return;
+
+    typing = term;
+    [self typed:event in:term seat:seat];
+    typing = NULL;
+}
+
+- (void)typed:(NSEvent *)event in:(struct terminal *)term seat:(struct seat *)seat
+{
 
     const NSEventModifierFlags flags = event.modifierFlags;
     const uint32_t key = keyboard_xkb_keycode(event.keyCode);
@@ -471,10 +530,16 @@ keymap_produces(const struct seat *seat, uint32_t key, NSString *text)
     if (seat == NULL)
         return;
 
+    /* (Also outside of a key: e.g. the emoji picker, dictation) */
+    struct terminal *was_typing = typing;
+    typing = seat->kbd_focus;
+
     ime_preedit(seat, NULL, 0, 0);
     if (text.length > 0)
         ime_commit(seat, text.UTF8String);
     ime_done(seat);
+
+    typing = was_typing;
 }
 
 - (void)setMarkedText:(id)string selectedRange:(NSRange)selected
@@ -965,6 +1030,37 @@ url_under_mouse(struct seat *seat, struct terminal *term, bool activate)
 /* With the shell's integration (shell-integration.h): its prompts, and its commands' output */
 - (void)jumpToPreviousPrompt:(id)sender    { [self action:BIND_ACTION_PROMPT_PREV]; }
 - (void)jumpToNextPrompt:(id)sender        { [self action:BIND_ACTION_PROMPT_NEXT]; }
+
+/* View > Change Title: asked in a sheet; empty: the programs' title again */
+- (void)changeTitle:(id)sender
+{
+    struct wl_window *win = self.win;
+    if (win == NULL || self.window == nil)
+        return;
+
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = @"Change Title";
+    alert.informativeText = @"The terminal keeps this title, whatever the programs "
+        "in it set. Leave it empty for theirs.";
+    [alert addButtonWithTitle:@"OK"];
+    [alert addButtonWithTitle:@"Cancel"];
+
+    NSTextField *field = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 260, 24)];
+    NSString *fixed = win->fixed_title != NULL ? @(win->fixed_title) : nil;
+    field.stringValue = fixed != nil ? fixed : @"";
+    field.placeholderString = self.window.title;
+    alert.accessoryView = field;
+    alert.window.initialFirstResponder = field;
+
+    __weak FootView *weak = self;
+    [alert beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse response) {
+        struct wl_window *pane = weak.win;
+        if (response == NSAlertFirstButtonReturn && pane != NULL) {
+            window_set_fixed_title(pane, field.stringValue.UTF8String);
+            app_run_hooks();
+        }
+    }];
+}
 
 - (void)copyCommandOutput:(id)sender
 {

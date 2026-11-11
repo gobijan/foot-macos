@@ -1109,6 +1109,7 @@ create_menu(void)
                                 cmd | NSEventModifierFlagShift)];
         [menu addItem:menu_item(@"Show URLs", @selector(showURLs:), @"o",
                                 cmd | NSEventModifierFlagShift)];
+        [menu addItem:menu_item(@"Change Title…", @selector(changeTitle:), @"", 0)];
         [menu addItem:[NSMenuItem separatorItem]];
 
         /* The shell's prompts (shell-integration.h), as Ghostty has them */
@@ -1136,6 +1137,8 @@ create_menu(void)
         [menu addItem:menu_item(@"Show Previous Tab", @selector(selectPreviousTab:), @"{", cmd)];
         [menu addItem:menu_item(@"Show Next Tab", @selector(selectNextTab:), @"}", cmd)];
         [menu addItem:[NSMenuItem separatorItem]];
+        [menu addItem:menu_item(@"Send Input to All Splits", @selector(toggleInputToAll:),
+                                @"", 0)];
         [menu addItem:menu_item(@"Zoom Split", @selector(toggleSplitZoom:), @"\r",
                                 cmd | NSEventModifierFlagShift)];
         [menu addItem:menu_item(@"Select Previous Split", @selector(selectPreviousSplit:), @"[", cmd)];

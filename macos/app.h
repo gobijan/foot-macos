@@ -198,6 +198,12 @@ void window_update_outputs(struct wl_window *win);
 void window_resized(struct wl_window *win);
 void window_backing_changed(struct wl_window *win);
 
+/*
+ * View > Change Title: the pane's title is this one, whatever the
+ * programs set (NULL, or empty: theirs again). Kept with the layout.
+ */
+void window_set_fixed_title(struct wl_window *win, const char *title);
+
 /* The pane gets, or loses, the keyboard focus (its window is key) */
 void window_focus_in(struct wl_window *win);
 void window_focus_out(struct wl_window *win);

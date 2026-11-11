@@ -148,6 +148,19 @@ class Tests:
             if not second['focused'] or second['window'] != first['window']:
                 raise Failure(f'ls, after the split: {second}')
 
+            # A title of its own, whatever the program set; and that one again
+            at('set-title', f'--id={first["id"]}', 'my', 'title')
+            if [t['title'] for t in json.loads(at('ls'))][0] != 'my title':
+                raise Failure(f'set-title: {at("ls")}')
+            at('set-title', f'--id={first["id"]}')
+            if [t['title'] for t in json.loads(at('ls'))][0] != 'a title':
+                raise Failure(f'set-title, without one: {at("ls")}')
+
+            # Input to all splits: switched on, and off again (typing needs
+            # the keyboard focus, which a test doesn't take)
+            for state in ('on', 'off'):
+                at('run', 'Send Input to All Splits')
+
             # By its ID: the first one still is what it was, and closes
             if 'got hello there' not in at('get-text', f'--id={first["id"]}'):
                 raise Failure('get-text --id: not the first terminal')

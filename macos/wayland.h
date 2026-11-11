@@ -324,6 +324,9 @@ struct wl_window {
 
     char *title;     /* The window title, while the pane has the focus */
 
+    /* View > Change Title: this instead of the programs' (NULL: theirs) */
+    char *fixed_title;
+
     /* For foot @ (macos/control.m): the pane's ID; 0: none yet */
     uint32_t control_id;
 
@@ -542,6 +545,20 @@ void wayl_command_finished(struct terminal *term, const char *status);
 void wayl_win_request_frame(struct wl_window *win);
 
 void wayl_win_set_title(struct wl_window *win, const char *title);
+
+/*
+ * Shell > Send Input to All Splits (macos/split-view.m): the other panes
+ * of 'term's window, while it's on (else none).
+ */
+void wayl_for_each_input_target(struct terminal *term,
+                                void (*cb)(struct terminal *other, void *data),
+                                void *data);
+
+/*
+ * term_to_slave()'s: what's typed in a terminal (not what it answers to
+ * the programs) is for those too (macos/view.m)
+ */
+void wayl_input_sent(struct terminal *term, const void *data, size_t len);
 void wayl_win_set_app_id(struct wl_window *win, const char *app_id);
 void wayl_win_set_fullscreen(struct wl_window *win, bool fullscreen);
 void wayl_win_set_maximized(struct wl_window *win, bool maximized);

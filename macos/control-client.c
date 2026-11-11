@@ -32,6 +32,8 @@ static const char usage[] =
     "  get-text                prints what the terminal shows; with --scrollback, all\n"
     "                          of it; with --command-output, the last command's output\n"
     "  focus                   brings the terminal to the front\n"
+    "  set-title [TITLE]       its title, whatever the programs in it set; without\n"
+    "                          one, theirs again\n"
     "  commands                what the menus (and the command palette) have\n"
     "  run COMMAND             one of them, by its title: e.g. foot @ run New Tab\n"
     "\n"
