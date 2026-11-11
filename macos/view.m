@@ -962,6 +962,25 @@ url_under_mouse(struct seat *seat, struct terminal *term, bool activate)
 - (void)decreaseFontSize:(id)sender        { [self action:BIND_ACTION_FONT_SIZE_DOWN]; }
 - (void)resetFontSize:(id)sender           { [self action:BIND_ACTION_FONT_SIZE_RESET]; }
 
+/* With the shell's integration (shell-integration.h): its prompts, and its commands' output */
+- (void)jumpToPreviousPrompt:(id)sender    { [self action:BIND_ACTION_PROMPT_PREV]; }
+- (void)jumpToNextPrompt:(id)sender        { [self action:BIND_ACTION_PROMPT_NEXT]; }
+
+- (void)copyCommandOutput:(id)sender
+{
+    struct terminal *term = self.term;
+    struct seat *seat = app_seat();
+    char *text = NULL;
+    size_t len = 0;
+
+    if (term == NULL || seat == NULL || !term_command_output_to_text(term, &text, &len))
+        return;
+
+    /* (The clipboard's, if it takes it) */
+    if (!text_to_clipboard(seat, term, text, seat->kbd.serial != 0 ? seat->kbd.serial : 1))
+        free(text);
+}
+
 - (void)showURLs:(id)sender
 {
     struct terminal *term = self.term;
@@ -997,6 +1016,14 @@ url_under_mouse(struct seat *seat, struct terminal *term, bool activate)
         return selection_primary_has_data(app_seat());
     if (item.action == @selector(showURLs:))
         return !urls_mode_is_active(term);
+
+    /* Not in a program with the alternate screen: the shell's are in the other one */
+    if (item.action == @selector(jumpToPreviousPrompt:) ||
+        item.action == @selector(jumpToNextPrompt:) ||
+        item.action == @selector(copyCommandOutput:))
+    {
+        return term->grid == &term->normal;
+    }
 
     return YES;
 }

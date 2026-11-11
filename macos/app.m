@@ -1072,6 +1072,7 @@ create_menu(void)
         [menu addItem:menu_item(@"Paste", @selector(paste:), @"v", cmd)];
         [menu addItem:menu_item(@"Paste Selection", @selector(pasteSelection:), @"V",
                                 cmd | NSEventModifierFlagShift)];
+        [menu addItem:menu_item(@"Copy Command Output", @selector(copyCommandOutput:), @"", 0)];
         [menu addItem:[NSMenuItem separatorItem]];
         [menu addItem:menu_item(@"Find…", @selector(performFindPanelAction:), @"f", cmd)];
         [menu addItem:[NSMenuItem separatorItem]];
@@ -1100,6 +1101,14 @@ create_menu(void)
                                 cmd | NSEventModifierFlagShift)];
         [menu addItem:menu_item(@"Show URLs", @selector(showURLs:), @"o",
                                 cmd | NSEventModifierFlagShift)];
+        [menu addItem:[NSMenuItem separatorItem]];
+
+        /* The shell's prompts (shell-integration.h), as Ghostty has them */
+        const unichar up = NSUpArrowFunctionKey, down = NSDownArrowFunctionKey;
+        [menu addItem:menu_item(@"Jump to Previous Prompt", @selector(jumpToPreviousPrompt:),
+                                [NSString stringWithCharacters:&up length:1], cmd)];
+        [menu addItem:menu_item(@"Jump to Next Prompt", @selector(jumpToNextPrompt:),
+                                [NSString stringWithCharacters:&down length:1], cmd)];
         [menu addItem:[NSMenuItem separatorItem]];
         [menu addItem:menu_item(@"Enter Full Screen", @selector(toggleFullScreen:), @"f",
                                 cmd | NSEventModifierFlagControl)];

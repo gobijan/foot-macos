@@ -1102,12 +1102,16 @@ static const char install_command[] =
     "\"$d/footd.new\" --bridge-level >/dev/null && mv -f \"$d/footd.new\" \"$d/footd\" || "
     "{ rm -f \"$d/footd.new\"; exit 1; }'";
 
-/* ~/.local/bin/footd is removed, and its sessions end (footd's, and the bridges') */
+/*
+ * ~/.local/bin/footd is removed, and its sessions end (footd's, and the
+ * bridges'); and the shells' integration scripts (shell-integration.h)
+ */
 static const char uninstall_command[] =
     "sh -c 'f=\"$HOME/.local/bin/footd\"; "
     "[ -e \"$f\" ] || { echo \"there is no ~/.local/bin/footd\" >&2; exit 1; }; "
     "pkill -TERM -u \"$(id -u)\" -f \"/[.]local/bin/footd( |$)\"; rm -f \"$f\"; "
     "s=\"${XDG_STATE_HOME:-$HOME/.local/state}/foot\"; rm -f \"$s\"/sessions-*; "
+    "rm -rf \"$s/shell-integration\"; "
     "rmdir \"$s\" 2>/dev/null; exit 0'";
 
 /* A check is answered within this (milliseconds), or the connection is lost */

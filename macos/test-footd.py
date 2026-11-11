@@ -11,6 +11,7 @@
 
 import os
 import select
+import shutil
 import signal
 import socket
 import struct
@@ -261,6 +262,156 @@ def wait_exit(proc):
 def children(pid):
     out = subprocess.run(['pgrep', '-P', str(pid)], capture_output=True, text=True).stdout
     return [int(p) for p in out.split()]
+
+
+def test_shell_integration(footd, tmp):
+    """
+    zsh, bash and fish read foot's integration: they mark their prompts
+    (OSC 133), report the working directory (OSC 7), read the user's own
+    startup files, and find the environment as it was
+    """
+    global CONFIG
+
+    path = os.path.join(tmp, 'shells.sock')
+    home = os.path.join(tmp, 'home')
+    os.mkdir(home)
+
+    # The user's startup files (HOME is the sessions' too)
+    with open(os.path.join(home, '.zshenv'), 'w') as f:
+        f.write('STARTUP=zshenv\n')
+    with open(os.path.join(home, '.zshrc'), 'w') as f:
+        f.write('STARTUP=$STARTUP-zshrc\nPS1="zsh> "\n')
+    with open(os.path.join(home, '.bashrc'), 'w') as f:
+        f.write('STARTUP=bashrc\nPS1="bash> "\n')
+
+    # footd writes the scripts below its HOME
+    proc = subprocess.Popen([footd, f'--socket={path}', '--log-to-stderr', '--log-level=warning'],
+                            env=dict(os.environ, HOME=home))
+    saved = CONFIG, dict(ENV)
+    try:
+        deadline = time.time() + TIMEOUT
+        while not os.path.exists(path):
+            if time.time() > deadline or proc.poll() is not None:
+                raise Failure('footd did not start')
+            time.sleep(.02)
+
+        c = Client(path)
+        c.hello()
+
+        # Also Homebrew's shells: macOS has no fish, and its bash is left alone
+        search = '/opt/homebrew/bin:/usr/local/bin:' + ENV['PATH']
+        ENV.update(HOME=home, PATH=search, ZDOTDIR=home, ENV='/nonexistent/env')
+
+        def run(id, shell, command, expect, leave=None):
+            win, _ = create(c, id, id * 10, [shell], cwd=tmp)
+            try:
+                # The window is the terminal: fish 4 waits for its answer to
+                # DA1, the last of its queries
+                answered = 0
+
+                def read_until(needle):
+                    nonlocal answered
+                    deadline = time.time() + TIMEOUT
+                    while needle not in win.output:
+                        queries = win.output.count(b'\x1b[0c')
+                        if queries > answered:
+                            win.write(b'\x1b[?62;22c' * (queries - answered))
+                            answered = queries
+                        if time.time() > deadline:
+                            raise Failure(f'{shell}: {needle!r} not received; '
+                                          f'got {win.output[-500:]!r}')
+                        if select.select([win.ours], [], [], 0.5)[0]:
+                            win.output += win.ours.recv(65536)
+
+                read_until(b'\x1b]133;A')
+                win.write(command.encode() + b'\r')
+                read_until(expect.encode())
+                read_until(b'\x1b]133;D;0')
+                out = win.output
+                for mark in (b'\x1b]133;C', b'\x1b]7;file://'):
+                    if mark not in out:
+                        raise Failure(f'{shell}: no {mark!r}: {out[-500:]!r}')
+                if out.index(b'\x1b]133;C') > out.index(b'\x1b]133;D;0'):
+                    raise Failure(f'{shell}: the output ends before it starts: {out[-500:]!r}')
+
+                if leave is not None:
+                    win.write(leave)
+                else:
+                    c.send(KILL, u64(id) + u64(id * 10))
+                win.read_eof()
+                return out
+            finally:
+                win.close()
+
+        tested = []
+
+        zsh = shutil.which('zsh', path=search)
+        if zsh is not None:
+            out = run(101, zsh, 'echo "<$STARTUP|$ZDOTDIR|${FOOT_ZSH_ZDOTDIR-none}>"',
+                      f'<zshenv-zshrc|{home}|none>')
+            if b'\x1b]7;file://' + socket.gethostname().encode() + tmp.encode() not in out:
+                raise Failure(f'zsh: not the working directory: {out[-500:]!r}')
+            tested.append('zsh')
+
+        # (-i, as on Linux: without it, a Debian's bashrc returns right away)
+        bash = shutil.which('bash', path=search)
+        if bash is not None and not (sys.platform == 'darwin' and os.path.realpath(bash) == '/bin/bash'):
+            run(102, bash,
+                'echo "<$STARTUP|$ENV|${FOOT_BASH_ENV-none}${FOOT_BASH_INJECT-}|$(shopt -po posix)>"',
+                '<bashrc|/nonexistent/env|none|set +o posix>',
+                # (Not KILL: Homebrew's bash 5.3 stays at its prompt after a SIGHUP)
+                leave=b'exit\r')
+            tested.append('bash')
+
+        fish = shutil.which('fish', path=search)
+        if fish is not None:
+            run(103, fish,
+                'echo "<"(set -q XDG_DATA_DIRS; echo $status)"|$FOOT_FISH_XDG_DATA_DIR$FOOT_FISH_XDG_UNSET>"',
+                '<1|>')
+            ENV['XDG_DATA_DIRS'] = '/nonexistent/share:/usr/share'
+            run(104, fish, 'echo "<$XDG_DATA_DIRS|$FOOT_FISH_XDG_DATA_DIR$FOOT_FISH_XDG_UNSET>"',
+                '</nonexistent/share:/usr/share|>')
+            del ENV['XDG_DATA_DIRS']
+            tested.append('fish')
+
+        # macOS' own bash doesn't read $ENV in POSIX mode: started as it is
+        if sys.platform == 'darwin':
+            win, _ = create(c, 105, 1050, ['/bin/bash'], cwd=tmp)
+            win.read_until(b'bash> ')
+            win.write(b'echo "<$STARTUP|$(shopt -po posix)>"\r')
+            win.read_until(b'<bashrc|set +o posix>')
+            c.send(KILL, u64(105) + u64(1050))
+            win.read_eof()
+            win.close()
+
+        # macos-shell-integration=no: started as it is
+        if zsh is not None:
+            CONFIG = os.path.join(tmp, 'no-shell-integration.ini')
+            with open(CONFIG, 'w') as f:
+                f.write('macos-shell-integration=no\n')
+            win, _ = create(c, 106, 1060, [zsh], cwd=tmp)
+            win.read_until(b'zsh> ')
+            win.write(b'echo "<$STARTUP|$ZDOTDIR>"\r')
+            win.read_until(f'<zshenv-zshrc|{home}>'.encode())
+            win.read_until(b'zsh> ')
+            if b'\x1b]133;' in win.output:
+                raise Failure(f'zsh, without the integration: {win.output[-500:]!r}')
+            c.send(KILL, u64(106) + u64(1060))
+            win.read_eof()
+            win.close()
+
+        c.close()
+        if wait_exit(proc) != 0:
+            raise Failure('footd failed')
+
+        print(f'footd: shell integration: {", ".join(tested) or "no shell to test with"}')
+    finally:
+        CONFIG = saved[0]
+        ENV.clear()
+        ENV.update(saved[1])
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
 
 
 def test_remote(footd, tmp):
@@ -791,6 +942,7 @@ def main():
         if os.path.exists(path):
             raise Failure('the socket is left behind')
 
+        test_shell_integration(footd, tmp)
         test_remote(footd, tmp)
 
         print('footd: all tests passed')

@@ -93,6 +93,29 @@ class Tests:
             if lines[-1] != 'done' or len(lines) != (3 if only is not None else 8):
                 raise Failure(f'{size}: unexpected results: {lines}')
 
+    def test_shell_integration(self):
+        """zsh reads foot's integration, and the user's startup files after it"""
+        home = os.path.join(self.tmp, 'shell-home')
+        os.mkdir(home)
+        out = os.path.join(home, 'started')
+        with open(os.path.join(home, '.zshrc'), 'w') as f:
+            f.write(f'print -r -- "${{precmd_functions[*]}}|${{ZDOTDIR-none}}" > {out}\nexit 0\n')
+
+        # (The scripts are written below HOME)
+        env = dict(ENV, HOME=home)
+        env.pop('ZDOTDIR', None)
+        run(*self.foot_args('zsh'), env=env)
+        with open(out) as f:
+            got = f.read().strip()
+        if got != '_foot_precmd|none':
+            raise Failure(f'with the integration: {got!r}')
+
+        run(*self.foot_args('-o', 'macos-shell-integration=no', 'zsh'), env=env)
+        with open(out) as f:
+            got = f.read().strip()
+        if got != '|none':
+            raise Failure(f'without the integration: {got!r}')
+
     def test_input(self):
         """Control sequences a shell's programs use: terminal size, colors, a title"""
         out = os.path.join(self.tmp, 'stty.txt')

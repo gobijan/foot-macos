@@ -232,6 +232,20 @@ frameworks.
   the terminal as a text area, line by line, with the cursor as its
   insertion point.
 * The shell is started as a login shell, so that it sets up `$PATH`.
+* Shell integration needs no setup: zsh, bash and fish mark their
+  prompts and their commands' output (OSC 133), and report the working
+  directory (OSC 7), as kitty's and Ghostty's shells do. So `Cmd+Up` and
+  `Cmd+Down` jump to the previous and the next prompt (View), Edit >
+  Copy Command Output copies what the last command printed, `Cmd+K`
+  keeps a prompt of several rows whole, and new windows, tabs and splits
+  open in the shell's directory; foot's `prompt-prev`, `prompt-next` and
+  `pipe-command-output` key bindings work too. The shell is started so
+  that it reads foot's script before its own startup files, which are
+  read as always.
+  [Sessions on other machines](#sessions-on-other-machines) have it
+  too. Not macOS' own `/bin/bash` (3.2; Homebrew's has it), and not
+  shells started by something else (e.g. inside tmux). fish 4 does all
+  of this itself. `macos-shell-integration=no` in `[main]` turns it off.
 * `TERM=foot`; the terminfo entry is bundled, and found through
   `$TERMINFO_DIRS`.
 

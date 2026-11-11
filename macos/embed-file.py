@@ -22,6 +22,7 @@ MACOS_DEFAULTS = [
      "# macos-follow-appearance=yes  (switches between [colors-dark] and [colors-light] with the system's appearance)\n"
      "# macos-confirm-close=yes  (asks before closing a window, or quitting, with something other than the shell running)\n"
      "# macos-sessions=yes  (terminals keep running when foot quits, and its next start shows them again)\n"
+     "# macos-shell-integration=yes  (zsh, bash and fish mark their prompts and report the working directory, without setting it up)\n"
      "# macos-titlebar-style=native  (tabs: the tab bar is in the titlebar, next to the window's buttons; macOS 26 and later)\n"
      "# macos-quake-hotkey=Mod1+grave  (the quake terminal's hotkey: Option+`, the key below Esc; none: no hotkey)\n"
      "# macos-quake-position=top  (top, bottom, left, right or center)\n"
@@ -100,8 +101,8 @@ def main():
     with open(output, 'w', encoding='utf-8') as f:
         f.write('#pragma once\n\n')
         f.write(f'/* Generated from {path.split("/")[-1]} */\n')
-        f.write('#pragma clang diagnostic push\n')
-        f.write('#pragma clang diagnostic ignored "-Woverlength-strings"\n')
+        f.write('#pragma GCC diagnostic push\n')
+        f.write('#pragma GCC diagnostic ignored "-Woverlength-strings"\n')
         f.write(f'static const char {symbol}[] =\n')
         for line in text.splitlines(keepends=True):
             escaped = (line
@@ -110,7 +111,7 @@ def main():
                        .replace('\n', '\\n'))
             f.write(f'    "{escaped}"\n')
         f.write('    ;\n')
-        f.write('#pragma clang diagnostic pop\n')
+        f.write('#pragma GCC diagnostic pop\n')
 
 if __name__ == '__main__':
     main()

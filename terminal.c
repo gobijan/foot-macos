@@ -51,6 +51,9 @@
 #include "xmalloc.h"
 #include "xsnprintf.h"
 
+#if defined(__APPLE__) || defined(FOOT_HEADLESS)
+ #include "shell-integration.h"
+#endif
 #if defined(__APPLE__)
  #include "session.h"
 #endif
@@ -1478,6 +1481,11 @@ term_init(const struct config *conf, struct fdm *fdm, struct reaper *reaper,
     add_utmp_record(conf, reaper, ptmx);
 
     if (!pty_path) {
+#if defined(__APPLE__) || defined(FOOT_HEADLESS)
+        /* Its shell reads foot's integration (macos/shell-integration.h) */
+        shell_integration_prepare(conf->macos.shell_integration);
+#endif
+
         /* Start the slave/client */
         term->slave = slave_spawn(
             term->ptmx, argc, term->cwd, argv, envp, &conf->env_vars,

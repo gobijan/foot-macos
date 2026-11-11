@@ -262,6 +262,9 @@ struct config {
         /* Terminals are persistent sessions (footd, macos/session.h) */
         bool sessions;
 
+        /* zsh, bash and fish read foot's integration (macos/shell-integration.h) */
+        bool shell_integration;
+
         /* The tab bar in the titlebar (enum macos_titlebar_style) */
         int titlebar_style;
 

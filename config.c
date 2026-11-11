@@ -1177,6 +1177,9 @@ parse_section_main(struct context *ctx)
     else if (streq(key, "macos-sessions"))
         return value_to_bool(ctx, &conf->macos.sessions);
 
+    else if (streq(key, "macos-shell-integration"))
+        return value_to_bool(ctx, &conf->macos.shell_integration);
+
     else if (streq(key, "macos-titlebar-style")) {
         return value_to_enum(
             ctx, (const char *[]){"native", "tabs", NULL}, &conf->macos.titlebar_style);
@@ -3715,6 +3718,7 @@ config_load(struct config *conf, const char *conf_path,
             .follow_appearance = true,
             .confirm_close = true,
             .sessions = true,
+            .shell_integration = true,
             .quake = {
                 .width = 0.,    /* Twice the height */
                 .height = 50.,

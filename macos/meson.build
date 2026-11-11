@@ -238,6 +238,23 @@ default_config = custom_target(
             '--macos-defaults']
 )
 
+# The shells' integration scripts, written out where a shell reads them
+# (shell-integration.c)
+shell_integration_scripts = []
+foreach shell, script : {
+  'zsh': 'shell-integration/zsh/.zshenv',
+  'bash': 'shell-integration/bash/foot.bash',
+  'fish': 'shell-integration/fish/vendor_conf.d/foot-shell-integration.fish',
+}
+  shell_integration_scripts += custom_target(
+    'generate_shell_integration_' + shell,
+    input: files(script),
+    output: 'shell-integration-@0@.h'.format(shell),
+    command: [python, files('embed-file.py'), '@INPUT@', '@OUTPUT@',
+              'shell_integration_' + shell]
+  )
+endforeach
+
 generate_srgb_funcs = files('../scripts/srgb.py')
 srgb_funcs = custom_target(
   'generate_srgb_funcs',
@@ -316,6 +333,7 @@ footd_core = static_library(
   'font-pattern.c', 'font-pattern.h',
   'headless.c', 'headless.h',
   'rlimits.c', 'rlimits.h',
+  'shell-integration.c', 'shell-integration.h', shell_integration_scripts,
   'snapshot.c', 'snapshot.h',
   dependencies: [math, threads, pixman, xkb, utf8proc, tllist],
   link_with: [pgolib, tokenize],
@@ -387,6 +405,7 @@ foot = executable(
   'fdm.c', '../fdm.h',
   'timerfd.c', 'compat/sys/timerfd.h',
   'rlimits.c', 'rlimits.h',
+  'shell-integration.c', 'shell-integration.h', shell_integration_scripts,
   'shm.c',
   'app.m', 'app.h',
   'window.m',

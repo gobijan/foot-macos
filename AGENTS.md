@@ -41,6 +41,13 @@ site-assets`), and committed.
 
 Debug builds run foot's unit tests (`UNITTEST` blocks) at startup.
 
+Shell integration (`macos/shell-integration.c`): zsh, bash and fish are
+started so that they read foot's script for them
+(`macos/shell-integration/`, part of the binaries, written out below
+Application Support; on Linux, the state folder). The scripts are the
+port's own (MIT): don't copy from kitty's or Ghostty's, which are GPL.
+`meson test footd` runs the shells there are, `make linux` Debian's.
+
 Persistent sessions: the programs run in footd (`macos/footd.c`), a
 daemon foot starts; a window's terminal reads footd's socket instead of
 a PTY (`macos/session.c`), and the windows' layout is kept by footd

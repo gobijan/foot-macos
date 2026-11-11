@@ -25,6 +25,7 @@
 
 #if defined(__APPLE__) || defined(FOOT_HEADLESS)
  #include "rlimits.h"
+ #include "shell-integration.h"
 #endif
 
 extern char **environ;
@@ -531,6 +532,15 @@ slave_spawn(int ptmx, int argc, const char *cwd, char *const *argv,
 
         if (is_valid_shell(shell_argv[0]))
             add_to_env(&custom_env, "SHELL", shell_argv[0]);
+
+#if defined(__APPLE__) || defined(FOOT_HEADLESS)
+        /* The shell reads foot's integration (macos/shell-integration.h) */
+        struct shell_integration_var vars[SHELL_INTEGRATION_MAX_VARS];
+        const size_t var_count = shell_integration_apply(
+            &shell_argv, custom_env.envp != NULL ? custom_env.envp : environ, vars);
+        for (size_t i = 0; i < var_count; i++)
+            add_to_env(&custom_env, vars[i].name, vars[i].value);
+#endif
 
         slave_exec(ptmx, shell_argv,
                    custom_env.envp != NULL ? custom_env.envp : environ,
