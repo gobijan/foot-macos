@@ -163,7 +163,8 @@ class Tests:
 
             # Hints: the words on the screen get labels (the mode ends with
             # Escape, or the terminal)
-            if 'Hints: Copy Word\n' not in at('commands'):
+            if 'Hints: Copy Word\n' not in at('commands') or \
+                    'Open URL or Path\t' not in at('commands'):
                 raise Failure(f'commands: {at("commands")}')
             at('run', 'Hints: Copy Word')
 

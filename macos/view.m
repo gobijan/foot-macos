@@ -1154,9 +1154,10 @@ url_under_mouse(struct seat *seat, struct terminal *term, bool activate)
 
 - (void)showURLs:(id)sender
 {
+    /* With the files' paths (hints.h), as foot's own key binding for it */
     struct terminal *term = self.term;
-    if (term != NULL && !urls_mode_is_active(term))
-        [self action:BIND_ACTION_SHOW_URLS_LAUNCH];
+    if (term == NULL || !hints_show_open(term))
+        NSBeep();
 }
 
 - (void)clearToStart:(id)sender

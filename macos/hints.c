@@ -49,47 +49,17 @@ static bool is_compiled[HINT_COUNT];
 static const regex_t *
 pattern_of(enum hint hint)
 {
-    const enum hint which = hint == HINT_OPEN_PATH ? HINT_PATH : hint;
-
-    if (!is_compiled[which]) {
-        const int r = regcomp(&compiled[which], patterns[which], REG_EXTENDED | REG_ENHANCED);
+    if (!is_compiled[hint]) {
+        const int r = regcomp(&compiled[hint], patterns[hint], REG_EXTENDED | REG_ENHANCED);
         if (r != 0) {
             char err[128];
-            regerror(r, &compiled[which], err, sizeof(err));
-            LOG_ERR("%s: %s", patterns[which], err);
+            regerror(r, &compiled[hint], err, sizeof(err));
+            LOG_ERR("%s: %s", patterns[hint], err);
             return NULL;
         }
-        is_compiled[which] = true;
+        is_compiled[hint] = true;
     }
-    return &compiled[which];
-}
-
-/* "open" takes neither "~", nor a name that begins with "-" */
-static char *open_argv[] = {
-    "/bin/sh", "-c",
-    "p=$1; case $p in '~') p=$HOME;; '~/'*) p=$HOME/${p#??};; /*) ;; *) p=./$p;; esac; "
-    "exec /usr/bin/open \"$p\"",
-    "sh", "${match}", NULL,
-};
-static const struct config_spawn_template open_launch = {.argv = {.args = open_argv}};
-
-/* Whether there's such a file: in the shell's directory (OSC 7), if not absolute */
-static bool
-exists(const struct terminal *term, const char *path)
-{
-    char full[PATH_MAX];
-    const char *home = getenv("HOME");
-
-    if (path[0] == '~' && (path[1] == '/' || path[1] == '\0') && home != NULL)
-        snprintf(full, sizeof(full), "%s%s", home, path + 1);
-    else if (path[0] == '/')
-        snprintf(full, sizeof(full), "%s", path);
-    else if (term->cwd != NULL)
-        snprintf(full, sizeof(full), "%s/%s", term->cwd, path);
-    else
-        return true;    /* Can't tell */
-
-    return access(full, F_OK) == 0;
+    return &compiled[hint];
 }
 
 bool
@@ -102,25 +72,102 @@ hints_show(struct terminal *term, enum hint hint)
     if (preg == NULL)
         return false;
 
-    const bool open = hint == HINT_OPEN_PATH;
-    urls_collect(term, open ? URL_ACTION_LAUNCH : URL_ACTION_COPY, preg, false,
-                 &term->url.list);
+    urls_collect(term, URL_ACTION_COPY, preg, false, &term->url.list);
+    if (tll_length(term->url.list) == 0)
+        return false;
 
-    /* What looks like a path often isn't one ("and/or", a date) */
-    if (open) {
-        tll_foreach(term->url.list, it) {
-            if (!exists(term, it->item.url)) {
-                free(it->item.url);
-                tll_remove(term->url.list, it);
+    urls_assign_key_combos(term->conf, &term->url.list);
+    urls_render(term, &term->conf->url.launch);
+    return true;
+}
+
+/*
+ * The file's URL, if there's such a file: in the shell's directory, if
+ * the path isn't absolute (not known: no file). What looks like a path
+ * often isn't one ("and/or", a date).
+ */
+static char *
+file_url(const struct terminal *term, const char *path)
+{
+    char full[PATH_MAX];
+    const char *home = getenv("HOME");
+
+    if (path[0] == '~' && (path[1] == '/' || path[1] == '\0') && home != NULL)
+        snprintf(full, sizeof(full), "%s%s", home, path + 1);
+    else if (path[0] == '/')
+        snprintf(full, sizeof(full), "%s", path);
+    else if (term->cwd != NULL && term->cwd[0] == '/')
+        snprintf(full, sizeof(full), "%s/%s", term->cwd, path);
+    else
+        return NULL;
+
+    if (access(full, F_OK) < 0)
+        return NULL;
+
+    /* As a URL's path is read (uri.c): "%" begins an encoded character */
+    char *url = xmalloc(strlen("file://") + 3 * strlen(full) + 1);
+    char *out = stpcpy(url, "file://");
+    for (const char *p = full; *p != '\0'; p++) {
+        if (*p == '%' || *p == '?' || *p == '#')
+            out += sprintf(out, "%%%02X", (unsigned char)*p);
+        else
+            *out++ = *p;
+    }
+    *out = '\0';
+    return url;
+}
+
+/* Where a hint is on the screen, as one number */
+static long
+position(const struct terminal *term, struct coord at)
+{
+    return (long)at.row * term->cols + at.col;
+}
+
+bool
+hints_show_open(struct terminal *term)
+{
+    if (urls_mode_is_active(term))
+        return false;
+
+    /* (First: urls_collect() expects that the terminal has none yet) */
+    const regex_t *preg = pattern_of(HINT_PATH);
+    url_list_t paths = tll_init();
+    if (preg != NULL)
+        urls_collect(term, URL_ACTION_LAUNCH, preg, false, &paths);
+
+    /* As foot's show-urls-launch: the URLs, and the hyperlinks (OSC 8) */
+    urls_collect(term, URL_ACTION_LAUNCH, &term->conf->url.preg, true, &term->url.list);
+
+    tll_foreach(paths, it) {
+        struct url path = it->item;
+        tll_remove(paths, it);
+
+        /* Not what's (in) a URL already, e.g. a hyperlink on a file's name */
+        bool taken = false;
+        tll_foreach(term->url.list, url) {
+            if (position(term, path.range.start) <= position(term, url->item.range.end) &&
+                position(term, path.range.end) >= position(term, url->item.range.start))
+            {
+                taken = true;
+                break;
             }
         }
+
+        char *url = taken ? NULL : file_url(term, path.url);
+        free(path.url);
+        if (url == NULL)
+            continue;
+
+        path.url = url;
+        tll_push_back(term->url.list, path);
     }
 
     if (tll_length(term->url.list) == 0)
         return false;
 
     urls_assign_key_combos(term->conf, &term->url.list);
-    urls_render(term, open ? &open_launch : &term->conf->url.launch);
+    urls_render(term, &term->conf->url.launch);
     return true;
 }
 

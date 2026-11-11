@@ -33,6 +33,7 @@
 #include "terminal.h"
 #include "tokenize.h"
 #include "unicode-mode.h"
+#include "hints.h"
 #include "url-mode.h"
 #include "util.h"
 #include "vt.h"
@@ -342,6 +343,12 @@ execute_binding(struct seat *seat, struct terminal *term,
     case BIND_ACTION_SHOW_URLS_LAUNCH:
     case BIND_ACTION_SHOW_URLS_PERSISTENT: {
         xassert(!urls_mode_is_active(term));
+
+        /* macOS: with the paths of files (View > Open URL or Path) */
+        if (action == BIND_ACTION_SHOW_URLS_LAUNCH) {
+            hints_show_open(term);
+            return true;
+        }
 
         enum url_action url_action =
             action == BIND_ACTION_SHOW_URLS_COPY ? URL_ACTION_COPY :

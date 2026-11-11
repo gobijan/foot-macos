@@ -1181,7 +1181,7 @@ create_menu(void)
         [menu addItem:[NSMenuItem separatorItem]];
         [menu addItem:menu_item(@"Command Palette", @selector(showCommandPalette:), @"P",
                                 cmd | NSEventModifierFlagShift)];
-        [menu addItem:menu_item(@"Show URLs", @selector(showURLs:), @"o",
+        [menu addItem:menu_item(@"Open URL or Path", @selector(showURLs:), @"o",
                                 cmd | NSEventModifierFlagShift)];
 
         /* (In the command palette: "Hints: Copy Path") */
@@ -1189,7 +1189,6 @@ create_menu(void)
         hints.submenu = [[NSMenu alloc] initWithTitle:@"Hints"];
         const struct { NSString *title; enum hint hint; } kinds[] = {
             {@"Copy Path", HINT_PATH},
-            {@"Open Path", HINT_OPEN_PATH},
             {@"Copy Git Hash", HINT_HASH},
             {@"Copy IP Address", HINT_IP},
             {@"Copy Line", HINT_LINE},

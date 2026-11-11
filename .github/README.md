@@ -123,7 +123,7 @@ frameworks.
   same process, and in the current window's working directory), `Cmd+,`
   opens the configuration in `$EDITOR`, `Cmd+Shift+,` reloads it,
   `Cmd+=` / `Cmd+-` / `Cmd+0` change the font size, `Cmd+Shift+O` shows
-  URLs (like foot's `Ctrl+Shift+O`), `Ctrl+Cmd+F` toggles fullscreen.
+  URLs and files' paths to open (like foot's `Ctrl+Shift+O`), `Ctrl+Cmd+F` toggles fullscreen.
   foot's own key bindings (e.g. `Ctrl+Shift+C`) still work.
 * `Shift` and a click extend the selection to there, and dragging on
   from there too (also while a program has the mouse, as `Shift` selects
@@ -169,9 +169,13 @@ frameworks.
   path, a git hash, an IP address, or each line or word, gets a label,
   as URLs do with `Cmd+Shift+O`. Typing a label copies its text; typed
   in upper case, it's typed into the terminal too (foot's
-  `uppercase-regex-insert`). Open Path opens the files there are, as
-  Finder would; `Esc` leaves. Patterns of your own are foot's
-  `[regex:name]` sections, with key bindings.
+  `uppercase-regex-insert`); `Esc` leaves. Patterns of your own are
+  foot's `[regex:name]` sections, with key bindings.
+* View > Open URL or Path (`Cmd+Shift+O`) is foot's URL mode, with the
+  paths of the files and folders there are as well: typing a label
+  opens it, a file as Finder would (`launch` in `[url]`, which gets a
+  file's path). Relative paths are the shell's directory's, which the
+  shell integration reports.
 * View > Show Scrollback in Pager (`Ctrl+Shift+H`, as kitty's) shows
   the terminal's text, with the scrollback, in `less`, in a window of
   its own: to search, or to read on while the terminal goes on. Show
