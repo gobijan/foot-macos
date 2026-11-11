@@ -224,6 +224,7 @@ thead th { color: var(--dim); }
 .keys div { display: grid; grid-template-columns: 12ch minmax(0, 1fr); gap: 1ch; align-items: baseline; }
 .keys dt { white-space: nowrap; }
 .keys dd { margin: 0; color: var(--dim); }
+.prose .keys { margin-top: 1.6rem; }
 .facts .ghost { margin-top: 1rem; }
 
 /* Native: upstream's platform layer and the port's, as a diff */
@@ -282,6 +283,7 @@ footer nav { display: flex; flex-wrap: wrap; gap: 0.4rem 3ch; margin-top: 1.4rem
       <a href="#performance">Performance</a>
       <a href="#sessions">Sessions</a>
       <a href="#mac">Mac</a>
+      <a href="#control">Control</a>
       <a href="#native">Native</a>
       <a href="#install">Install</a>
     </nav>
@@ -461,6 +463,42 @@ footer nav { display: flex; flex-wrap: wrap; gap: 0.4rem 3ch; margin-top: 1.4rem
       <div>
         <h3>Tabs in the titlebar</h3>
         <p><code>macos-titlebar-style=tabs</code> puts the tab bar next to the window's buttons and gives the titlebar the terminal's background. Each tab shows its shortcut.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="sec" id="control">
+  <div class="wrap">
+    <div class="cols">
+      <div class="prose">
+        <h2>Everything it does has a name, and a command line.</h2>
+        <p>The command palette finds what the menus have by typing a few letters: a split, a theme, another machine. <code>foot @</code> runs the same commands from a script, lists the terminals, types into them and reads what they show.</p>
+        <p class="dim">zsh, bash and fish mark their prompts without anything in your startup files. That's what jumping from prompt to prompt, copying a command's output and the notification for a long build go by.</p>
+        <dl class="keys">
+          <div><dt><kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>P</kbd></dt><dd>Command palette</dd></div>
+          <div><dt><kbd>⌘</kbd> <kbd>↑</kbd></dt><dd>Jump to the previous prompt</dd></div>
+          <div><dt><kbd>⌘</kbd> <kbd>↓</kbd></dt><dd>And to the next one</dd></div>
+        </dl>
+      </div>
+      <div class="win">
+        <div class="win-bar" aria-hidden="true"><i></i><i></i><i></i><span>foot @</span></div>
+        <pre class="term"><span><b class="prompt">~ ❯</b> foot @ run Split Right</span><span><b class="prompt">~ ❯</b> foot @ send-text 'make test\r'</span><span><b class="prompt">~ ❯</b> foot @ get-text --command-output</span><span>Ok:                 3</span><span>Fail:               0</span><span><b class="prompt">~ ❯</b> foot @ set-title tests</span><span><b class="prompt">~ ❯</b> foot @ run Theme: nord</span><span><b class="prompt">~ ❯</b> foot @ ls | jq '.[].title'</span><span>"tests"</span><span>"zsh"</span></pre>
+      </div>
+    </div>
+
+    <div class="facts">
+      <div>
+        <h3>Told when it's done</h3>
+        <p><code>macos-notify-on-command-finish=10</code> notifies you when a command that took that long ends in a terminal you aren't looking at, with its exit status.</p>
+      </div>
+      <div>
+        <h3>One keyboard, all splits</h3>
+        <p>Shell &gt; Send Input to All Splits sends what you type or paste to every split of the window: the same command on several machines at once.</p>
+      </div>
+      <div>
+        <h3>Titles and blur</h3>
+        <p>View &gt; Change Title names a terminal, whatever runs in it. <code>blur=yes</code> blurs what's behind a transparent window.</p>
       </div>
     </div>
   </div>
