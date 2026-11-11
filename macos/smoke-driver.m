@@ -13,7 +13,8 @@
  * "dragSelection" drags a selection in the first pane, beyond its top
  * and bottom edges and back, again and again (the events are the
  * view's only, not the system's), and creates $FOOT_SMOKE_DIR/dragged
- * when it's done.
+ * when it's done. "palette TEXT" opens the command palette (View >
+ * Command Palette), types TEXT there, and presses Return.
  */
 
 #import <AppKit/AppKit.h>
@@ -80,6 +81,33 @@ drag_selection(NSView *view)
 }
 
 static void
+palette(NSString *text)
+{
+    [NSApp tryToPerform:NSSelectorFromString(@"showCommandPalette:") with:nil];
+
+    for (NSWindow *window in NSApp.windows) {
+        if (![NSStringFromClass([window class]) isEqualToString:@"FootPalettePanel"])
+            continue;
+
+        for (NSView *view in window.contentView.subviews) {
+            if (![view isKindOfClass:[NSTextField class]])
+                continue;
+
+            NSTextField *field = (NSTextField *)view;
+            id<NSTextFieldDelegate> delegate = field.delegate;
+            field.stringValue = text;
+            [delegate controlTextDidChange:
+                [NSNotification notificationWithName:NSControlTextDidChangeNotification object:field]];
+            [delegate control:field textView:(NSTextView *)field.currentEditor
+                doCommandBySelector:@selector(insertNewline:)];
+            return;
+        }
+    }
+
+    fprintf(stderr, "smoke-driver: no command palette\n");
+}
+
+static void
 poll_action(void)
 {
     NSString *action = [NSString stringWithContentsOfFile:action_path
@@ -142,6 +170,11 @@ poll_action(void)
                 break;
             }
         }
+        return;
+    }
+
+    if ([action hasPrefix:@"palette "]) {
+        palette([action substringFromIndex:8]);
         return;
     }
 

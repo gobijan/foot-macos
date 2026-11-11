@@ -80,6 +80,13 @@ void connections_remember(NSString *address);
 NSString *connections_address(NSString *text);
 
 /*
+ * palette.m: View > Command Palette: what the menus have (the other
+ * machines and the themes too), found by typing. Opens it, or closes it.
+ */
+void palette_toggle(void);
+bool palette_is_open(void);
+
+/*
  * login.m: logging in to other machines: what ssh asks (e.g. a
  * password) is asked in a window there (and may be kept in the Keychain)
  */

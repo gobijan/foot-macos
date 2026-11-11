@@ -392,6 +392,7 @@ foot = executable(
   'window.m',
   'close.m',
   'connections.m',
+  'palette.m',
   'login.m',
   'notifications.m',
   'view.m', 'view.h',

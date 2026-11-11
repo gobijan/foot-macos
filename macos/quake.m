@@ -558,8 +558,8 @@ quake_window_resigned_key(struct wl_window *win)
     if (win->term != quake.term || !quake.visible || quake.sliding_in)
         return;
 
-    /* E.g. an alert */
-    if (((__bridge NSWindow *)win->nswindow).attachedSheet != nil)
+    /* E.g. an alert, or the command palette */
+    if (((__bridge NSWindow *)win->nswindow).attachedSheet != nil || palette_is_open())
         return;
 
     /* Without auto-hide, it stays, but not the dimming: the user works elsewhere */

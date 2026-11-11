@@ -339,6 +339,24 @@ class Tests:
         if t.foot.returncode != 0:
             raise Failure(f'foot: exit code {t.foot.returncode}\n{out}')
 
+    def test_palette(self):
+        """The command palette: a command found by typing, and run"""
+        t = self.Panes(self, 'palette')
+        t.start()
+        out = ''
+
+        try:
+            t.wait('the window', lambda got: len(got) == 1)
+
+            # The first one starting with what's typed (others: "New Window on: …")
+            t.perform('palette new window')
+            t.wait('a new window', lambda got: len(got) == 2)
+        finally:
+            out = t.quit()
+
+        if t.foot.returncode != 0:
+            raise Failure(f'foot: exit code {t.foot.returncode}\n{out}')
+
     class Sessions:
         """foot with sessions (in a footd of its own), driven by macos/smoke-driver.m"""
 

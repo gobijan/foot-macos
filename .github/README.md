@@ -128,6 +128,12 @@ frameworks.
 * `Shift` and a click extend the selection to there, and dragging on
   from there too (also while a program has the mouse, as `Shift` selects
   then).
+* `Cmd+Shift+P` opens the command palette (View > Command Palette, as
+  Ghostty's): type a few letters of a command, a machine (for a window
+  or a tab there, see [Sessions on other machines](#sessions-on-other-machines)),
+  a color theme or a window's title, and press Return. It has what the
+  menus have, with their shortcuts; the arrow keys select, Escape closes
+  it.
 * `Cmd+K` clears the scrollback and everything above the prompt, which
   moves to the top, also while a command is running. What's been typed
   stays. With shell integration (OSC 133), a prompt of several rows

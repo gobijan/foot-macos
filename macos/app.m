@@ -1096,6 +1096,8 @@ create_menu(void)
         [menu addItem:[NSMenuItem separatorItem]];
         [menu addItem:themes_menu_item()];
         [menu addItem:[NSMenuItem separatorItem]];
+        [menu addItem:menu_item(@"Command Palette", @selector(showCommandPalette:), @"P",
+                                cmd | NSEventModifierFlagShift)];
         [menu addItem:menu_item(@"Show URLs", @selector(showURLs:), @"o",
                                 cmd | NSEventModifierFlagShift)];
         [menu addItem:[NSMenuItem separatorItem]];
@@ -1267,6 +1269,11 @@ fill_hosts_menu(NSMenu *menu, bool tab)
 - (void)showConnections:(id)sender
 {
     connections_show();
+}
+
+- (void)showCommandPalette:(id)sender
+{
+    palette_toggle();
 }
 
 /* Close (Cmd+W): a split (see FootSplitView), a tab, or else the window */
