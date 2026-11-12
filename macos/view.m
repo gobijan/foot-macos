@@ -20,6 +20,7 @@
 #include "terminal.h"
 #include "url-mode.h"
 #include "hints.h"
+#include "cursor-click.h"
 
 static NSDictionary<NSString *, id<CAAction>> *
 null_actions(void)
@@ -911,6 +912,26 @@ url_under_mouse(struct seat *seat, struct terminal *term, bool activate)
 
         if (url_under_mouse(seat, self.term, true)) {
             _urlClicked = YES;
+            return;
+        }
+    }
+
+    /* Option and a click at the shell's prompt: the cursor goes there */
+    const NSEventModifierFlags flags =
+        event.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask &
+        ~(NSEventModifierFlagCapsLock | NSEventModifierFlagNumericPad | NSEventModifierFlagFunction);
+    struct terminal *term = self.term;
+
+    if (seat != NULL && term != NULL && flags == NSEventModifierFlagOption &&
+        event.clickCount == 1)
+    {
+        const NSPoint p = [self locationOf:event];
+        input_pointer_motion(seat, p.x, p.y);
+
+        if (seat->mouse.row >= 0 && seat->mouse.col >= 0 &&
+            cursor_click(term, seat->mouse.row, seat->mouse.col))
+        {
+            _urlClicked = YES;      /* (Its release isn't the terminal's either) */
             return;
         }
     }

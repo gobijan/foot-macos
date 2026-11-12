@@ -497,6 +497,31 @@ launch(NSMutableArray<NSString *> *args, NSData *data)
                       dataUsingEncoding:NSUTF8StringEncoding]);
 }
 
+/*
+ * As the menus' Close, for each of them: asks first, if something runs
+ * there; not with --force
+ */
+static struct reply
+close_terminals(NSMutableArray<NSString *> *args)
+{
+    NSString *error;
+    NSArray<NSValue *> *terms = targets(args, &error);
+    if (terms == nil)
+        return failed(error);
+    const bool force = args.count == 1 && [args[0] isEqualToString:@"--force"];
+    if (args.count > 0 && !force)
+        return failed([NSString stringWithFormat:@"close: %@: unknown option", args[0]]);
+
+    for (NSValue *value in terms) {
+        struct terminal *term = value.pointerValue;
+        if (force)
+            term_shutdown(term);
+        else
+            window_close(term->window);
+    }
+    return succeeded(nil);
+}
+
 static void
 focus_terminal(struct terminal *term, bool activate)
 {
@@ -589,6 +614,8 @@ execute(NSMutableArray<NSString *> *args, NSData *data)
         return set_title(args);
     if ([command isEqualToString:@"launch"])
         return launch(args, data);
+    if ([command isEqualToString:@"close"])
+        return close_terminals(args);
     if ([command isEqualToString:@"commands"])
         return commands(args, false);
     if ([command isEqualToString:@"run"])

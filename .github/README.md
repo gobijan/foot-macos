@@ -176,6 +176,10 @@ frameworks.
   opens it, a file as Finder would (`launch` in `[url]`, which gets a
   file's path). Relative paths are the shell's directory's, which the
   shell integration reports.
+* `Option` and a click at the shell's prompt moves the cursor there, as
+  in Terminal.app and Ghostty: the shell gets the arrow keys it takes
+  (with the shell integration; not while a command runs, nor in
+  programs with the alternate screen or the mouse).
 * View > Show Scrollback in Pager (`Ctrl+Shift+H`, as kitty's) shows
   the terminal's text, with the scrollback, in `less`, in a window of
   its own: to search, or to read on while the terminal goes on. Show
@@ -402,10 +406,22 @@ foot @ launch --type=split nvim       # a program, in a split of the focused one
 foot @ launch --type=tab --cwd=/tmp   # the shell, in a tab
 foot @ send-text --match=program:^less$ q     # to all that run less
 foot @ get-text --match=title:build   # of the one with such a title
+foot @ close --match=title:^tests$    # closes it (--force: without asking)
 foot @ commands                       # what the menus have, with shortcuts
 foot @ run New Tab                    # one of them
 foot @ run --id=3 Split Right
 foot @ run Theme: nord
+```
+
+A project's windows, as a script (what kitty's session files are for):
+
+```sh
+#!/bin/sh
+cd ~/Work/project
+editor=$(foot @ launch --title=editor nvim)
+foot @ launch --id=$editor --type=split --title=tests
+foot @ launch --id=$editor --type=split --direction=down --title=server make serve
+foot @ focus --id=$editor
 ```
 
 * A terminal is a window, a tab or a split. `ls` has each one's `id`
@@ -419,6 +435,9 @@ foot @ run Theme: nord
   `$` for all of it), or `id:ID`: all of them for `send-text` and
   `set-title`, the first one (in `ls`' order, which they were opened
   in) for the other commands. `ls --match` lists them.
+* `close` closes the terminals that are meant, as Close in the menus:
+  with `macos-confirm-close`, foot asks first if something runs there.
+  `--force` doesn't ask.
 * `launch [COMMAND…]` opens a terminal that runs the command (none: the
   shell), and prints its `id`: in a window (`--type=window`, the
   default), a tab (`tab`) or a split (`split`, with

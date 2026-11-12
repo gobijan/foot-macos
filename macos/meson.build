@@ -424,6 +424,7 @@ foot = executable(
   'clipboard.m',
   'selection-clipboard.c',
   'clear.c', 'clear.h',
+  'cursor-click.c', 'cursor-click.h',
   'splits.c', 'splits.h',
   'windows.c', 'windows.h',
   'session.c', 'session.h',

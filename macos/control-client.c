@@ -42,6 +42,8 @@ static const char usage[] =
     "                          --type=window (the default), tab or split: next to the\n"
     "                          terminal; --direction=right, down, left or up (a split);\n"
     "                          --cwd=DIR; --title=TITLE; --hold: stays when it exits\n"
+    "  close                   closes the terminal, as the menus' Close (which asks\n"
+    "                          first, if something runs in it; not with --force)\n"
     "  commands                what the menus (and the command palette) have\n"
     "  run COMMAND             one of them, by its title: e.g. foot @ run New Tab\n"
     "\n"

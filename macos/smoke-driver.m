@@ -14,7 +14,9 @@
  * and bottom edges and back, again and again (the events are the
  * view's only, not the system's), and creates $FOOT_SMOKE_DIR/dragged
  * when it's done. "palette TEXT" opens the command palette (View >
- * Command Palette), types TEXT there, and presses Return.
+ * Command Palette), types TEXT there, and presses Return. "optionClick
+ * PERCENT" clicks in the first pane's first row, that far from the left,
+ * with Option.
  */
 
 #import <AppKit/AppKit.h>
@@ -25,17 +27,35 @@
 static NSString *action_path;
 
 static NSEvent *
-mouse_event(NSView *view, NSEventType type, NSPoint p)
+mouse_event_with(NSView *view, NSEventType type, NSPoint p, NSEventModifierFlags flags)
 {
     return [NSEvent mouseEventWithType:type
                               location:[view convertPoint:p toView:nil]
-                         modifierFlags:0
+                         modifierFlags:flags
                              timestamp:NSProcessInfo.processInfo.systemUptime
                           windowNumber:view.window.windowNumber
                                context:nil
                            eventNumber:1
                             clickCount:1
                               pressure:1];
+}
+
+static NSEvent *
+mouse_event(NSView *view, NSEventType type, NSPoint p)
+{
+    return mouse_event_with(view, type, p, 0);
+}
+
+/* In the first row (below the padding), 'percent' of the width from the left */
+static void
+option_click(NSView *view, int percent)
+{
+    const NSRect b = view.bounds;
+    const NSPoint p = NSMakePoint(
+        NSMinX(b) + b.size.width * percent / 100, view.isFlipped ? NSMinY(b) + 16 : NSMaxY(b) - 16);
+
+    [view mouseDown:mouse_event_with(view, NSEventTypeLeftMouseDown, p, NSEventModifierFlagOption)];
+    [view mouseUp:mouse_event_with(view, NSEventTypeLeftMouseUp, p, NSEventModifierFlagOption)];
 }
 
 /*
@@ -167,6 +187,16 @@ poll_action(void)
         for (NSView *view in splits.subviews) {
             if ([NSStringFromClass([view class]) isEqualToString:@"FootView"]) {
                 drag_selection(view);
+                break;
+            }
+        }
+        return;
+    }
+
+    if ([action hasPrefix:@"optionClick "]) {
+        for (NSView *view in splits.subviews) {
+            if ([NSStringFromClass([view class]) isEqualToString:@"FootView"]) {
+                option_click(view, [action substringFromIndex:12].intValue);
                 break;
             }
         }

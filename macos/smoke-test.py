@@ -234,6 +234,13 @@ class Tests:
             if program not in ('sh', 'bash') or \
                     str(second['id']) not in at('ls', '--match', f'program:^{program}$'):
                 raise Failure(f'ls: the program: {at("ls")}')
+            # close: those that are meant
+            at('close', '--force', '--match=title:^renamed$')
+            wait('the close of two', lambda: sorted(t['id'] for t in json.loads(at('ls'))) ==
+                 sorted([second['id'], shell]))
+            at('close', f'--id={shell}')
+            wait('the close', lambda: [t['id'] for t in json.loads(at('ls'))] == [second['id']])
+
             for args in (['get-text', '--match=title:no such'], ['get-text', '--match=color:red'],
                          ['get-text', '--match=title:('], ['launch', '--type=cube']):
                 at(*args, expect=1)
@@ -492,6 +499,52 @@ class Tests:
                 if time.time() > deadline:
                     raise Failure('the terminal doesn\'t answer any more, after the drag')
                 time.sleep(.1)
+        finally:
+            out = t.quit()
+
+        if t.foot.returncode != 0:
+            raise Failure(f'foot: exit code {t.foot.returncode}\n{out}')
+
+    def test_cursor_click(self):
+        """Option and a click at the prompt: the shell gets the arrow keys to there"""
+        t = self.Panes(self, 'cursor-click')
+        keys = os.path.join(t.tmp, 'keys')
+        ready = os.path.join(t.tmp, 'ready')
+
+        # A prompt as the shell integration marks it, with 60 characters
+        # typed: the cursor is in column 62 (of 100). What's typed then is kept.
+        with open(t.script, 'w') as f:
+            f.write(f"""
+                stty -icanon -echo min 1 time 0
+                printf '\\033]133;A\\007$ %060d' 0
+                # (All of the answer, ESC [ 1 ; 6 3 R, 7 bytes: foot reads, and shows it)
+                printf '\\033[6n'; dd bs=1 count=7 > /dev/null 2>&1
+                touch {ready}
+                dd bs=1024 count=1 2> /dev/null > {keys}.tmp < /dev/tty
+                mv {keys}.tmp {keys}
+                while [ ! -e {t.tmp}/quit ]; do sleep .1; done
+            """)
+
+        def wait(what, path):
+            deadline = time.time() + TIMEOUT
+            while not os.path.exists(path):
+                if time.time() > deadline or t.foot.poll() is not None:
+                    raise Failure(what)
+                time.sleep(.1)
+
+        t.start()
+        try:
+            wait('the prompt isn\'t there', ready)
+            time.sleep(1)
+            t.perform('optionClick 25')
+            wait('the shell got no keys', keys)
+            with open(keys, 'rb') as f:
+                got = f.read()
+
+            # To column 25, or one next to it: the padding isn't part of the width
+            count = len(got) // 3
+            if got != b'\x1b[D' * count or not 35 <= count <= 39:
+                raise Failure(f'the keys: {got!r}')
         finally:
             out = t.quit()
 
