@@ -581,7 +581,22 @@ window_configure(struct wl_window *win, NSWindow *tab_parent, bool split)
         [nswindow center];
 
     app_windows_changed();
+
+    /*
+     * A new window is a window, next to a full screen one too: AppKit
+     * would make it a tab of that (System Settings' "Prefer tabs when
+     * opening documents" is "In Full Screen" by default). "Always" is
+     * the user's choice, and still applies.
+     */
+    const NSWindowTabbingMode tabbing = nswindow.tabbingMode;
+    if (tab_parent == nil &&
+        NSWindow.userTabbingPreference == NSWindowUserTabbingPreferenceInFullScreen)
+    {
+        nswindow.tabbingMode = NSWindowTabbingModeDisallowed;
+    }
+
     [nswindow makeKeyAndOrderFront:nil];
+    nswindow.tabbingMode = tabbing;
 
     app_run_hooks();
 }
