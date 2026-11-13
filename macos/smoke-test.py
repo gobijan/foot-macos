@@ -412,15 +412,15 @@ class Tests:
             # last assignment
             at('run', 'Settings: Font Smoothing: 50%')
             at('run', 'Settings: Option as Alt: Both Option Keys')
-            at('run', 'Settings: Tabs in the Titlebar (New Windows)')
+            at('run', 'Settings: Notify When a Command Finishes: After 10 Seconds')
             got = lines()
             start = got.index('  pad=0x0 center   # none')
             if got[start + 1:start + 6] != [
                     'macos-font-smoothing=yes', 'macos-font-smoothing-strength=0.5',
-                    'macos-option-as-alt=both', 'macos-titlebar-style=tabs', '']:
+                    'macos-option-as-alt=both', 'macos-notify-on-command-finish=10', '']:
                 raise Failure(f'[main]: {got}')
             expect('[main]', 'Font Smoothing: 50%', 'Option as Alt: Both Option Keys',
-                   'Tabs in the Titlebar (New Windows)')
+                   'Notify When a Command Finishes: After 10 Seconds')
 
             # An assignment above an include=: it goes below it (the included
             # file's would count else), with its comment
