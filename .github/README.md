@@ -151,7 +151,9 @@ frameworks.
   native tabs, so the tab bar, dragging tabs between windows and View >
   Show All Tabs work as in other Mac apps. `Cmd+1` to `Cmd+8` select a
   tab, `Cmd+9` the last one, `Cmd+Shift+[` and `Cmd+Shift+]` the
-  previous and the next one; each tab shows its shortcut.
+  previous and the next one, as do `Ctrl+Shift+Tab` and `Ctrl+Tab` (in
+  a window without tabs, programs get these keys); each tab shows its
+  shortcut.
   `macos-titlebar-style=tabs` in `[main]` puts the tab bar in the
   titlebar, next to the window's buttons, as Ghostty's titlebar tabs,
   and gives the titlebar the terminal's background color (macOS 26 and

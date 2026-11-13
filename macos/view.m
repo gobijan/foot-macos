@@ -484,6 +484,33 @@ wayl_input_sent(struct terminal *term, const void *data, size_t len)
     return YES;
 }
 
+/*
+ * Control+Tab shows the next tab, with Shift the previous one, as in
+ * web browsers (and Ghostty). In a window without tabs, the key is the
+ * terminal's.
+ */
+- (BOOL)cycleTabs:(NSEvent *)event
+{
+    const NSEventModifierFlags flags = event.modifierFlags &
+        (NSEventModifierFlagDeviceIndependentFlagsMask & ~NSEventModifierFlagCapsLock);
+    const bool shift = flags == (NSEventModifierFlagControl | NSEventModifierFlagShift);
+
+    NSArray<NSWindow *> *tabs = self.window.tabbedWindows;
+
+    if (event.keyCode != kVK_Tab || !(shift || flags == NSEventModifierFlagControl) ||
+        tabs.count <= 1)
+    {
+        return NO;
+    }
+
+    const NSUInteger index = [tabs indexOfObject:self.window];
+    if (index != NSNotFound) {
+        self.window.tabGroup.selectedWindow =
+            tabs[(index + (shift ? tabs.count - 1 : 1)) % tabs.count];
+    }
+    return YES;
+}
+
 - (BOOL)performKeyEquivalent:(NSEvent *)event
 {
     /*
@@ -493,6 +520,9 @@ wayl_input_sent(struct terminal *term, const void *data, size_t len)
     if (self.window.firstResponder == self && event.type == NSEventTypeKeyDown) {
         const NSEventModifierFlags flags =
             event.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask;
+
+        if ([self cycleTabs:event])
+            return YES;
 
         if ((flags & NSEventModifierFlagControl) && !(flags & NSEventModifierFlagCommand)) {
             /*
