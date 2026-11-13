@@ -199,7 +199,7 @@ thead th { color: var(--dim); }
 /* foot's defaults: SF Mono 13, pad=8x8 */
 .term { clip-path: inset(8px 0 0); height: calc(10 * 1.35em + 16px); margin: 0; padding: 8px; overflow: hidden; font-size: 0.8125rem; line-height: 1.35; white-space: pre-wrap; word-break: break-all; }
 .term span { display: block; }
-.term .late { box-shadow: -5px 0 0 var(--bg), -8px 0 0 var(--r3); }
+.term .late, .term .set { box-shadow: -5px 0 0 var(--bg), -8px 0 0 var(--r3); }
 .prompt { color: var(--r5); }
 
 /* Sessions */
@@ -215,6 +215,19 @@ thead th { color: var(--dim); }
 .footd output { color: var(--r2); }
 .demo-controls { margin-top: 1.4rem; }
 .demo-controls p { min-height: 1.55em; margin: 0.8rem 0 0; color: var(--dim); }
+.cols + .cols { margin-top: clamp(56px, 7vw, 96px); }
+
+/* Sessions on another machine: this Mac, ssh, the server */
+.machine { padding: 0 1.5ch 1.5ch; border: 1px dashed var(--rule); border-radius: 10px; }
+.machine > * { transition: opacity 0.3s; }
+.machine-name { margin: 0.5rem 0 0.7rem; color: var(--dim); }
+.machine.asleep > :not(.machine-name) { opacity: 0.25; }
+.badge { display: inline-block; width: 0.6em; height: 0.6em; margin-right: 0.5ch; border-radius: 50%; background: var(--r4); }
+.ssh { display: flex; align-items: center; gap: 2ch; min-height: 3.4rem; margin-left: calc(5.5ch + 1px); padding-left: 2ch; border-left: 1px solid var(--faint); color: var(--dim); }
+.ssh.lost { border-left: 1px dashed var(--r1); color: var(--r1); }
+.ssh.lost code { color: inherit; }
+.term .said { color: var(--r3); }
+
 .facts { display: grid; gap: 2rem clamp(32px, 5vw, 72px); margin-top: clamp(48px, 6vw, 80px); }
 @media (min-width: 760px) { .facts { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 .facts p { margin: 0; color: var(--dim); }
@@ -226,6 +239,33 @@ thead th { color: var(--dim); }
 .keys dd { margin: 0; color: var(--dim); }
 .prose .keys { margin-top: 1.6rem; }
 .facts .ghost { margin-top: 1rem; }
+
+/* Control: the command palette, over a window with splits. The settings
+   it has are the window's: --size, --pad, data-cursor, .blink */
+.pal-win { position: relative; }
+.panes { display: flex; height: 23rem; }
+.split { display: flex; flex: 1 1 0; min-width: 0; min-height: 0; }
+.split.down { flex-direction: column; }
+.split > * + * { border-left: 1px solid var(--rule); }
+.split.down > * + * { border-left: 0; border-top: 1px solid var(--rule); }
+.panes .term { flex: 1 1 0; min-width: 0; min-height: 0; height: auto; clip-path: none; padding: var(--pad, 8px); font-size: var(--size, 0.8125rem); }
+.cur { display: inline-block; width: 1ch; height: 1.2em; vertical-align: text-bottom; background: var(--cursor); }
+[data-cursor=beam] .cur { background: none; box-shadow: inset 2px 0 var(--cursor); }
+[data-cursor=underline] .cur { background: none; box-shadow: inset 0 -2px var(--cursor); }
+[data-cursor=hollow] .cur { background: none; box-shadow: inset 0 0 0 1px var(--cursor); }
+.blink .cur { animation: blink 1s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+/* A panel of the system's, not the terminal's: its font is the system's too */
+.palette { position: absolute; top: 60px; left: 50%; translate: -50% 0; width: min(560px, 100% - 32px); overflow: hidden; border: 1px solid var(--rule); border-radius: 12px; background: color-mix(in oklab, var(--fg) 9%, var(--bg)); box-shadow: 0 18px 40px -12px rgb(0 0 0 / 0.55); font: 13px/1.3 system-ui, -apple-system, "Segoe UI", sans-serif; }
+.palette input { display: block; width: 100%; height: 50px; padding: 0 18px; border: 0; border-radius: 0; outline: 0; background: none; color: inherit; font: inherit; font-size: 18px; caret-color: var(--cursor); }
+.palette input::placeholder { color: var(--faint); opacity: 1; }
+.palette ul { position: relative; max-height: calc(8 * 28px + 12px); margin: 0; padding: 6px; overflow-y: auto; border-top: 1px solid var(--rule); list-style: none; }
+.palette ul:empty { display: none; }
+.palette li { display: flex; align-items: center; gap: 2ch; height: 28px; padding-inline: 12px; border-radius: 6px; cursor: default; }
+.palette li span:first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.palette li span:last-child { color: var(--dim); white-space: nowrap; }
+.palette li[aria-selected=true] { background: var(--r4); color: var(--bg); }
+.palette li[aria-selected=true] span:last-child { color: inherit; }
 
 /* Native: upstream's platform layer and the port's, as a diff */
 .diff td:nth-child(2) { color: var(--r1); }
@@ -270,7 +310,8 @@ footer nav { display: flex; flex-wrap: wrap; gap: 0.4rem 3ch; margin-top: 1.4rem
   /* As foot's own: with Reduce Motion, it fades */
   @keyframes quake-in { from { opacity: 0; } }
   @keyframes quake-out { to { opacity: 0; } }
-  .desk .win, .desk-empty { transition: none !important; }
+  .desk .win, .desk-empty, .machine > * { transition: none !important; }
+  .blink .cur { animation: none; }
 }
 </style>
 </head>
@@ -410,14 +451,49 @@ footer nav { display: flex; flex-wrap: wrap; gap: 0.4rem 3ch; margin-top: 1.4rem
       </div>
     </div>
 
+    <div class="cols">
+      <div class="prose">
+        <h2>On a server, the same. All it takes is SSH.</h2>
+        <p>Shell &gt; New Window on opens a window whose session runs on another machine: a Linux server, or another Mac. foot runs <code>ssh HOST footd --bridge</code>, and footd there keeps the programs, as it does here.</p>
+        <p class="dim">Close the lid, change the Wi-Fi, get on a train: the connection is lost, the programs aren't. The window says so, foot connects again on its own, and what they wrote meanwhile is there. Over plain ssh, they would have ended with the connection.</p>
+      </div>
+      <div class="demo" id="remote">
+        <div class="machine">
+          <p class="machine-name small">This Mac</p>
+          <div class="win">
+            <div class="win-bar" aria-hidden="true"><i></i><i></i><i></i><span><b class="badge"></b>build-1 — migrate.sh</span></div>
+            <pre class="term" id="remote-term"><span><b class="prompt">~ ❯</b> ./migrate.sh</span><span>900 batches to migrate</span><span>migrated batch 1 of 900</span><span>migrated batch 2 of 900</span></pre>
+          </div>
+          <div class="socket" aria-hidden="true"></div>
+          <div class="footd">
+            <b>footd</b>
+            <span>passes it on to the window</span>
+          </div>
+        </div>
+        <div class="ssh" id="remote-link"><code>ssh build-1 footd --bridge</code></div>
+        <div class="machine">
+          <p class="machine-name small">build-1, a Linux server</p>
+          <div class="footd">
+            <b>footd</b>
+            <span>1 session: migrate.sh</span>
+            <output id="remote-last">batch 2</output>
+          </div>
+        </div>
+        <div class="demo-controls" hidden>
+          <button class="ghost" type="button" id="remote-toggle">Close the lid</button>
+          <p class="small" id="remote-note" role="status"></p>
+        </div>
+      </div>
+    </div>
+
     <div class="facts">
       <div>
         <h3>Everything comes back</h3>
         <p>The screen and the alternate screen, so Vim and htop are as you left them. The scrollback, wrapped lines, the cursor, colors, titles and links.</p>
       </div>
       <div>
-        <h3>On other machines too</h3>
-        <p>Shell &gt; New Window on opens a window whose session runs on a server or another Mac, over SSH. It survives sleep and a change of network; foot reconnects on its own.</p>
+        <h3>One connection per machine</h3>
+        <p>All windows, tabs and splits on a machine share it, and it uses your SSH configuration, keys and agent. Shell &gt; Connections lists the machines, and how they're connected.</p>
       </div>
       <div>
         <h3>Nothing to set up there</h3>
@@ -441,6 +517,7 @@ footer nav { display: flex; flex-wrap: wrap; gap: 0.4rem 3ch; margin-top: 1.4rem
         <div><dt><kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>D</kbd></dt><dd>Split, stacked</dd></div>
         <div><dt><kbd>⌥</kbd> <kbd>⌘</kbd> <kbd>→</kbd></dt><dd>Focus the split in that direction</dd></div>
         <div><dt><kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>↩</kbd></dt><dd>Zoom the focused split, and back</dd></div>
+        <div><dt><kbd>⌃</kbd> <kbd>⇥</kbd></dt><dd>The next tab; with <kbd>⇧</kbd>, the previous one</dd></div>
         <div><dt><kbd>⌘</kbd> <kbd>K</kbd></dt><dd>Clear, keeping what you've typed</dd></div>
         <div><dt><kbd>⌘</kbd> <kbd>,</kbd></dt><dd>Open foot.ini in $EDITOR</dd></div>
         <div><dt><kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>,</kbd></dt><dd>Reload foot.ini, in the open windows too</dd></div>
@@ -473,7 +550,31 @@ footer nav { display: flex; flex-wrap: wrap; gap: 0.4rem 3ch; margin-top: 1.4rem
     <div class="cols">
       <div class="prose">
         <h2>Everything it does has a name, and a command line.</h2>
-        <p>The command palette finds what the menus have by typing a few letters: a split, a theme, a setting, another machine. <code>foot @</code> runs the same commands from a script. It starts programs in new windows, tabs and splits, lists the terminals, types into them and reads what they show.</p>
+        <p>The command palette finds what the menus have by typing a few letters: a split, a theme, a setting, another machine. What the menus get, the palette has.</p>
+        <p>The settings are among them. foot &gt; Settings has the options one changes now and then, to choose from: the font and its size, the cursor, opacity and blur, the padding, the bell and more. Choosing one writes its line to <code>foot.ini</code>, leaves the rest of the file as you wrote it, and reloads it in the open windows.</p>
+        <p class="dim">So the file stays what's true, and <kbd>⌘</kbd> <kbd>,</kbd> still opens it in your editor, for everything else.</p>
+      </div>
+      <div class="demo" id="palette-demo">
+        <div class="win pal-win">
+          <div class="win-bar" aria-hidden="true"><i></i><i></i><i></i><span>foot</span></div>
+          <div class="panes" id="pal-panes">
+            <pre class="term" id="pal-ini"><span><b class="prompt">~ ❯</b> grep -v '^#' ~/.config/foot/foot.ini</span><span>[main]</span><span>font=monospace:size=13</span><span>pad=8x8</span><span>[cursor]</span><span>style=block</span><span>blink=no</span><span><b class="prompt">~ ❯</b> </span></pre>
+          </div>
+          <div class="palette" id="palette">
+            <input id="pal-in" readonly placeholder="Command, setting or theme" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" role="combobox" aria-label="Command palette" aria-expanded="true" aria-controls="pal-list" aria-autocomplete="list">
+            <ul id="pal-list" role="listbox" aria-label="Commands"><li aria-selected="true"><span>Show Quake Terminal</span><span></span></li><li><span>Split Right</span><span>⌘D</span></li><li><span>Split Down</span><span>⇧⌘D</span></li><li><span>Theme: Default Colors</span><span></span></li><li><span>Theme: nord</span><span></span></li><li><span>Settings: Font Size: 13 pt</span><span>✓</span></li><li><span>Settings: Cursor: Block</span><span>✓</span></li><li><span>Settings: Cursor: Beam</span><span></span></li></ul>
+          </div>
+        </div>
+        <div class="demo-controls" hidden>
+          <button class="ghost" type="button" id="pal-show">Command Palette <kbd>⇧⌘P</kbd></button>
+          <p class="small" id="pal-note" role="status"></p>
+        </div>
+      </div>
+    </div>
+
+    <div class="cols">
+      <div class="prose">
+        <p><code>foot @</code> runs the same commands from a script, the settings too. It starts programs in new windows, tabs and splits, lists the terminals, types into them and reads what they show.</p>
         <p class="dim">zsh, bash and fish mark their prompts without anything in your startup files. That's what jumping from prompt to prompt, copying a command's output and the notification for a long build go by.</p>
         <dl class="keys">
           <div><dt><kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>P</kbd></dt><dd>Command palette</dd></div>
@@ -487,7 +588,7 @@ footer nav { display: flex; flex-wrap: wrap; gap: 0.4rem 3ch; margin-top: 1.4rem
       </div>
       <div class="win">
         <div class="win-bar" aria-hidden="true"><i></i><i></i><i></i><span>foot @</span></div>
-        <pre class="term"><span><b class="prompt">~ ❯</b> foot @ launch --type=split nvim</span><span>2</span><span><b class="prompt">~ ❯</b> foot @ launch --type=tab --title=tests</span><span>3</span><span><b class="prompt">~ ❯</b> foot @ send-text --match=title:tests 'make test\r'</span><span><b class="prompt">~ ❯</b> foot @ get-text --match=title:tests --command-output</span><span>Ok:                 3</span><span>Fail:               0</span><span><b class="prompt">~ ❯</b> foot @ run Theme: nord</span><span><b class="prompt">~ ❯</b></span></pre>
+        <pre class="term"><span><b class="prompt">~ ❯</b> foot @ launch --type=split nvim</span><span>2</span><span><b class="prompt">~ ❯</b> foot @ launch --type=tab --title=tests</span><span>3</span><span><b class="prompt">~ ❯</b> foot @ send-text --match=title:tests 'make test\r'</span><span><b class="prompt">~ ❯</b> foot @ get-text --match=title:tests --command-output</span><span>Ok:                 3</span><span>Fail:               0</span><span><b class="prompt">~ ❯</b> foot @ run Settings: Cursor: Beam</span><span><b class="prompt">~ ❯</b></span></pre>
       </div>
     </div>
 
@@ -622,6 +723,8 @@ footer nav { display: flex; flex-wrap: wrap; gap: 0.4rem 3ch; margin-top: 1.4rem
   const dark = matchMedia('(prefers-color-scheme: dark)');
   const select = $('#theme');
   let theme = '';
+  let themeChanged = () => {};  // The command palette's window shows foot.ini
+  let showQuake = null;         // What the palette's Show Quake Terminal does
 
   function applyTheme(name) {
     theme = themes[name] ? name : '';
@@ -642,7 +745,43 @@ footer nav { display: flex; flex-wrap: wrap; gap: 0.4rem 3ch; margin-top: 1.4rem
       if (theme) localStorage.setItem('foot-theme', JSON.stringify({ name: theme, css: root.style.cssText }));
       else localStorage.removeItem('foot-theme');
     } catch (e) {}
+    themeChanged();
   }
+
+  // Once a second, but only while it's on screen; with Reduce Motion,
+  // only when a button is pressed
+  function everySecondWhileVisible(element, render) {
+    let timer = 0, visible = false;
+    const tick = () => {
+      const on = visible && !document.hidden;
+      clearInterval(timer);
+      timer = on && !reducedMotion.matches ? setInterval(render, 1000) : 0;
+      if (on) render();
+    };
+    new IntersectionObserver(([entry]) => {
+      visible = entry.isIntersecting;
+      tick();
+    }).observe(element);
+    document.addEventListener('visibilitychange', tick);
+  }
+
+  const promptMark = () => {
+    const mark = document.createElement('b');
+    mark.className = 'prompt';
+    mark.textContent = '~ ❯';
+    return mark;
+  };
+  const termLine = (text, className) => {
+    const span = document.createElement('span');
+    span.textContent = text;
+    if (className) span.className = className;
+    return span;
+  };
+  const promptLine = (command) => {
+    const span = termLine(' ' + command);
+    span.prepend(promptMark());
+    return span;
+  };
 
   if (names.length) {
     const groups = [['Dark', (t) => t.d && !t.l], ['Light', (t) => t.l && !t.d], ['Dark and Light', (t) => t.d && t.l]];
@@ -686,7 +825,7 @@ footer nav { display: flex; flex-wrap: wrap; gap: 0.4rem 3ch; margin-top: 1.4rem
     const started = Date.now() - 2500;
     let running = true;        // foot is
     let lateFrom = -1, lateTo = -1;  // Arrived while foot wasn't running
-    let quitAt = 0, timer = 0;
+    let quitAt = 0;
 
     const seq = () => Math.min(COUNT - 1, Math.floor((Date.now() - started) / 1000));
     const line = (text, late) => {
@@ -741,19 +880,75 @@ footer nav { display: flex; flex-wrap: wrap; gap: 0.4rem 3ch; margin-top: 1.4rem
     });
     toggle.parentElement.hidden = false;
 
-    // ping writes a line a second, but only while it's on screen; with
-    // Reduce Motion, only when a button is pressed
-    const tick = (on) => {
-      clearInterval(timer);
-      timer = on && !reducedMotion.matches ? setInterval(render, 1000) : 0;
-      if (on) render();
-    };
-    let visible = false;
-    new IntersectionObserver(([entry]) => {
-      visible = entry.isIntersecting;
-      tick(visible && !document.hidden);
-    }).observe(demo);
-    document.addEventListener('visibilitychange', () => tick(visible && !document.hidden));
+    // ping writes a line a second
+    everySecondWhileVisible(demo, render);
+  }
+
+  // -- Sessions on another machine: migrate.sh runs in footd on build-1; ---
+  // -- the Mac sleeps, the connection is lost, foot connects again ---------
+  const remote = $('#remote');
+  if (remote) {
+    const mac = remote.querySelector('.machine'), macName = mac.querySelector('.machine-name');
+    const term = $('#remote-term'), link = $('#remote-link'), last = $('#remote-last');
+    const toggle = $('#remote-toggle'), note = $('#remote-note');
+    const ROWS = 10, COUNT = 900;
+    const started = Date.now() - 2500;
+    let state = 'connected';         // Or 'asleep', 'connecting'
+    let lateFrom = 0, lateTo = 0;    // Ran while the connection was lost
+    let sleptAt = 0;
+
+    const batch = () => Math.min(COUNT, 1 + Math.floor((Date.now() - started) / 1000));
+
+    function render() {
+      const now = batch();
+      last.textContent = 'batch ' + now;
+
+      // The window has what footd on build-1 sent: nothing since the Mac sleeps
+      const shown = state === 'connected' ? now : sleptAt;
+      const lines = [promptLine('./migrate.sh'), termLine(COUNT + ' batches to migrate')];
+      for (let i = Math.max(1, shown - ROWS + 1); i <= shown; i++)
+        lines.push(termLine(`migrated batch ${i} of ${COUNT}`, i > lateFrom && i <= lateTo ? 'late' : ''));
+      if (state === 'connecting')
+        lines.push(termLine('the connection to build-1 is lost; connecting again…', 'said'));
+      term.replaceChildren(...lines.slice(-ROWS));
+
+      mac.classList.toggle('asleep', state === 'asleep');
+      macName.textContent = state === 'asleep' ? 'This Mac, asleep' : 'This Mac';
+      link.classList.toggle('lost', state !== 'connected');
+      link.replaceChildren(state === 'connected'
+        ? Object.assign(document.createElement('code'), { textContent: 'ssh build-1 footd --bridge' })
+        : state === 'asleep' ? 'no connection' : 'connecting again…');
+    }
+
+    toggle.addEventListener('click', () => {
+      if (state === 'connected') {
+        state = 'asleep';
+        sleptAt = batch();
+        note.textContent = 'The Mac sleeps. migrate.sh doesn\'t: it runs in footd on build-1.';
+        toggle.textContent = 'Open the lid';
+      } else if (state === 'asleep') {
+        // foot connects again after a second
+        state = 'connecting';
+        note.textContent = 'Awake. The window says what happened, and foot connects again.';
+        toggle.disabled = true;
+        setTimeout(() => {
+          state = 'connected';
+          lateFrom = sleptAt;
+          lateTo = batch();
+          const count = lateTo - lateFrom;
+          note.textContent = count > 0
+            ? `Connected. migrate.sh did ${count} ${count === 1 ? 'batch' : 'batches'} while the Mac slept. ${count === 1 ? "It's" : "They're"} there.`
+            : 'Connected, as it was.';
+          toggle.textContent = 'Close the lid';
+          toggle.disabled = false;
+          render();
+        }, 1400);
+      }
+      render();
+    });
+    toggle.parentElement.hidden = false;
+
+    everySecondWhileVisible(remote, render);
   }
 
   // -- Quake terminal ------------------------------------------------------
@@ -861,6 +1056,7 @@ footer nav { display: flex; flex-wrap: wrap; gap: 0.4rem 3ch; margin-top: 1.4rem
     });
     show.hidden = false;
     show.addEventListener('click', toggleQuake);
+    showQuake = toggleQuake;
 
     // The key below Esc (ISO keyboards report it as IntlBackslash)
     document.addEventListener('keydown', (event) => {
@@ -870,6 +1066,178 @@ footer nav { display: flex; flex-wrap: wrap; gap: 0.4rem 3ch; margin-top: 1.4rem
       event.preventDefault();
       toggleQuake();
     });
+  }
+
+  // -- The command palette: what the menus have, here what works on a page -
+  // The settings are those of the window below it, which shows foot.ini
+  const palDemo = $('#palette-demo');
+  if (palDemo) {
+    const first = $('#pal-ini'), palette = $('#palette');
+    const field = $('#pal-in'), list = $('#pal-list');
+    const show = $('#pal-show'), note = $('#pal-note');
+    const MAX_ROWS = 8, MAX_PANES = 4;
+    const conf = { size: 13, pad: 8, cursor: 'block', blink: false };
+    const panes = [first];      // The last one has the focus
+    const cursor = document.createElement('i');
+    cursor.className = 'cur';
+    let written = '';           // The option of foot.ini written last
+    let shown = [], selected = 0;
+
+    // The first split shows foot.ini, without its comments
+    function renderIni() {
+      const lines = ['[main]'];
+      if (theme) lines.push('include=/Applications/foot.app/Contents/Resources/themes/' + theme);
+      lines.push(`font=monospace:size=${conf.size}`, `pad=${conf.pad}x${conf.pad}`,
+        '[cursor]', `style=${conf.cursor}`, `blink=${conf.blink ? 'yes' : 'no'}`);
+      first.replaceChildren(promptLine("grep -v '^#' ~/.config/foot/foot.ini"),
+        ...lines.map((text) => termLine(text, text.split('=')[0] === written ? 'set' : '')),
+        promptLine(''));
+      panes.at(-1).lastElementChild.append(cursor);
+    }
+
+    function apply() {
+      palDemo.style.setProperty('--size', conf.size + 'px');
+      palDemo.style.setProperty('--pad', conf.pad + 'px');
+      palDemo.dataset.cursor = conf.cursor;
+      palDemo.classList.toggle('blink', conf.blink);
+      renderIni();
+    }
+
+    // A split: the focused one and a new one, in its place
+    function split(direction) {
+      const pane = document.createElement('pre');
+      pane.className = 'term';
+      pane.append(promptLine(''));
+      const both = document.createElement('div');
+      both.className = 'split ' + direction;
+      panes.at(-1).replaceWith(both);
+      both.append(panes.at(-1), pane);
+      panes.push(pane);
+      pane.lastElementChild.append(cursor);
+    }
+    function closeSplit() {
+      const both = panes.pop().parentElement;
+      both.replaceWith(panes.at(-1));
+      panes.at(-1).lastElementChild.append(cursor);
+    }
+
+    // Those that can be chosen now, in the menus' order: the settings last
+    function commands() {
+      const all = [];
+      const add = (title, run, more) => all.push({ title, run, ...more });
+      const setting = (title, key, value, option) => add('Settings: ' + title, () => {
+        conf[key] = value;
+        written = option;
+        apply();
+        note.textContent = 'Written to foot.ini, and reloaded: the open windows have it.';
+      }, { checked: conf[key] === value });
+      const pick = (name) => () => {
+        written = 'include';
+        applyTheme(name);
+        note.textContent = name
+          ? 'foot.ini includes the theme now. All windows wear it, and so does this page.'
+          : 'The theme\'s line is gone from foot.ini.';
+      };
+
+      if (showQuake) add('Show Quake Terminal', showQuake);
+      if (panes.length < MAX_PANES) {
+        add('Split Right', () => split(''), { keys: '⌘D' });
+        add('Split Down', () => split('down'), { keys: '⇧⌘D' });
+      }
+      if (panes.length > 1) add('Close Split', closeSplit, { keys: '⌘W' });
+
+      add('Theme: Default Colors', pick(''));
+      for (const name of names) add('Theme: ' + name, pick(name), { checked: name === theme });
+
+      for (const size of [9, 10, 11, 12, 13, 14, 15, 16, 18])
+        setting(`Font Size: ${size} pt`, 'size', size, 'font');
+      for (const pad of [0, 2, 4, 8, 12, 16, 24, 32])
+        setting('Padding: ' + (pad ? pad + ' pt' : 'None'), 'pad', pad, 'pad');
+      for (const style of ['Block', 'Beam', 'Underline', 'Hollow'])
+        setting('Cursor: ' + style, 'cursor', style.toLowerCase(), 'style');
+      setting('Cursor: Blink', 'blink', !conf.blink, 'blink');
+      all.at(-1).checked = conf.blink;
+      return all;
+    }
+
+    function selectRow(row) {
+      if (!shown.length) return field.removeAttribute('aria-activedescendant');
+      selected = Math.max(0, Math.min(row, shown.length - 1));
+      [...list.children].forEach((item, i) => item.setAttribute('aria-selected', i === selected));
+      const item = list.children[selected];
+      field.setAttribute('aria-activedescendant', item.id);
+      // (Not scrollIntoView(): the page stays where it is)
+      const top = item.offsetTop - 6, bottom = item.offsetTop + item.offsetHeight + 6;
+      if (top < list.scrollTop) list.scrollTop = top;
+      else if (bottom > list.scrollTop + list.clientHeight) list.scrollTop = bottom - list.clientHeight;
+    }
+
+    // Those with all the words typed; first those starting with what's typed
+    function filter() {
+      const typed = field.value.trim().toLowerCase();
+      const words = typed.split(/\s+/).filter(Boolean);
+      const starting = [], others = [];
+      for (const command of commands()) {
+        const title = command.title.toLowerCase();
+        if (!words.every((word) => title.includes(word))) continue;
+        (typed && title.startsWith(typed) ? starting : others).push(command);
+      }
+      shown = starting.concat(others);
+
+      list.replaceChildren(...shown.map((command, i) => {
+        const item = document.createElement('li');
+        item.id = 'pal-row-' + i;
+        item.setAttribute('role', 'option');
+        const title = document.createElement('span'), keys = document.createElement('span');
+        title.textContent = command.title;
+        keys.textContent = command.keys || (command.checked ? '✓' : '');
+        item.append(title, keys);
+        item.addEventListener('click', () => run(command));
+        return item;
+      }));
+      list.scrollTop = 0;
+      selectRow(0);
+    }
+
+    function close() {
+      const focused = document.activeElement === field;
+      palette.hidden = true;
+      if (focused) show.focus();
+    }
+    function run(command) {
+      close();
+      note.textContent = '';
+      command.run();
+    }
+
+    field.addEventListener('input', filter);
+    field.addEventListener('keydown', (event) => {
+      const keys = {
+        ArrowUp: () => selectRow(selected - 1),
+        ArrowDown: () => selectRow(selected + 1),
+        PageUp: () => selectRow(selected - MAX_ROWS),
+        PageDown: () => selectRow(selected + MAX_ROWS),
+        Enter: () => { if (shown.length) run(shown[selected]); },
+        Escape: close,
+      };
+      if (!Object.hasOwn(keys, event.key) || event.isComposing) return;
+      event.preventDefault();
+      keys[event.key]();
+    });
+    show.addEventListener('click', () => {
+      if (!palette.hidden) return close();
+      palette.hidden = false;
+      field.value = '';
+      filter();
+      field.focus({ preventScroll: true });
+    });
+
+    themeChanged = () => { renderIni(); if (!palette.hidden) filter(); };
+    field.readOnly = false;
+    show.parentElement.hidden = false;
+    note.textContent = 'This one works. Type beam, 16 pt, split or nord, and press Return.';
+    apply();
+    filter();
   }
 })();
 </script>
