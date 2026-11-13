@@ -231,6 +231,10 @@ thead th { color: var(--dim); }
 .facts { display: grid; gap: 2rem clamp(32px, 5vw, 72px); margin-top: clamp(48px, 6vw, 80px); }
 @media (min-width: 760px) { .facts { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 .facts p { margin: 0; color: var(--dim); }
+/* Why: foot and another terminal; then when the other one is the better choice */
+@media (min-width: 760px) { .facts.two { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.two p:first-of-type { color: var(--fg); }
+.two p + p { margin-top: 0.7em; }
 
 /* Mac */
 .keys { display: grid; gap: 0.45rem; margin: 0; }
@@ -325,6 +329,7 @@ footer nav { display: flex; flex-wrap: wrap; gap: 0.4rem 3ch; margin-top: 1.4rem
       <a href="#sessions">Sessions</a>
       <a href="#mac">Mac</a>
       <a href="#control">Control</a>
+      <a href="#why">Why</a>
       <a href="#native">Native</a>
       <a href="#install">Install</a>
     </nav>
@@ -618,6 +623,50 @@ footer nav { display: flex; flex-wrap: wrap; gap: 0.4rem 3ch; margin-top: 1.4rem
         <p><code>--match</code> picks terminals by their title, directory or program: <code>foot @ send-text --match=program:less q</code> is for all that run less.</p>
       </div>
     </div>
+  </div>
+</section>
+
+<section class="sec" id="why">
+  <div class="wrap">
+    <div class="prose">
+      <h2>Why foot, and when not.</h2>
+      <p>The Mac has good terminals. foot is the one to pick if you want a small one: it starts at once, does nothing while idle, and keeps what runs in it running, on your Mac and on your servers.</p>
+      <p class="dim">It is not the one with the most features, and not the fastest at everything. This is how it differs from the others, and when they are the better choice.</p>
+    </div>
+
+    <div class="facts two">
+      <div>
+        <h3>foot or Apple's Terminal</h3>
+        <p>Terminal is already there, and since macOS 26 it has 24-bit color. foot adds what it leaves out: splits with a shell each, sessions that outlive the application, windows on your servers, a command palette, a drop-down terminal, sixel images, and a configuration that is one text file.</p>
+        <p>Stay with Terminal if you open one now and then, and don't want another application for it.</p>
+      </div>
+      <div>
+        <h3>foot or iTerm2</h3>
+        <p>iTerm2 has the most features of all. It keeps your jobs too when it crashes or is updated; quit it and they end, unless you change an advanced setting, and on a server it needs tmux there. foot keeps them in every case but a restart of the Mac, and brings what it needs to the server itself: one file.</p>
+        <p>Stay with iTerm2 if you use what only it has: triggers, automatic profile switching, its Python API.</p>
+      </div>
+      <div>
+        <h3>foot or Ghostty</h3>
+        <p>Ghostty is native on the Mac as well, draws on the GPU, and processes output the fastest: the numbers are <a href="#performance">above</a>. foot draws on the CPU, starts in half the time, uses half the memory and wakes up fifty times less often while idle. Ghostty brings back your windows and tabs; in foot, what ran in them is still running.</p>
+        <p>Stay with Ghostty if throughput matters most to you, or if you want ligatures or the kitty graphics protocol. foot has neither.</p>
+      </div>
+      <div>
+        <h3>foot or kitty</h3>
+        <p>Much of what terminals share today comes from kitty: its keyboard protocol, which foot speaks, and <code>kitty @</code>, which <code>foot @</code> is modeled on. kitty draws its own tabs and windows, the same on every system; foot uses the Mac's, and starts in 75 ms where kitty takes 683. Quit kitty and what runs in it ends.</p>
+        <p>Stay with kitty if you rely on its kittens, its graphics protocol or ligatures.</p>
+      </div>
+      <div>
+        <h3>foot or WezTerm</h3>
+        <p>WezTerm comes closest to foot's sessions: its multiplexer keeps them too, also over SSH, if WezTerm is installed on the server. foot installs footd there itself, without sudo. WezTerm is configured in Lua and runs on Windows too; foot is an .ini file and a Mac application.</p>
+        <p>Stay with WezTerm if you want to program your terminal, or use the same one on Windows.</p>
+      </div>
+      <div>
+        <h3>foot or tmux</h3>
+        <p>tmux is what foot's sessions replace for most. It keeps programs running, but the scrollback, the splits, the selection and the keys in it are tmux's. With footd they are the Mac's: native tabs and splits, the trackpad, the clipboard, and nothing to start first.</p>
+        <p>Keep tmux, in foot too, if you attach to a session from several machines or share it. footd's sessions are for foot on your Mac.</p>
+      </div>
+    </div>
+    <p class="note small">As of November 2026: Ghostty 1.4, kitty 0.50, and the documentation of iTerm2 and WezTerm. The numbers are those of the benchmark above, against kitty 0.49.2 and Ghostty 1.3.2. Something wrong or out of date? <a href="https://github.com/gobijan/foot-macos/issues">Please say so.</a></p>
   </div>
 </section>
 
