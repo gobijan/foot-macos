@@ -41,6 +41,40 @@ void notifications_init(void);
 /* themes.m: View > Theme */
 NSMenuItem *themes_menu_item(void);
 
+/*
+ * settings.m: foot > Settings: options of foot.ini, to choose from. An
+ * item writes its option to the file, and the configuration is reloaded.
+ */
+NSMenuItem *settings_menu_item(void);
+
+/* 'term's font size (e.g. after Cmd-+) is foot.ini's from now on */
+void settings_set_font_size(const struct terminal *term);
+
+/*
+ * foot.ini, line by line, to change options in it: the rest of the
+ * file stays as it is
+ */
+@interface FootIni : NSObject
+@property (nonatomic, copy) NSString *path;  /* Symlinks resolved */
+@property (nonatomic) NSMutableArray<NSString *> *lines;
+
+/*
+ * nil: it can't be read. 'create': it's created (from the documented
+ * defaults) if it doesn't exist, and what fails is shown; else, a file
+ * that doesn't exist has no lines.
+ */
++ (instancetype)load:(BOOL)create;
+
+/* The first line that may be an option's (after the mode line, if any) */
+- (NSUInteger)top;
+
+/* 'key' of 'section' (e.g. "main", "cursor") is 'value' */
+- (void)set:(NSString *)key in:(NSString *)section to:(NSString *)value;
+
+/* NO: it couldn't be written (which is shown) */
+- (BOOL)save;
+@end
+
 /* updates.m: foot > Check for Updates… (nil without Sparkle.framework) */
 NSMenuItem *updates_menu_item(void);
 
@@ -86,10 +120,19 @@ NSString *connections_address(NSString *text);
 void palette_toggle(void);
 bool palette_is_open(void);
 
+/*
+ * A submenu's item with this tag: the titles of the submenus in it are
+ * part of their commands' ("Settings: Cursor: Beam"), and its commands
+ * are listed after all others. Else, a command has the outermost
+ * submenu's title only ("Theme: nord"), and its menu's place.
+ */
+#define MENU_TAG_PATH 1
+
 /* One of its commands: a menu item, and the target it has */
 @interface FootCommand : NSObject
 @property (nonatomic, copy) NSString *title;     /* A submenu's first, e.g. "Theme: nord" */
 @property (nonatomic, copy) NSString *shortcut;  /* As the menus show it, e.g. ⇧⌘P */
+@property (nonatomic) BOOL checked;              /* As the menus show it: it's on, or the one chosen */
 @property (nonatomic) NSMenuItem *item;
 @property (nonatomic) id target;
 @end

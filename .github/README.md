@@ -228,6 +228,23 @@ frameworks.
   shell, the environment, the initial size, `[scrollback]`'s `lines`,
   `macos-titlebar-style`) is for new windows. Options from the command
   line (`-o`) stay.
+* foot > Settings has the options one changes now and then, to choose
+  from, without editing the file: the font (the installed ones with
+  characters of one width) and its size (This Window's: the size
+  `Cmd+=` and `Cmd+-` made it), font smoothing, opacity and blur, the
+  padding, the cursor, the scrollback, the bell, the notification for
+  long commands, Option as Alt, the mouse pointer while typing, asking
+  before closing, tabs in the titlebar, shell integration, sessions,
+  remote control and the quake terminal's position. `foot.ini` stays
+  what's true: the menu shows what the file says, and an item writes its
+  option there (where it's set, or else below its commented default, as
+  in the file foot creates, or at the end of its section) and leaves the
+  rest of the file as it is. Then the configuration is reloaded, so the
+  open windows take it too. As the menus' other items, they are in the
+  command palette, below the commands, with a check mark for what's on
+  (`Settings: Cursor: Beam`, or just `beam`), and scripts have them
+  (`foot @ run`). foot >
+  Edit foot.ini… (`Cmd+,`) opens the file, for everything else.
 * Font sizes are in points, like in other macOS applications. The
   default font is SF Mono (`monospace`), 13pt. Icons from installed Nerd
   Fonts are used automatically.
@@ -422,6 +439,7 @@ foot @ commands                       # what the menus have, with shortcuts
 foot @ run New Tab                    # one of them
 foot @ run --id=3 Split Right
 foot @ run Theme: nord
+foot @ run Settings: Font Size: 14 pt # written to foot.ini
 ```
 
 A project's windows, as a script (what kitty's session files are for):
@@ -462,9 +480,12 @@ foot @ focus --id=$editor
   the menus' items, by their titles (case doesn't matter), those of a
   submenu with its title first. So what the menus get, scripts have
   too: windows, tabs and splits, the other machines (`New Window on:
-  …`), the color themes, the font size, clearing, reloading the
-  configuration. They are those that can be chosen for that terminal
-  now, with the titles they have then (e.g. `Close Split`, with several).
+  …`), the color themes, the settings (`Settings: Cursor: Beam`), the
+  font size, clearing, reloading the configuration. They are those that
+  can be chosen for that terminal now, with the titles they have then
+  (e.g. `Close Split`, with several). `commands` prints one in a line:
+  its title, then, after a tab each, its shortcut and a `✓` if it has a
+  check mark in the menus (a setting that's on, the theme in use).
 * `send-text` takes `\r` (Return), `\n`, `\t`, `\e` (Escape), `\\` and
   `\xHH`; its arguments are joined with spaces.
 * `get-text --command-output` needs the shell's integration (see

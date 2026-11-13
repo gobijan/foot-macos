@@ -5,9 +5,11 @@
 /*
  * View > Command Palette (Cmd+Shift+P, as Ghostty's and Sublime Text's):
  * what the menus have, found by typing. That's the other machines too
- * (Shell > New Window on, New Tab on), the color themes (View > Theme)
- * and the windows (Window): nothing is listed here, so what the menus
- * get, the palette has.
+ * (Shell > New Window on, New Tab on), the color themes (View > Theme),
+ * the settings (foot > Settings) and the windows (Window): nothing is
+ * listed here, so what the menus get, the palette has. What has a
+ * check mark in the menus has one here. The settings come last: the
+ * list starts with the commands.
  *
  * A command is its menu item, with the target it has while the
  * terminal's window is still key (the palette's panel is, while it's
@@ -74,7 +76,8 @@ shortcut(NSMenuItem *item)
 /*
  * The menu's items that can be chosen now, and its submenus'. Those of
  * a submenu have its title first (e.g. "Theme: Nord"); 'prefix' is the
- * outermost one's (nil: 'menu' is one of the menu bar's).
+ * outermost one's (nil: 'menu' is one of the menu bar's). With 'path',
+ * the submenus' in between as well (MENU_TAG_PATH); those go to 'last'.
  */
 /*
  * As NSApp's targetForAction:to:from: finds it, in 'first's responder
@@ -111,8 +114,8 @@ target_from(NSResponder *first, NSMenuItem *item)
 
 /* 'first': the terminal's view (foot @, control.m); nil: the key window's */
 static void
-collect(NSMenu *menu, NSString *prefix, NSResponder *first,
-        NSMutableArray<FootCommand *> *commands)
+collect(NSMenu *menu, NSString *prefix, BOOL path, NSResponder *first,
+        NSMutableArray<FootCommand *> *commands, NSMutableArray<FootCommand *> *last)
 {
     /* Some are filled when they're opened */
     id<NSMenuDelegate> delegate = menu.delegate;
@@ -125,8 +128,12 @@ collect(NSMenu *menu, NSString *prefix, NSResponder *first,
             continue;
 
         if (item.submenu != nil) {
-            if (item.submenu != NSApp.servicesMenu)
-                collect(item.submenu, prefix != nil ? prefix : item.title, first, commands);
+            if (item.submenu != NSApp.servicesMenu) {
+                NSString *title = prefix == nil ? item.title
+                    : path ? [NSString stringWithFormat:@"%@: %@", prefix, item.title] : prefix;
+                const BOOL tagged = item.tag == MENU_TAG_PATH;
+                collect(item.submenu, title, path || tagged, first, tagged ? last : commands, last);
+            }
             continue;
         }
 
@@ -146,6 +153,7 @@ collect(NSMenu *menu, NSString *prefix, NSResponder *first,
         command.title = prefix != nil && ![item.title hasPrefix:prefix]
             ? [NSString stringWithFormat:@"%@: %@", prefix, item.title] : item.title;
         command.shortcut = shortcut(item);
+        command.checked = item.state == NSControlStateValueOn;
         command.item = item;
         command.target = target;
         [commands addObject:command];
@@ -181,10 +189,15 @@ NSArray<FootCommand *> *
 palette_commands(NSResponder *first)
 {
     NSMutableArray<FootCommand *> *commands = [NSMutableArray array];
+    NSMutableArray<FootCommand *> *last = [NSMutableArray array];
+
     for (NSMenuItem *item in NSApp.mainMenu.itemArray) {
         if (item.submenu != nil)
-            collect(item.submenu, nil, first, commands);
+            collect(item.submenu, nil, NO, first, commands, last);
     }
+
+    /* The settings: many, and below what one does more often */
+    [commands addObjectsFromArray:last];
     return commands;
 }
 
@@ -236,7 +249,7 @@ palette_run(FootCommand *command)
     panel.contentView = content;
 
     NSTextField *field = [[NSTextField alloc] init];
-    field.placeholderString = @"Command, machine or theme";
+    field.placeholderString = @"Command, setting, machine or theme";
     field.font = [NSFont systemFontOfSize:18];
     field.bordered = NO;
     field.drawsBackground = NO;
@@ -490,7 +503,8 @@ palette_run(FootCommand *command)
     }
 
     NSTableCellView *cell = cell_view(table, @"shortcut", NSTextAlignmentRight);
-    cell.textField.stringValue = command.shortcut;
+    cell.textField.stringValue = command.shortcut.length == 0 && command.checked
+        ? @"✓" : command.shortcut;
     cell.textField.textColor = NSColor.secondaryLabelColor;
     return cell;
 }

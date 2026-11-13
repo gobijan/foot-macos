@@ -36,10 +36,10 @@
 @implementation FootTheme
 @end
 
-/* foot.ini, line by line, and what the menu needs to know about it */
+/* foot.ini, line by line (settings.m), and what the menu needs to know about it */
 @interface FootThemeSettings : NSObject
-@property (nonatomic, copy) NSString *path;  /* Symlinks resolved */
-@property (nonatomic) NSMutableArray<NSString *> *lines;
+@property (nonatomic) FootIni *ini;
+@property (nonatomic, readonly) NSMutableArray<NSString *> *lines;
 
 /* In [main] */
 @property (nonatomic) NSMutableIndexSet *theme_lines;
@@ -52,6 +52,10 @@
 @end
 
 @implementation FootThemeSettings
+- (NSMutableArray<NSString *> *)lines
+{
+    return self.ini.lines;
+}
 @end
 
 @interface FootThemesMenu : NSObject <NSMenuDelegate>
@@ -155,54 +159,21 @@ str_to_bool(NSString *value)
     return NO;
 }
 
-static void
-show_error(NSString *message, NSError *error)
-{
-    LOG_ERR("%s: %s", message.UTF8String, error.localizedDescription.UTF8String);
-
-    NSAlert *alert = [[NSAlert alloc] init];
-    alert.messageText = message;
-    alert.informativeText = error != nil ? error.localizedDescription : @"";
-    [alert runModal];
-}
-
 /* 'create': create foot.ini (from the documented defaults) if it doesn't exist */
 static FootThemeSettings *
 load_settings(BOOL create)
 {
-    char *conf_path = windows_settings_path();
-    if (conf_path == NULL)
+    FootIni *ini = [FootIni load:create];
+    if (ini == nil)
         return nil;
-
-    if (create && !windows_create_settings(conf_path)) {
-        free(conf_path);
-        return nil;
-    }
 
     FootThemeSettings *s = [[FootThemeSettings alloc] init];
-    s.path = @(conf_path).stringByResolvingSymlinksInPath;
+    s.ini = ini;
     s.theme_lines = [NSMutableIndexSet indexSet];
     s.theme_paths = [NSMutableDictionary dictionary];
     s.selected = [NSMutableSet set];
     s.last_include = s.initial_theme_line = s.follow_line = -1;
     s.follow = YES;  /* The default */
-    free(conf_path);
-
-    NSError *error = nil;
-    NSString *text = [NSString stringWithContentsOfFile:s.path encoding:NSUTF8StringEncoding error:&error];
-
-    if (text == nil) {
-        if (!create && ![[NSFileManager defaultManager] fileExistsAtPath:s.path]) {
-            s.lines = [NSMutableArray array];
-            return s;
-        }
-
-        if (create)
-            show_error([NSString stringWithFormat:@"Couldn't read %@", s.path], error);
-        return nil;
-    }
-
-    s.lines = [[text componentsSeparatedByString:@"\n"] mutableCopy];
 
     /* As parse_config_file() */
     BOOL in_main = YES;
@@ -250,25 +221,13 @@ load_settings(BOOL create)
     return s;
 }
 
-/* The top of the file, after the mode line (if any) */
-static NSUInteger
-top_line(FootThemeSettings *s)
-{
-    return s.lines.count > 0 && [s.lines[0] hasPrefix:@"# -*-"] ? 1 : 0;
-}
-
 static BOOL
 save_settings(FootThemeSettings *s)
 {
-    NSError *error = nil;
-    if (![[s.lines componentsJoinedByString:@"\n"]
-            writeToFile:s.path atomically:YES encoding:NSUTF8StringEncoding error:&error])
-    {
-        show_error([NSString stringWithFormat:@"Couldn't save %@", s.path], error);
+    if (![s.ini save])
         return NO;
-    }
 
-    LOG_INFO("%s: updated the color theme", s.path.UTF8String);
+    LOG_INFO("%s: updated the color theme", s.ini.path.UTF8String);
     return YES;
 }
 
@@ -336,7 +295,7 @@ apply_settings(void)
 
     NSUInteger at = s.theme_lines.count > 0 ? s.theme_lines.lastIndex + 1
                   : s.last_include >= 0 ? (NSUInteger)s.last_include + 1
-                  : top_line(s);
+                  : [s.ini top];
 
     NSString *path = [themes_dir() stringByAppendingPathComponent:theme.name];
     [s.lines insertObject:[@"include=" stringByAppendingString:path] atIndex:at];
@@ -372,7 +331,7 @@ apply_settings(void)
     if (s.follow_line >= 0)
         s.lines[s.follow_line] = line;
     else
-        [s.lines insertObject:line atIndex:top_line(s)];
+        [s.lines insertObject:line atIndex:[s.ini top]];
 
     if (save_settings(s))
         apply_settings();

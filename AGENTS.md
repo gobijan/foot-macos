@@ -54,6 +54,13 @@ its own; tests: `FOOT_CONTROL_SOCKET=<path>`). Its `commands` and `run`
 are the command palette's (`macos/palette.m`): the menus' items. A new
 menu item is in the palette and scriptable; nothing is listed twice.
 
+Settings: foot > Settings (`macos/settings.m`) has options of foot.ini
+to choose from. foot.ini stays what's true: the menu is built from the
+file when it's opened, and an item writes its option there (`FootIni`,
+which keeps the rest of the file; View > Theme uses it too) and reloads
+the configuration (`macos/reload.m`). A new setting is an item there.
+`macos/smoke-test.py build/macos settings` checks it.
+
 Persistent sessions: the programs run in footd (`macos/footd.c`), a
 daemon foot starts; a window's terminal reads footd's socket instead of
 a PTY (`macos/session.c`), and the windows' layout is kept by footd

@@ -1074,7 +1074,9 @@ create_menu(void)
         if (updates != nil)
             [menu addItem:updates];
         [menu addItem:[NSMenuItem separatorItem]];
-        [menu addItem:menu_item(@"Settings…", @selector(openSettings:), @",", cmd)];
+        /* What's chosen there is written to foot.ini; and the file itself */
+        [menu addItem:settings_menu_item()];
+        [menu addItem:menu_item(@"Edit foot.ini…", @selector(openSettings:), @",", cmd)];
         [menu addItem:menu_item(@"Reload Configuration", @selector(reloadConfiguration:), @",",
                                 cmd | NSEventModifierFlagShift)];
         [menu addItem:menu_item(@"Secure Keyboard Entry", @selector(toggleSecureInput:), @"", 0)];

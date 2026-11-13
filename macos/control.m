@@ -570,8 +570,10 @@ commands(NSMutableArray<NSString *> *args, bool run)
         NSMutableString *out = [NSMutableString string];
         for (FootCommand *command in all) {
             [out appendString:command.title];
-            if (command.shortcut.length > 0)
+            if (command.shortcut.length > 0 || command.checked)
                 [out appendFormat:@"\t%@", command.shortcut];
+            if (command.checked)
+                [out appendString:@"\t✓"];  /* As in the menus: it's on, or the one chosen */
             [out appendString:@"\n"];
         }
         return succeeded([out dataUsingEncoding:NSUTF8StringEncoding]);

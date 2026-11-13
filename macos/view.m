@@ -1093,6 +1093,13 @@ url_under_mouse(struct seat *seat, struct terminal *term, bool activate)
 - (void)decreaseFontSize:(id)sender        { [self action:BIND_ACTION_FONT_SIZE_DOWN]; }
 - (void)resetFontSize:(id)sender           { [self action:BIND_ACTION_FONT_SIZE_RESET]; }
 
+/* foot > Settings > Font Size > This Window's */
+- (void)makeFontSizeDefault:(id)sender
+{
+    if (self.win != NULL && self.win->term != NULL)
+        settings_set_font_size(self.win->term);
+}
+
 /* With the shell's integration (shell-integration.h): its prompts, and its commands' output */
 - (void)jumpToPreviousPrompt:(id)sender    { [self action:BIND_ACTION_PROMPT_PREV]; }
 - (void)jumpToNextPrompt:(id)sender        { [self action:BIND_ACTION_PROMPT_NEXT]; }

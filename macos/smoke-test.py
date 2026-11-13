@@ -254,6 +254,193 @@ class Tests:
         if 'ERROR' in out:
             raise Failure(f'foot:\n{out}')
 
+    def test_settings(self):
+        """foot > Settings: an item writes its option to foot.ini, and the open window takes it"""
+        tmp = os.path.join(self.tmp, 'settings')
+        os.mkdir(tmp)
+        config = os.path.join(tmp, 'foot.ini')
+        theme = os.path.join(tmp, 'theme.ini')
+        with open(theme, 'w') as f:
+            f.write('[cursor]\nblink=yes\n')
+
+        before = (
+            '# -*- conf -*-\n'
+            '\n'
+            'macos-quake-position=left  # above the include\n'
+            f'include={theme}\n'
+            'shell=/bin/sh\n'
+            'login-shell=no\n'
+            'macos-confirm-close=no\n'
+            '# font=monospace:size=8\n'
+            '  pad=0x0 center   # none\n'
+            '\n'
+            '[cursor]\n'
+            '# style=block\n'
+            '# blink=no\n'
+            '\n'
+            '[mouse]\n'
+            'hide-when-typing=no\n'
+            'alternate-scroll-mode=yes')  # (No newline at its end)
+        with open(config, 'w') as f:
+            f.write(before)
+
+        env = dict(ENV, FOOT_CONTROL_SOCKET=os.path.join(tmp, 'c.sock'))
+        foot = subprocess.Popen(
+            [self.foot, f'--config={config}', '--window-size-chars=100x30',
+             '--override=resize-keep-grid=no', 'sh', '-c', 'echo ready; sleep 1000'],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, env=env)
+
+        def at(*args, expect=0):
+            return run(self.foot, '@', *args, expect=expect, env=env)
+
+        def wait(what, check):
+            deadline = time.time() + TIMEOUT
+            while not check():
+                if foot.poll() is not None:
+                    raise Failure(f'{what}: foot exited ({foot.returncode})')
+                if time.time() > deadline:
+                    raise Failure(f'{what}: not reached ({at("ls")})')
+                time.sleep(.1)
+
+        def size():
+            t = json.loads(at('ls'))[0]
+            return t['rows'], t['columns']
+
+        def lines():
+            with open(config) as f:
+                return f.read().split('\n')
+
+        def checked():
+            return [line.split('\t')[0] for line in at('commands').split('\n')
+                    if line.endswith('\t✓') and line.startswith('Settings: ')]
+
+        def expect(what, *titles):
+            got = checked()
+            for title in titles:
+                if f'Settings: {title}' not in got:
+                    raise Failure(f'{what}: {title} has no check mark: {got}')
+
+        failed = None
+        try:
+            wait_for(env['FOOT_CONTROL_SOCKET'])
+            wait('the program', lambda: 'ready' in at('get-text'))
+            if size() != (30, 100):
+                raise Failure(f'the window: {size()}')
+
+            # What the file says, the included one too, and the defaults
+            expect('at first', 'Font: Default (SF Mono)', 'Font Size: 13 pt', 'Padding: None',
+                   'Cursor: Block', 'Cursor: Blink', 'Opacity: 100%', 'Bell: Sound',
+                   'Option as Alt: By Keyboard Layout', 'Scrollback (New Windows): 1,000 Lines',
+                   'Notify When a Command Finishes: Never', 'Quake Terminal: Left',
+                   'Font Smoothing: 100%', 'Shell Integration (New Windows)')
+            if 'Settings: Ask Before Closing a Running Program' in checked():
+                raise Failure(f'macos-confirm-close=no has a check mark: {checked()}')
+
+            # Below the commands: the list starts with what the other menus have
+            titles = [line.split('\t')[0] for line in at('commands').split('\n') if line]
+            settings = [title.startswith('Settings: ') for title in titles]
+            if settings[0] or not settings[-1] or sorted(settings) != settings or \
+                    titles.index('Edit foot.ini…') > titles.index('New Window'):
+                raise Failure(f'the settings aren\'t the last commands: {titles}')
+
+            # The assignment there is: replaced, as it's written (and the window
+            # keeps its size: less of it is the grid's)
+            at('run', 'Settings: Padding: 32 pt')
+            wait('padding', lambda: size()[0] < 30 and size()[1] < 100)
+            if '  pad=32x32 center   # none' not in lines():
+                raise Failure(f'pad: {lines()}')
+            expect('padding', 'Padding: 32 pt')
+            at('run', 'Settings: Padding: None')
+            wait('no padding', lambda: size() == (30, 100))
+
+            # None: below the documented default; all the rest is as it was
+            at('run', 'Settings: Font Size: 28 pt')
+            wait('a larger font', lambda: 10 <= size()[0] <= 17)
+            got = lines()
+            at_font = got.index('# font=monospace:size=8')
+            if got[at_font + 1] != 'font=monospace:size=28' or \
+                    got[:at_font + 1] + got[at_font + 2:] != before.split('\n') + ['']:
+                raise Failure(f'font: {got}')
+            expect('the font size', 'Font Size: 28 pt')
+
+            # Another font, in that size; then the size the window has
+            at('run', 'Settings: Font: Menlo')
+            wait('Menlo', lambda: 'font=Menlo:size=28' in lines())
+            expect('the font', 'Font: Menlo', 'Font Size: 28 pt')
+            columns = size()[1]
+            for i in range(4):
+                at('run', 'Smaller')
+            wait('a smaller font', lambda: size()[1] > columns)
+            at('run', "Settings: Font Size: This Window's")
+            fonts = [line for line in lines() if line.startswith('font=')]
+            if len(fonts) != 1 or not fonts[0].startswith('font=Menlo:size=') or \
+                    not 13 < float(fonts[0].split('=')[-1]) < 28:
+                raise Failure(f'this window\'s font size: {fonts}')
+
+            # Below the documented default too, and that's after what the
+            # included file says; a switch is off again when it's chosen once more
+            at('run', 'Settings: Cursor: Beam')
+            at('run', 'Settings: Cursor: Blink')
+            got = lines()
+            if got[got.index('# style=block') + 1] != 'style=beam' or \
+                    got[got.index('# blink=no') + 1] != 'blink=no':
+                raise Failure(f'cursor: {got}')
+            expect('the cursor', 'Cursor: Beam')
+            if 'Settings: Cursor: Blink' in checked():
+                raise Failure('blink=no has a check mark')
+            at('run', 'Settings: Cursor: Blink')
+            if 'blink=yes' not in lines() or 'blink=no' in lines():
+                raise Failure(f'blink, again: {lines()}')
+
+            # Replaced; the file's last line had no end, and has one now
+            at('run', 'Settings: Hide the Mouse Pointer While Typing')
+            got = lines()
+            if 'hide-when-typing=yes' not in got or got[-2:] != ['alternate-scroll-mode=yes', '']:
+                raise Failure(f'mouse: {got}')
+
+            # Sections that aren't there: added; several options at once
+            at('run', 'Settings: Opacity: 90%')
+            at('run', 'Settings: Bell: Flash')
+            got = lines()
+            if got[-10:] != ['', '[colors-dark]', 'alpha=0.9', '', '[colors-light]', 'alpha=0.9',
+                            '', '[bell]', 'visual=yes', '']:
+                raise Failure(f'new sections: {got}')
+            expect('new sections', 'Opacity: 90%', 'Bell: Flash', 'Bell: Sound')
+
+            # In [main], though the file's last section is another: after its
+            # last assignment
+            at('run', 'Settings: Font Smoothing: 50%')
+            at('run', 'Settings: Option as Alt: Both Option Keys')
+            at('run', 'Settings: Tabs in the Titlebar (New Windows)')
+            got = lines()
+            start = got.index('  pad=0x0 center   # none')
+            if got[start + 1:start + 6] != [
+                    'macos-font-smoothing=yes', 'macos-font-smoothing-strength=0.5',
+                    'macos-option-as-alt=both', 'macos-titlebar-style=tabs', '']:
+                raise Failure(f'[main]: {got}')
+            expect('[main]', 'Font Smoothing: 50%', 'Option as Alt: Both Option Keys',
+                   'Tabs in the Titlebar (New Windows)')
+
+            # An assignment above an include=: it goes below it (the included
+            # file's would count else), with its comment
+            expect('above the include', 'Quake Terminal: Left')
+            at('run', 'Settings: Quake Terminal: Bottom')
+            got = lines()
+            start = got.index('  pad=0x0 center   # none')
+            if got[start + 5] != "macos-quake-position=bottom  # above the include" or \
+                    len([line for line in got if line.startswith('macos-quake-position')]) != 1:
+                raise Failure(f'above the include: {got}')
+            expect('below the include', 'Quake Terminal: Bottom')
+        except Failure as failure:
+            failed = failure
+        finally:
+            foot.terminate()
+            out = foot.communicate()[0]
+
+        if failed is not None or 'ERROR' in out:
+            raise Failure(f'{failed or "errors"}\nfoot:\n{out}')
+
     def test_command_finish(self):
         """A command that took long is notified of, with its exit status; a short one isn't"""
         tmp = os.path.join(self.tmp, 'command-finish')
@@ -430,7 +617,7 @@ class Tests:
             t.wait('no padding', lambda got: got[a] == (30, 100))
 
             # Twice the font size (and another number of fonts): half the grid
-            t.configure('pad=0x0\nfont=monospace:size=26, Menlo:size=26\n')
+            t.configure('pad=0x0\nfont=monospace:size=28, Menlo:size=26\n')
             t.perform('reloadConfiguration:')
             t.wait('a larger font', lambda got: 10 <= got[a][0] <= 17 and 40 <= got[a][1] <= 55)
 
@@ -611,6 +798,17 @@ class Tests:
             # The first one starting with what's typed (others: "New Window on: …")
             t.perform('palette new window')
             t.wait('a new window', lambda got: len(got) == 2)
+
+            # A setting, by some of its words: written to foot.ini
+            t.perform('palette cursor beam')
+            deadline = time.time() + TIMEOUT
+            while True:
+                with open(t.config) as f:
+                    if '[cursor]\nstyle=beam\n' in f.read():
+                        break
+                if time.time() > deadline or t.foot.poll() is not None:
+                    raise Failure('the palette\'s setting: not written')
+                time.sleep(.1)
         finally:
             out = t.quit()
 

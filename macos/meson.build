@@ -432,6 +432,7 @@ foot = executable(
   'quake.m',
   'hotkey.m',
   'themes.m',
+  'settings.m',
   'reload.m',
   'updates.m',
   'default-colors.c', 'default-colors.h',
