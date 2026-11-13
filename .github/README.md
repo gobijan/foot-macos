@@ -31,6 +31,15 @@ foot; that is what keeps it lean (an idle window uses next to no CPU
 and ~30MB of memory, and wakes up less than once a second; see
 [Performance](#performance)).
 
+The platform layer is written in Objective-C and C, not Swift.
+Objective-C is a superset of C: it includes foot's headers and works
+with the core's structs and macros directly, and implements the C
+functions the core calls next to the AppKit code. Swift would need
+bridging at every one of these places, a second compiler and its
+runtime; here, meson builds everything with one toolchain (PGO, the
+sanitizers and the universal binary included). The parts that also run
+on Linux (footd) are plain C.
+
 ## Performance
 
 foot against kitty and Ghostty on the same Mac. foot starts the
