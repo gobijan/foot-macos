@@ -580,8 +580,11 @@ class Tests:
                 time.sleep(.1)
 
         def perform(self, action):
-            with open(os.path.join(self.tmp, 'action'), 'w') as f:
+            # (At once: the driver may read the file at any time)
+            path = os.path.join(self.tmp, 'action')
+            with open(path + '.tmp', 'w') as f:
                 f.write(action)
+            os.rename(path + '.tmp', path)
 
         def quit(self):
             """The shells exit, and foot with its last window; returns its output"""
@@ -900,8 +903,11 @@ class Tests:
                 time.sleep(.1)
 
         def perform(self, action):
-            with open(os.path.join(self.tmp, 'action'), 'w') as f:
+            # (At once: the driver may read the file at any time)
+            path = os.path.join(self.tmp, 'action')
+            with open(path + '.tmp', 'w') as f:
                 f.write(action)
+            os.rename(path + '.tmp', path)
 
         def windows(self, proc):
             path = os.path.join(self.tmp, 'windows')
