@@ -227,6 +227,9 @@ void window_close_all(NSWindow *window, NSArray<NSWindow *> *windows);
  */
 bool app_confirm_quit(bool end_sessions);
 
+/* foot is quitting: its terminals are shutting down, and it exits with the last */
+bool app_terminating(void);
+
 /*
  * tabs.m: a terminal window; with 'titlebar_tabs', its tab bar is in the
  * titlebar (macos-titlebar-style=tabs; macOS 26 and later)

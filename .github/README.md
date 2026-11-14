@@ -93,7 +93,9 @@ silicon and Intel) for macOS 14 and later, signed and notarized.
 foot updates itself (foot > Check for Updates…, with
 [Sparkle](https://sparkle-project.org)); on the second launch, it asks
 whether to check automatically, once a day. Homebrew's cask also puts
-`foot` and `footclient` in your `$PATH`.
+`foot` and `footclient` in your `$PATH`. If `brew upgrade` replaced
+foot.app while foot was running, Check for Updates… offers to restart
+foot instead.
 
 ## Building
 

@@ -179,6 +179,12 @@ stop_running(void)
     [NSApp postEvent:event atStart:YES];
 }
 
+bool
+app_terminating(void)
+{
+    return app.terminating;
+}
+
 void
 app_run_hooks(void)
 {
