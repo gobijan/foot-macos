@@ -1070,17 +1070,19 @@ class Tests:
                     other.kill()
                     other.communicate()
 
-            # (Until footd has caught up with its backlog, it refuses connections)
-            def accepting():
-                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
-                    try:
-                        conn.connect(t.sock)
-                        return True
-                    except ConnectionRefusedError:
-                        return False
-            t.wait('footd accepting again', accepting, foot)
-            if os.stat(t.sock).st_ino != inode or [s['pid'] for s in t.sessions()] != [shell]:
-                raise Failure(f'footd was replaced: {t.sessions()}')
+            # (Until footd has caught up with its backlog, it refuses connections:
+            # also after one that it accepted)
+            sessions = []
+
+            def answering():
+                try:
+                    sessions[:] = t.sessions()
+                    return True
+                except ConnectionRefusedError:
+                    return False
+            t.wait('footd accepting again', answering, foot)
+            if os.stat(t.sock).st_ino != inode or [s['pid'] for s in sessions] != [shell]:
+                raise Failure(f'footd was replaced: {sessions}')
 
             # footd crashes: its windows end, and the next foot starts another one
             # (the socket it left behind refuses connections)
