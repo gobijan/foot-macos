@@ -24,7 +24,9 @@
  * last of them. Without macos-follow-appearance, there is one theme:
  * the new one replaces all others. With it, there's a dark and a light
  * one: themes are removed once later ones cover all of their colors
- * (e.g. a dark and a light theme replace one with both).
+ * (e.g. a dark and a light theme replace one with both). A theme that
+ * isn't for the system's appearance as it is now turns
+ * macos-follow-appearance off: what's chosen is what's seen.
  */
 
 @interface FootTheme : NSObject
@@ -270,6 +272,19 @@ apply_settings(void)
     if (s == nil)
         return;
 
+    /*
+     * A dark theme while the system is light (or the other way round)
+     * wouldn't be seen, as if nothing had been chosen: it's the one
+     * theme then, and the appearance is no longer followed
+     */
+    const BOOL unseen = s.follow && theme.dark != theme.light &&
+        theme.dark != app_appearance_is_dark();
+    if (unseen) {
+        s.follow = NO;
+        if (s.follow_line >= 0)
+            s.lines[s.follow_line] = @"macos-follow-appearance=no";
+    }
+
     /* With one theme (not following the appearance), it decides
      * whether the dark or the light colors are used */
     if (!s.follow && theme.dark != theme.light && s.initial_theme_line >= 0) {
@@ -302,6 +317,9 @@ apply_settings(void)
 
     /* All before the inserted line */
     [s.lines removeObjectsAtIndexes:remove];
+
+    if (unseen && s.follow_line < 0)
+        [s.lines insertObject:@"macos-follow-appearance=no" atIndex:[s.ini top]];
 
     if (save_settings(s))
         apply_settings();
@@ -418,5 +436,6 @@ themes_menu_item(void)
 
     NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:@"Theme" action:nil keyEquivalent:@""];
     item.submenu = menu;
+    item.tag = MENU_TAG_TITLES;  /* The palette says which are dark ("Theme: Dark: nord") */
     return item;
 }

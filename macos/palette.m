@@ -75,9 +75,11 @@ shortcut(NSMenuItem *item)
 
 /*
  * The menu's items that can be chosen now, and its submenus'. Those of
- * a submenu have its title first (e.g. "Theme: Nord"); 'prefix' is the
- * outermost one's (nil: 'menu' is one of the menu bar's). With 'path',
- * the submenus' in between as well (MENU_TAG_PATH); those go to 'last'.
+ * a submenu have its title first (e.g. "New Window on: This Mac");
+ * 'prefix' is the outermost one's (nil: 'menu' is one of the menu
+ * bar's). With 'path',
+ * the submenus' in between as well (MENU_TAG_PATH, whose go to 'last',
+ * and MENU_TAG_TITLES).
  */
 /*
  * As NSApp's targetForAction:to:from: finds it, in 'first's responder
@@ -132,7 +134,8 @@ collect(NSMenu *menu, NSString *prefix, BOOL path, NSResponder *first,
                 NSString *title = prefix == nil ? item.title
                     : path ? [NSString stringWithFormat:@"%@: %@", prefix, item.title] : prefix;
                 const BOOL tagged = item.tag == MENU_TAG_PATH;
-                collect(item.submenu, title, path || tagged, first, tagged ? last : commands, last);
+                collect(item.submenu, title, path || tagged || item.tag == MENU_TAG_TITLES, first,
+                        tagged ? last : commands, last);
             }
             continue;
         }

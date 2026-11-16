@@ -271,7 +271,9 @@ frameworks.
   theme (View > Theme > Follow System Appearance,
   `macos-follow-appearance=yes` in `[main]`, on by default): a theme
   with dark colors only replaces Grok Night, one with light colors only
-  Grok Day. For one theme in both modes, turn it off. Programs that ask
+  Grok Day. For one theme in both modes, turn it off; choosing a dark
+  theme while the system is light (or a light one while it's dark) does
+  that too, so what's chosen is what's seen. Programs that ask
   for theme changes (mode 2031, e.g. Neovim) are notified.
 * Closing a window asks first when something other than the shell is
   running in it (tmux, screen and zellij don't count: they keep
@@ -440,7 +442,7 @@ foot @ close --match=title:^tests$    # closes it (--force: without asking)
 foot @ commands                       # what the menus have, with shortcuts
 foot @ run New Tab                    # one of them
 foot @ run --id=3 Split Right
-foot @ run Theme: nord
+foot @ run Theme: Dark: nord
 foot @ run Settings: Font Size: 14 pt # written to foot.ini
 ```
 

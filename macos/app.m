@@ -929,8 +929,8 @@ seat_destroy(struct seat *seat)
 
 static int appearance_context;
 
-static bool
-appearance_is_dark(void)
+bool
+app_appearance_is_dark(void)
 {
     NSAppearanceName name = [NSApp.effectiveAppearance
         bestMatchFromAppearancesWithNames:@[NSAppearanceNameAqua, NSAppearanceNameDarkAqua]];
@@ -964,7 +964,7 @@ app_apply_color_theme(struct terminal *term, bool reload)
      */
     if (conf->macos.follow_appearance) {
         conf->initial_color_theme =
-            appearance_is_dark() ? COLOR_THEME_DARK : COLOR_THEME_LIGHT;
+            app_appearance_is_dark() ? COLOR_THEME_DARK : COLOR_THEME_LIGHT;
     } else if (!reload)
         return;
 

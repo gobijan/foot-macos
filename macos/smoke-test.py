@@ -432,6 +432,28 @@ class Tests:
                     len([line for line in got if line.startswith('macos-quake-position')]) != 1:
                 raise Failure(f'above the include: {got}')
             expect('below the include', 'Quake Terminal: Bottom')
+
+            # View > Theme: a theme for the system's appearance is the one
+            # for it. One for the other appearance wouldn't be seen: it's
+            # the one theme then, and the appearance isn't followed
+            dark = subprocess.run(['defaults', 'read', '-g', 'AppleInterfaceStyle'],
+                                  capture_output=True, text=True).stdout.strip() == 'Dark'
+            seen, unseen = ('Dark: nord', 'Light: catppuccin-latte')[::1 if dark else -1]
+
+            def themes():
+                return [line.split('\t')[0] for line in at('commands').split('\n')
+                        if line.endswith('\t✓') and line.startswith('Theme: ')]
+
+            at('run', f'Theme: {seen}')
+            if themes() != [f'Theme: {seen}', 'Theme: Follow System Appearance'] or \
+                    any(line.startswith('macos-follow-appearance') for line in lines()):
+                raise Failure(f'a theme for the appearance: {themes()}, {lines()}')
+
+            at('run', f'Theme: {unseen}')
+            got = lines()
+            if themes() != [f'Theme: {unseen}'] or got[1] != 'macos-follow-appearance=no' or \
+                    len([line for line in got if '/themes/' in line]) != 1:
+                raise Failure(f'a theme for the other appearance: {themes()}, {got}')
         except Failure as failure:
             failed = failure
         finally:

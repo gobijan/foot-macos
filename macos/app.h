@@ -25,6 +25,7 @@ void app_run_hooks(void);
  * themes changed; re-apply, and use initial-color-theme otherwise.
  */
 void app_apply_color_theme(struct terminal *term, bool reload);
+bool app_appearance_is_dark(void);  /* The system's, now */
 
 /*
  * reload.m: foot > Reload Configuration: the windows that are open take
@@ -124,13 +125,15 @@ bool palette_is_open(void);
  * A submenu's item with this tag: the titles of the submenus in it are
  * part of their commands' ("Settings: Cursor: Beam"), and its commands
  * are listed after all others. Else, a command has the outermost
- * submenu's title only ("Theme: nord"), and its menu's place.
+ * submenu's title only ("New Window on: This Mac"), and its menu's place.
+ * MENU_TAG_TITLES: the titles, in its menu's place ("Theme: Dark: nord").
  */
 #define MENU_TAG_PATH 1
+#define MENU_TAG_TITLES 2
 
 /* One of its commands: a menu item, and the target it has */
 @interface FootCommand : NSObject
-@property (nonatomic, copy) NSString *title;     /* A submenu's first, e.g. "Theme: nord" */
+@property (nonatomic, copy) NSString *title;     /* A submenu's first, e.g. "Theme: Dark: nord" */
 @property (nonatomic, copy) NSString *shortcut;  /* As the menus show it, e.g. ⇧⌘P */
 @property (nonatomic) BOOL checked;              /* As the menus show it: it's on, or the one chosen */
 @property (nonatomic) NSMenuItem *item;
