@@ -41,7 +41,6 @@ The fast, lightweight and minimalistic Wayland terminal emulator.
 1. [Contact](#contact)
    1. [IRC](#irc)
    1. [Mastodon](#mastodon)
-1. [Sponsoring/donations](#sponsoring-donations)
 1. [Credits](#Credits)
 1. [License](#license)
 
@@ -699,14 +698,6 @@ available at https://libera.irclog.whitequark.org/foot.
 
 Every now and then I post foot related updates on
 [@dnkl@social.treehouse.systems](https://social.treehouse.systems/@dnkl)
-
-
-# Sponsoring/donations
-
-* Liberapay: https://liberapay.com/dnkl
-* GitHub Sponsors: https://github.com/sponsors/dnkl
-
-[![Donate using Liberapay](https://liberapay.com/assets/widgets/donate.svg)](https://liberapay.com/dnkl/donate)
 
 
 # Credits
