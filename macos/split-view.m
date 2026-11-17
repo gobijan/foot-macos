@@ -49,13 +49,20 @@
 #define ANIMATION_CURVE .23 :1. :.32 :1.
 
 /*
- * A pane that's closed gets smaller, to this, and fades out (its
+ * A new pane pops in where it goes, from this size, and fades in (its
+ * "windowsIn": 4.1, easeOutQuint, popin 87%; "fadeIn": 1.73, almostLinear)
+ */
+#define POP_SCALE .87
+#define OPEN_DURATION .41
+#define OPEN_FADE_DURATION .173
+#define FADE_CURVE .5 :.5 :.75 :1.
+
+/*
+ * A pane that's closed gets smaller, to that size, and fades out (its
  * "windowsOut": 1.49, linear, popin 87%; "fadeOut": 1.46, almostLinear)
  */
-#define CLOSE_SCALE .87
 #define CLOSE_DURATION .149
 #define CLOSE_FADE_DURATION .146
-#define CLOSE_FADE_CURVE .5 :.5 :.75 :1.
 
 /* What a pane's handle puts on the pasteboard (the pane is the drag's source) */
 static NSPasteboardType const pane_pasteboard_type = @"io.github.gobijan.foot.pane";
@@ -578,7 +585,7 @@ drop_side(NSPoint p, struct split_rect r)
     NSTrackingArea *_trackingArea;
     BOOL _windowOccluded;
 
-    /* New panes, not laid out yet: they come in from their edge */
+    /* New panes, not laid out yet: they pop in */
     NSHashTable<FootView *> *_entering;
 
     /* The pane that's above the others while it moves (zoomed, or dragged) */
@@ -725,6 +732,40 @@ drop_side(NSPoint p, struct split_rect r)
     }
 }
 
+/*
+ * A new pane's 'layer' pops in: it grows to its size, around its middle,
+ * and fades in, above the others (the pane that's split is still there)
+ */
+- (void)popIn:(CALayer *)layer
+{
+    const CGSize size = layer.bounds.size;
+    const CGPoint anchor = layer.anchorPoint;
+    const CGFloat rest = 1. - POP_SCALE;
+
+    /* The middle stays where it is, wherever the layer's anchor is */
+    CABasicAnimation *scale = [CABasicAnimation animationWithKeyPath:@"transform"];
+    scale.fromValue = [NSValue valueWithCATransform3D:CATransform3DConcat(
+        CATransform3DMakeScale(POP_SCALE, POP_SCALE, 1.),
+        CATransform3DMakeTranslation(
+            rest * (.5 - anchor.x) * size.width, rest * (.5 - anchor.y) * size.height, 0.))];
+    scale.toValue = [NSValue valueWithCATransform3D:CATransform3DIdentity];
+    scale.duration = OPEN_DURATION;
+    scale.timingFunction = [CAMediaTimingFunction functionWithControlPoints:ANIMATION_CURVE];
+
+    CABasicAnimation *fade = [CABasicAnimation animationWithKeyPath:@"opacity"];
+    fade.fromValue = @0;
+    fade.toValue = @1;
+    fade.duration = OPEN_FADE_DURATION;
+    fade.timingFunction = [CAMediaTimingFunction functionWithControlPoints:FADE_CURVE];
+
+    CABasicAnimation *above = [CABasicAnimation animationWithKeyPath:@"zPosition"];
+    above.fromValue = above.toValue = @1;
+    above.duration = OPEN_DURATION;
+
+    for (CABasicAnimation *animation in @[scale, fade, above])
+        [layer addAnimation:animation forKey:animation.keyPath];
+}
+
 /* While panes move, the terminal's background is behind them (if it's opaque) */
 - (void)setBackdrop:(BOOL)shown
 {
@@ -762,8 +803,9 @@ drop_side(NSPoint p, struct split_rect r)
             const struct split *parent = it->parent;
 
             /*
-             * A new leaf (also of a pane that was moved) grows from the
-             * edge of the pane it splits; and the divider with it
+             * A new leaf (also of a pane that was moved): its divider
+             * comes from the edge of the pane it splits, as that one's
+             * edge does
              */
             if (parent != NULL && it->frame.width == 0 && it->frame.height == 0) {
                 const struct split_rect f = parent->frame;
@@ -774,11 +816,8 @@ drop_side(NSPoint p, struct split_rect r)
                     : (struct split_rect){f.x, first ? f.y : f.y + f.height, f.width, 0};
             }
 
-            if (!view.hidden) {
-                [panes setObject:[NSValue valueWithRect:
-                    [_entering containsObject:view] ? rect_of(it->frame) : view.frame]
-                          forKey:view];
-            }
+            if (!view.hidden && ![_entering containsObject:view])
+                [panes setObject:[NSValue valueWithRect:view.frame] forKey:view];
         }
 
         NSMutableArray<NSValue *> *splits = [NSMutableArray array];
@@ -787,6 +826,7 @@ drop_side(NSPoint p, struct split_rect r)
             dividers[split] = [NSValue valueWithRect:divider_frame(split.pointerValue)];
     }
 
+    NSArray<FootView *> *entering = animate ? _entering.allObjects : @[];
     [_entering removeAllObjects];
 
     split_layout(_root, (struct split_rect){0, 0, (int)size.width, (int)size.height});
@@ -842,6 +882,11 @@ drop_side(NSPoint p, struct split_rect r)
         }
     }
     _raised = nil;
+
+    for (FootView *view in entering) {
+        if (!view.hidden)
+            [self popIn:view.layer];
+    }
 
     [self updateDividers];
 
@@ -1326,7 +1371,7 @@ drop_side(NSPoint p, struct split_rect r)
 
     CABasicAnimation *scale = [CABasicAnimation animationWithKeyPath:@"transform.scale"];
     scale.fromValue = @1;
-    scale.toValue = @CLOSE_SCALE;
+    scale.toValue = @POP_SCALE;
     scale.duration = CLOSE_DURATION;
     scale.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionLinear];
 
@@ -1334,7 +1379,7 @@ drop_side(NSPoint p, struct split_rect r)
     fade.fromValue = @1;
     fade.toValue = @0;
     fade.duration = CLOSE_FADE_DURATION;
-    fade.timingFunction = [CAMediaTimingFunction functionWithControlPoints:CLOSE_FADE_CURVE];
+    fade.timingFunction = [CAMediaTimingFunction functionWithControlPoints:FADE_CURVE];
 
     [CATransaction begin];
     [CATransaction setCompletionBlock:^{

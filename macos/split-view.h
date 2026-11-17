@@ -45,7 +45,7 @@
 
 /*
  * As above; the panes move to where they go (macos-split-animations),
- * a new one coming in from its edge
+ * and a new one pops in
  */
 - (void)relayoutAnimated;
 
