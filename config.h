@@ -258,7 +258,11 @@ struct config {
 
         /* Ask before closing a window (or quitting) with something running in it */
         bool confirm_close;
+
+        /* Panes move to where they go (macos/split-view.m) */
         bool split_animations;
+
+        /* The pane the mouse is moved to gets the focus */
         bool focus_follows_mouse;
 
         /* Terminals are persistent sessions (footd, macos/session.h) */

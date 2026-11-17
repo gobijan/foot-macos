@@ -1435,6 +1435,15 @@ drop_side(NSPoint p, struct split_rect r)
     if (self.count < 2 || [self leafOf:win] == NULL || view.hidden || ![self animates])
         return;
 
+    /* Not if the others are closing too (the window, or the tab): it goes with them */
+    BOOL others = NO;
+    for (struct split *it = split_first(_root); it != NULL; it = split_following(it)) {
+        const struct wl_window *pane = it->pane;
+        others = others || (pane != win && !pane->term->shutdown.in_progress);
+    }
+    if (!others)
+        return;
+
     const NSSize size = view.bounds.size;
 
     /* Around its middle */
