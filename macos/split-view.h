@@ -49,6 +49,9 @@
  */
 - (void)relayoutAnimated;
 
+/* 'win' is about to be destroyed: what it shows fades out (macos-split-animations) */
+- (void)paneWillClose:(struct wl_window *)win;
+
 /* Removes 'win'; the pane next to it gets the focus */
 - (void)removePane:(struct wl_window *)win;
 

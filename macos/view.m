@@ -128,6 +128,9 @@ utf8_offset(NSString *str, NSUInteger idx)
     self.layer = _rootLayer;
     self.wantsLayer = YES;
 
+    /* AppKit sets the layer's masksToBounds from this (off, since macOS 14) */
+    self.clipsToBounds = YES;
+
     _gridLayer = view_create_layer();
     [_rootLayer addSublayer:_gridLayer];
 

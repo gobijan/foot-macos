@@ -746,6 +746,9 @@ wayl_win_destroy(struct wl_window *win)
 
     render_wait_for_preapply_damage(term);
 
+    /* While it still has its frame */
+    [splits_of(win) paneWillClose:win];
+
     for (size_t i = 0; i < ALEN(win->csd.surface); i++)
         wayl_win_subsurface_destroy(&win->csd.surface[i]);
     wayl_win_subsurface_destroy(&win->search);

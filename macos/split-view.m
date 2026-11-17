@@ -256,6 +256,40 @@ divider_frame(const struct split *node)
 - (void)handleDragEnded;
 @end
 
+/*
+ * The terminal's current frame; NULL if there's none. A copy: the
+ * renderer writes to the surface (and it goes with the terminal).
+ */
+static CGImageRef
+grid_image(FootView *view)
+{
+    id contents = view.gridLayer.contents;
+    if (contents == nil || CFGetTypeID((__bridge CFTypeRef)contents) != IOSurfaceGetTypeID())
+        return NULL;
+
+    IOSurfaceRef surface = (__bridge IOSurfaceRef)contents;
+    IOSurfaceLock(surface, kIOSurfaceLockReadOnly, NULL);
+
+    const size_t width = IOSurfaceGetWidth(surface);
+    const size_t height = IOSurfaceGetHeight(surface);
+    const size_t stride = IOSurfaceGetBytesPerRow(surface);
+    CFDataRef data = CFDataCreate(NULL, IOSurfaceGetBaseAddress(surface), stride * height);
+
+    IOSurfaceUnlock(surface, kIOSurfaceLockReadOnly, NULL);
+
+    CGDataProviderRef provider = CGDataProviderCreateWithCFData(data);
+    CGColorSpaceRef srgb = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+    CGImageRef grid = CGImageCreate(
+        width, height, 8, 32, stride, srgb,
+        kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little,
+        provider, NULL, false, kCGRenderingIntentDefault);
+
+    CGColorSpaceRelease(srgb);
+    CGDataProviderRelease(provider);
+    CFRelease(data);
+    return grid;
+}
+
 /* The terminal's current frame, with the root layer's background around it */
 static NSImage *
 pane_image(FootView *view)
@@ -288,38 +322,14 @@ pane_image(FootView *view)
         CGContextFillRect(cg, CGRectMake(0, 0, size.width, size.height));
     }
 
-    /* A copy: the renderer writes to the surface while it's dragged */
-    id contents = view.gridLayer.contents;
-    if (contents != nil && CFGetTypeID((__bridge CFTypeRef)contents) == IOSurfaceGetTypeID()) {
-        IOSurfaceRef surface = (__bridge IOSurfaceRef)contents;
-        IOSurfaceLock(surface, kIOSurfaceLockReadOnly, NULL);
-
-        const size_t width = IOSurfaceGetWidth(surface);
-        const size_t height = IOSurfaceGetHeight(surface);
-        const size_t stride = IOSurfaceGetBytesPerRow(surface);
-        CFDataRef data = CFDataCreate(NULL, IOSurfaceGetBaseAddress(surface), stride * height);
-
-        IOSurfaceUnlock(surface, kIOSurfaceLockReadOnly, NULL);
-
-        CGDataProviderRef provider = CGDataProviderCreateWithCFData(data);
-        CGColorSpaceRef srgb = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
-        CGImageRef grid = CGImageCreate(
-            width, height, 8, 32, stride, srgb,
-            kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little,
-            provider, NULL, false, kCGRenderingIntentDefault);
-
-        /* At the top left; the bitmap's origin is at the bottom */
+    /* At the top left; the bitmap's origin is at the bottom */
+    CGImageRef grid = grid_image(view);
+    if (grid != NULL) {
         const CGRect frame = view.gridLayer.frame;
-        if (grid != NULL) {
-            CGContextDrawImage(cg, CGRectMake(
-                frame.origin.x, size.height - frame.origin.y - frame.size.height,
-                frame.size.width, frame.size.height), grid);
-        }
-
+        CGContextDrawImage(cg, CGRectMake(
+            frame.origin.x, size.height - frame.origin.y - frame.size.height,
+            frame.size.width, frame.size.height), grid);
         CGImageRelease(grid);
-        CGColorSpaceRelease(srgb);
-        CGDataProviderRelease(provider);
-        CFRelease(data);
     }
 
     [gc flushGraphics];
@@ -1263,6 +1273,52 @@ drop_side(NSPoint p, struct split_rect r)
         return leaf->frame.width >= 2 * leaf->min_width + SPLIT_DIVIDER;
     else
         return leaf->frame.height >= 2 * leaf->min_height + SPLIT_DIVIDER;
+}
+
+/*
+ * What the pane shows stays where it was, below the others, and fades
+ * out, while they take its place (see -removePane:)
+ */
+- (void)paneWillClose:(struct wl_window *)win
+{
+    FootView *view = view_of(win);
+    if (self.count < 2 || [self leafOf:win] == NULL || view.hidden || ![self animates])
+        return;
+
+    CALayer *layer = view_create_layer();
+    layer.hidden = NO;
+    layer.geometryFlipped = YES;
+    layer.backgroundColor = view.rootLayer.backgroundColor;
+
+    CGImageRef image = grid_image(view);
+    if (image != NULL) {
+        CALayer *grid = view_create_layer();
+        grid.hidden = NO;
+        grid.contents = (__bridge id)image;
+        grid.contentsScale = view.gridLayer.contentsScale;
+        grid.frame = view.gridLayer.frame;
+        [layer addSublayer:grid];
+        CGImageRelease(image);
+    }
+
+    NSView *ghost = [[NSView alloc] initWithFrame:view.frame];
+    ghost.layer = layer;
+    ghost.wantsLayer = YES;
+    ghost.clipsToBounds = YES;
+    [self addSubview:ghost positioned:NSWindowBelow relativeTo:nil];
+
+    CABasicAnimation *fade = [CABasicAnimation animationWithKeyPath:@"opacity"];
+    fade.fromValue = @1;
+    fade.toValue = @0;
+    fade.duration = ANIMATION_DURATION / 2;
+
+    [CATransaction begin];
+    [CATransaction setCompletionBlock:^{
+        [ghost removeFromSuperview];
+    }];
+    layer.opacity = 0.;
+    [layer addAnimation:fade forKey:@"fade"];
+    [CATransaction commit];
 }
 
 - (void)removePane:(struct wl_window *)win
