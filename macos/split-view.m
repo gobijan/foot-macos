@@ -40,6 +40,13 @@
 /* The pane being dragged, shown at this scale (as Ghostty) */
 #define DRAG_IMAGE_SCALE .2
 
+/*
+ * Panes, and dividers, move to where they go (as Hyprland's tiles):
+ * this long (seconds), fast first (ease out quint)
+ */
+#define ANIMATION_DURATION .3
+#define ANIMATION_CURVE .23 :1. :.32 :1.
+
 /* What a pane's handle puts on the pasteboard (the pane is the drag's source) */
 static NSPasteboardType const pane_pasteboard_type = @"io.github.gobijan.foot.pane";
 
@@ -73,6 +80,16 @@ static NSRect
 rect_of(struct split_rect r)
 {
     return NSMakeRect(r.x, r.y, r.width, r.height);
+}
+
+/* The divider's view: the divider, and where it can be grabbed */
+static NSRect
+divider_frame(const struct split *node)
+{
+    const struct split_rect r = split_divider(node);
+    return node->kind == SPLIT_HORIZONTAL
+        ? NSMakeRect(r.x - DIVIDER_GRAB, r.y, r.width + 2 * DIVIDER_GRAB, r.height)
+        : NSMakeRect(r.x, r.y - DIVIDER_GRAB, r.width, r.height + 2 * DIVIDER_GRAB);
 }
 
 /*
@@ -540,6 +557,13 @@ drop_side(NSPoint p, struct split_rect r)
     NSView *_dropZone;
     NSTrackingArea *_trackingArea;
     BOOL _windowOccluded;
+
+    /* New panes, not laid out yet: they come in from their edge */
+    NSHashTable<FootView *> *_entering;
+
+    /* The pane that's above the others while it moves (zoomed, or dragged) */
+    __weak FootView *_raised;
+    unsigned _animations;  /* Running */
 }
 
 - (instancetype)initWithPane:(struct wl_window *)win
@@ -556,6 +580,7 @@ drop_side(NSPoint p, struct split_rect r)
     _root = split_new(win);
     _dividers = [NSMutableArray array];
     _handles = [NSMutableArray array];
+    _entering = [NSHashTable weakObjectsHashTable];
     _focused = win;
 
     win->splits = (__bridge void *)self;
@@ -625,11 +650,140 @@ drop_side(NSPoint p, struct split_rect r)
 
 - (void)relayout
 {
+    [self layout:NO];
+}
+
+- (void)relayoutAnimated
+{
+    [self layout:YES];
+}
+
+/* macos-split-animations; not with Reduce Motion, nor where nothing is seen */
+- (BOOL)animates
+{
+    if (_root == NULL || self.window == nil || !self.window.visible ||
+        NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceMotion)
+    {
+        return NO;
+    }
+
+    const struct wl_window *win = split_first(_root)->pane;
+    return win->term->conf->macos.split_animations;
+}
+
+/*
+ * 'layer' (of a subview, which is at 'to' already) goes there from
+ * 'from'. By the window server: nothing of ours runs meanwhile, and the
+ * terminals are resized once. Animations add up (additive): one that
+ * begins while another runs continues from where that is.
+ */
+- (void)animate:(CALayer *)layer from:(NSRect)from to:(NSRect)to
+{
+    const CGRect a = [self convertRectToLayer:from];
+    const CGRect b = [self convertRectToLayer:to];
+    const CGPoint anchor = layer.anchorPoint;
+
+    CABasicAnimation *position = [CABasicAnimation animationWithKeyPath:@"position"];
+    position.fromValue = [NSValue valueWithPoint:NSMakePoint(
+        (CGRectGetMinX(a) + anchor.x * CGRectGetWidth(a)) -
+        (CGRectGetMinX(b) + anchor.x * CGRectGetWidth(b)),
+        (CGRectGetMinY(a) + anchor.y * CGRectGetHeight(a)) -
+        (CGRectGetMinY(b) + anchor.y * CGRectGetHeight(b)))];
+    position.toValue = [NSValue valueWithPoint:NSZeroPoint];
+
+    CABasicAnimation *size = [CABasicAnimation animationWithKeyPath:@"bounds.size"];
+    size.fromValue = [NSValue valueWithSize:NSMakeSize(
+        CGRectGetWidth(a) - CGRectGetWidth(b), CGRectGetHeight(a) - CGRectGetHeight(b))];
+    size.toValue = [NSValue valueWithSize:NSZeroSize];
+
+    for (CABasicAnimation *animation in @[position, size]) {
+        animation.additive = YES;
+        animation.duration = ANIMATION_DURATION;
+        animation.timingFunction =
+            [CAMediaTimingFunction functionWithControlPoints:ANIMATION_CURVE];
+        [layer addAnimation:animation forKey:nil];
+    }
+}
+
+/* While panes move, the terminal's background is behind them (if it's opaque) */
+- (void)setBackdrop:(BOOL)shown
+{
+    const struct wl_window *win = _focused != NULL
+        ? _focused : (_root != NULL ? split_first(_root)->pane : NULL);
+
+    CGColorRef color = shown && win != NULL && win->term->colors.alpha == 0xffff
+        ? create_color(win->term->colors.bg, 1.) : NULL;
+
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    self.layer.backgroundColor = color;
+    [CATransaction commit];
+    CGColorRelease(color);
+}
+
+- (void)layout:(BOOL)animated
+{
     if (_root == NULL)
         return;
 
+    const BOOL animate = animated && [self animates];
     const NSSize size = self.bounds.size;
+
+    /* Where the panes, and the dividers, are now */
+    NSMapTable<FootView *, NSValue *> *panes = nil;
+    NSMutableDictionary<NSValue *, NSValue *> *dividers = nil;
+
+    if (animate) {
+        panes = [NSMapTable strongToStrongObjectsMapTable];
+        dividers = [NSMutableDictionary dictionary];
+
+        for (struct split *it = split_first(_root); it != NULL; it = split_following(it)) {
+            FootView *view = view_of(it->pane);
+            const struct split *parent = it->parent;
+
+            /*
+             * A new leaf (also of a pane that was moved) grows from the
+             * edge of the pane it splits; and the divider with it
+             */
+            if (parent != NULL && it->frame.width == 0 && it->frame.height == 0) {
+                const struct split_rect f = parent->frame;
+                const bool first = parent->first == it;
+
+                it->frame = parent->kind == SPLIT_HORIZONTAL
+                    ? (struct split_rect){first ? f.x : f.x + f.width, f.y, 0, f.height}
+                    : (struct split_rect){f.x, first ? f.y : f.y + f.height, f.width, 0};
+            }
+
+            if (!view.hidden) {
+                [panes setObject:[NSValue valueWithRect:
+                    [_entering containsObject:view] ? rect_of(it->frame) : view.frame]
+                          forKey:view];
+            }
+        }
+
+        NSMutableArray<NSValue *> *splits = [NSMutableArray array];
+        [self collectSplits:_root into:splits];
+        for (NSValue *split in splits)
+            dividers[split] = [NSValue valueWithRect:divider_frame(split.pointerValue)];
+    }
+
+    [_entering removeAllObjects];
+
     split_layout(_root, (struct split_rect){0, 0, (int)size.width, (int)size.height});
+
+    if (animate) {
+        /* Until the last one that's running is done */
+        _animations++;
+        [self setBackdrop:YES];
+
+        __weak FootSplitView *weak_self = self;
+        [CATransaction begin];
+        [CATransaction setCompletionBlock:^{
+            FootSplitView *splits = weak_self;
+            if (splits != nil && --splits->_animations == 0)
+                [splits setBackdrop:NO];
+        }];
+    }
 
     for (struct split *it = split_first(_root); it != NULL; it = split_following(it)) {
         FootView *view = view_of(it->pane);
@@ -654,9 +808,32 @@ drop_side(NSPoint p, struct split_rect r)
 
         if (!NSEqualRects(view.frame, frame))
             view.frame = frame;
+
+        NSValue *was = [panes objectForKey:view];
+        if (was != nil && !NSEqualRects(was.rectValue, frame)) {
+            [self animate:view.layer from:was.rectValue to:frame];
+
+            if (view == _raised) {
+                CABasicAnimation *above = [CABasicAnimation animationWithKeyPath:@"zPosition"];
+                above.fromValue = above.toValue = @1;
+                above.duration = ANIMATION_DURATION;
+                [view.layer addAnimation:above forKey:@"raised"];
+            }
+        }
     }
+    _raised = nil;
 
     [self updateDividers];
+
+    for (FootDividerView *divider in _dividers) {
+        NSValue *was = dividers[[NSValue valueWithPointer:divider.node]];
+        if (was != nil && !divider.hidden && !NSEqualRects(was.rectValue, divider.frame))
+            [self animate:divider.layer from:was.rectValue to:divider.frame];
+    }
+
+    if (animate)
+        [CATransaction commit];
+
     [self updateHandles];
     [self updateDecorations];
 
@@ -697,15 +874,11 @@ drop_side(NSPoint p, struct split_rect r)
     for (NSUInteger i = 0; i < splits.count; i++) {
         FootDividerView *divider = _dividers[i];
         struct split *node = splits[i].pointerValue;
-        const struct split_rect r = split_divider(node);
 
         divider.node = node;
         divider.hidden = _zoomed != NULL;
 
-        const NSRect frame = node->kind == SPLIT_HORIZONTAL
-            ? NSMakeRect(r.x - DIVIDER_GRAB, r.y, r.width + 2 * DIVIDER_GRAB, r.height)
-            : NSMakeRect(r.x, r.y - DIVIDER_GRAB, r.width, r.height + 2 * DIVIDER_GRAB);
-
+        const NSRect frame = divider_frame(node);
         if (!NSEqualRects(divider.frame, frame))
             divider.frame = frame;
     }
@@ -890,8 +1063,10 @@ drop_side(NSPoint p, struct split_rect r)
     if (_zoomed == leaf)
         return;
 
+    /* Zoomed out, it gets smaller above the others */
+    _raised = view_of((leaf != NULL ? leaf : _zoomed)->pane);
     _zoomed = leaf;
-    [self relayout];
+    [self relayoutAnimated];
 }
 
 - (BOOL)isDividerOrHandleAt:(NSPoint)point
@@ -1042,7 +1217,8 @@ drop_side(NSPoint p, struct split_rect r)
 
     struct wl_window *pane = leaf->pane;
     split_move(&_root, leaf, to, side);
-    [self relayout];
+    _raised = view_of(pane);
+    [self relayoutAnimated];
     [self focusPane:pane];
     app_run_hooks();
     return YES;
@@ -1073,6 +1249,7 @@ drop_side(NSPoint p, struct split_rect r)
 
     /* Below the dividers. Laid out once configured (see window_configure()) */
     [self addSubview:view_of(win) positioned:NSWindowBelow relativeTo:nil];
+    [_entering addObject:view_of(win)];
     [self updateTiling];
 }
 
@@ -1128,7 +1305,7 @@ drop_side(NSPoint p, struct split_rect r)
 
         [splits updateTiling];
         [splits updateMinimumSize];
-        [splits relayout];
+        [splits relayoutAnimated];
 
         FootView *view = weak_next;
         if (view != nil && view.win != NULL && splits.focused == NULL &&
@@ -1304,7 +1481,7 @@ drop_side(NSPoint p, struct split_rect r)
 
     [self setZoomed:NULL];
     split_equalize(_root);
-    [self relayout];
+    [self relayoutAnimated];
 }
 
 - (void)moveDividerInDirection:(enum split_dir)dir

@@ -173,6 +173,9 @@ frameworks.
   its font size). To move one, drag it by the dots at its top (they
   show when the mouse is near them) onto another one: it goes to the
   side of that one that's highlighted.
+  The panes move to where they go, as the tiles of a tiling window
+  manager, e.g. a new one comes in from its edge (not with Reduce Motion;
+  `macos-split-animations=no` in `[main]` turns that off).
 * Shell > Send Input to All Splits: what's typed, or pasted, in one
   split goes to the window's (or tab's) others too, e.g. the same
   command on several machines, until it's switched off again. None is

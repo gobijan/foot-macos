@@ -1174,6 +1174,9 @@ parse_section_main(struct context *ctx)
     else if (streq(key, "macos-confirm-close"))
         return value_to_bool(ctx, &conf->macos.confirm_close);
 
+    else if (streq(key, "macos-split-animations"))
+        return value_to_bool(ctx, &conf->macos.split_animations);
+
     else if (streq(key, "macos-sessions"))
         return value_to_bool(ctx, &conf->macos.sessions);
 
@@ -3742,6 +3745,7 @@ config_load(struct config *conf, const char *conf_path,
             .font_smoothing_strength = 1.,
             .follow_appearance = true,
             .confirm_close = true,
+            .split_animations = true,
             .sessions = true,
             .shell_integration = true,
             .notify_on_command_finish = -1.,

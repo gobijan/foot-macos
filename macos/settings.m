@@ -558,6 +558,8 @@ submenu(NSMenu *menu, NSString *title)
                        section:@"mouse" key:@"hide-when-typing"]];
     [menu addItem:[self toggle:@"Ask Before Closing a Running Program" on:conf->macos.confirm_close
                        section:@"main" key:@"macos-confirm-close"]];
+    [menu addItem:[self toggle:@"Animate Splits" on:conf->macos.split_animations
+                       section:@"main" key:@"macos-split-animations"]];
 
     /* (macos/tabs.m) */
     if (@available(macOS 26, *)) {

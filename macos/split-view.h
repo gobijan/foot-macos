@@ -43,6 +43,12 @@
 /* Lays out the panes again (e.g. a new one, once configured) */
 - (void)relayout;
 
+/*
+ * As above; the panes move to where they go (macos-split-animations),
+ * a new one coming in from its edge
+ */
+- (void)relayoutAnimated;
+
 /* Removes 'win'; the pane next to it gets the focus */
 - (void)removePane:(struct wl_window *)win;
 

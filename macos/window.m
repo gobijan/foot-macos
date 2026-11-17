@@ -501,7 +501,7 @@ window_configure(struct wl_window *win, NSWindow *tab_parent, bool split)
 
         /* The pane that was split makes room for this one */
         FootSplitView *splits = splits_of(win);
-        [splits relayout];
+        [splits relayoutAnimated];
 
         win->is_configured = true;
 
