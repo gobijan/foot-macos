@@ -99,6 +99,16 @@ rect_of(struct split_rect r)
     return NSMakeRect(r.x, r.y, r.width, r.height);
 }
 
+/* The moves of 'layer' that are still running (see -animate:from:to:) end: it's where it goes */
+static void
+stop_moving(CALayer *layer)
+{
+    for (NSString *key in [layer.animationKeys copy]) {
+        if ([key hasPrefix:@"move."])
+            [layer removeAnimationForKey:key];
+    }
+}
+
 /* The divider's view: the divider, and where it can be grabbed */
 static NSRect
 divider_frame(const struct split *node)
@@ -144,6 +154,9 @@ divider_frame(const struct split *node)
                       @"hidden": null, @"sublayers": null};
     self.layer = layer;
     self.wantsLayer = YES;
+
+    /* While it moves to where it goes, the line is as long as it is by then */
+    self.clipsToBounds = YES;
 
     _line = view_create_layer();
     _line.hidden = NO;
@@ -555,6 +568,19 @@ pane_image(FootView *view)
 
 @end
 
+/* What a pane that's closed showed, while it fades out: the mouse is for what's below */
+@interface FootGhostView : NSView
+@end
+
+@implementation FootGhostView
+
+- (NSView *)hitTest:(NSPoint)point
+{
+    return nil;
+}
+
+@end
+
 /* Where a pane dropped at 'p' on 'r' goes: the side of 'r' closest to it */
 static enum split_dir
 drop_side(NSPoint p, struct split_rect r)
@@ -591,6 +617,7 @@ drop_side(NSPoint p, struct split_rect r)
     /* The pane that's above the others while it moves (zoomed, or dragged) */
     __weak FootView *_raised;
     unsigned _animations;  /* Running */
+    BOOL _animating;       /* This layout is animated */
 }
 
 - (instancetype)initWithPane:(struct wl_window *)win
@@ -723,13 +750,32 @@ drop_side(NSPoint p, struct split_rect r)
         CGRectGetWidth(a) - CGRectGetWidth(b), CGRectGetHeight(a) - CGRectGetHeight(b))];
     size.toValue = [NSValue valueWithSize:NSZeroSize];
 
+    /* Each with a key of its own: they add up, and stop_moving() finds them */
+    static unsigned long count;
+
     for (CABasicAnimation *animation in @[position, size]) {
         animation.additive = YES;
         animation.duration = ANIMATION_DURATION;
         animation.timingFunction =
             [CAMediaTimingFunction functionWithControlPoints:ANIMATION_CURVE];
-        [layer addAnimation:animation forKey:nil];
+        [layer addAnimation:animation
+                     forKey:[NSString stringWithFormat:@"move.%lu", count++]];
     }
+}
+
+/*
+ * 'view' is at 'frame' now. In a layout that isn't animated (the
+ * window is resized, a divider dragged), also if it's still moving
+ * there from before: what's dragged stays below the mouse.
+ */
+- (void)place:(NSView *)view at:(NSRect)frame
+{
+    if (NSEqualRects(view.frame, frame))
+        return;
+
+    view.frame = frame;
+    if (!_animating)
+        stop_moving(view.layer);
 }
 
 /*
@@ -788,11 +834,13 @@ drop_side(NSPoint p, struct split_rect r)
         return;
 
     const BOOL animate = animated && [self animates];
+    _animating = animate;
     const NSSize size = self.bounds.size;
 
-    /* Where the panes, and the dividers, are now */
+    /* Where the panes, the dividers, and the panes' handles, are now */
     NSMapTable<FootView *, NSValue *> *panes = nil;
     NSMutableDictionary<NSValue *, NSValue *> *dividers = nil;
+    NSMutableDictionary<NSValue *, NSValue *> *handles = nil;
 
     if (animate) {
         panes = [NSMapTable strongToStrongObjectsMapTable];
@@ -824,6 +872,14 @@ drop_side(NSPoint p, struct split_rect r)
         [self collectSplits:_root into:splits];
         for (NSValue *split in splits)
             dividers[split] = [NSValue valueWithRect:divider_frame(split.pointerValue)];
+
+        handles = [NSMutableDictionary dictionary];
+        for (FootGrabHandle *handle in _handles) {
+            if (handle.pane != NULL && !handle.hidden) {
+                handles[[NSValue valueWithPointer:handle.pane]] =
+                    [NSValue valueWithRect:handle.frame];
+            }
+        }
     }
 
     NSArray<FootView *> *entering = animate ? _entering.allObjects : @[];
@@ -866,8 +922,7 @@ drop_side(NSPoint p, struct split_rect r)
         if (it->frame.y + it->frame.height >= (int)size.height)
             frame.size.height = size.height - NSMinY(frame);
 
-        if (!NSEqualRects(view.frame, frame))
-            view.frame = frame;
+        [self place:view at:frame];
 
         NSValue *was = [panes objectForKey:view];
         if (was != nil && !NSEqualRects(was.rectValue, frame)) {
@@ -890,16 +945,37 @@ drop_side(NSPoint p, struct split_rect r)
 
     [self updateDividers];
 
+    /*
+     * The dividers' views, and the handles', are those of another split,
+     * or pane, after this: not with what's left of that one's move
+     */
     for (FootDividerView *divider in _dividers) {
         NSValue *was = dividers[[NSValue valueWithPointer:divider.node]];
+        if (!animate)
+            continue;
+
+        stop_moving(divider.layer);
         if (was != nil && !divider.hidden && !NSEqualRects(was.rectValue, divider.frame))
             [self animate:divider.layer from:was.rectValue to:divider.frame];
     }
 
+    [self updateHandles];
+
+    /* A pane's handle goes with it */
+    for (FootGrabHandle *handle in _handles) {
+        NSValue *was = handles[[NSValue valueWithPointer:handle.pane]];
+        if (!animate)
+            continue;
+
+        stop_moving(handle.layer);
+        if (was != nil && !handle.hidden && !NSEqualRects(was.rectValue, handle.frame))
+            [self animate:handle.layer from:was.rectValue to:handle.frame];
+    }
+
     if (animate)
         [CATransaction commit];
+    _animating = NO;
 
-    [self updateHandles];
     [self updateDecorations];
 
     /* Sessions: the panes, and their sizes, are kept */
@@ -943,9 +1019,7 @@ drop_side(NSPoint p, struct split_rect r)
         divider.node = node;
         divider.hidden = _zoomed != NULL;
 
-        const NSRect frame = divider_frame(node);
-        if (!NSEqualRects(divider.frame, frame))
-            divider.frame = frame;
+        [self place:divider at:divider_frame(node)];
     }
 }
 
@@ -976,10 +1050,8 @@ drop_side(NSPoint p, struct split_rect r)
 
         const struct split_rect r = it->frame;
         const int width = MIN(HANDLE_WIDTH, r.width);
-        const NSRect frame = NSMakeRect(r.x + (r.width - width) / 2, r.y, width, HANDLE_HEIGHT);
-
-        if (!NSEqualRects(handle.frame, frame))
-            handle.frame = frame;
+        [self place:handle at:NSMakeRect(
+            r.x + (r.width - width) / 2, r.y, width, HANDLE_HEIGHT)];
     }
 
     /* Where the mouse is now */
@@ -1387,7 +1459,7 @@ drop_side(NSPoint p, struct split_rect r)
     layer.hidden = NO;
     [layer addSublayer:pane];
 
-    NSView *ghost = [[NSView alloc] initWithFrame:view.frame];
+    NSView *ghost = [[FootGhostView alloc] initWithFrame:view.frame];
     ghost.layer = layer;
     ghost.wantsLayer = YES;
     [self addSubview:ghost positioned:NSWindowAbove relativeTo:nil];
