@@ -1027,14 +1027,37 @@ drop_side(NSPoint p, struct split_rect r)
     [super updateTrackingAreas];
 }
 
+/*
+ * macos-focus-follows-mouse: the pane the mouse is moved to gets the
+ * focus, in the window that has it. Only when the mouse moves: not a
+ * pane that comes to be below it (a new one keeps the focus), and not
+ * with a button down (a selection, a divider, or a pane, being dragged).
+ */
+- (void)focusFollowsMouse:(NSPoint)point
+{
+    if (_focused == NULL || !_focused->term->conf->macos.focus_follows_mouse ||
+        _zoomed != NULL || !self.window.keyWindow || NSEvent.pressedMouseButtons != 0)
+    {
+        return;
+    }
+
+    const struct split *leaf = [self leafAt:point];
+    if (leaf != NULL && leaf->pane != _focused)
+        [self focusPane:leaf->pane];
+}
+
 - (void)mouseEntered:(NSEvent *)event
 {
-    [self revealHandlesAt:[self convertPoint:event.locationInWindow fromView:nil]];
+    const NSPoint p = [self convertPoint:event.locationInWindow fromView:nil];
+    [self revealHandlesAt:p];
+    [self focusFollowsMouse:p];
 }
 
 - (void)mouseMoved:(NSEvent *)event
 {
-    [self revealHandlesAt:[self convertPoint:event.locationInWindow fromView:nil]];
+    const NSPoint p = [self convertPoint:event.locationInWindow fromView:nil];
+    [self revealHandlesAt:p];
+    [self focusFollowsMouse:p];
 }
 
 - (void)mouseExited:(NSEvent *)event

@@ -259,6 +259,7 @@ struct config {
         /* Ask before closing a window (or quitting) with something running in it */
         bool confirm_close;
         bool split_animations;
+        bool focus_follows_mouse;
 
         /* Terminals are persistent sessions (footd, macos/session.h) */
         bool sessions;

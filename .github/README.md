@@ -165,7 +165,10 @@ frameworks.
   side by side, `Cmd+Shift+D` stacked (Shell > Split Left and Split Up
   too), with the new one in the same working directory. A click, or
   `Cmd+Option+arrow`, focuses another one; `Cmd+[` and `Cmd+]` the
-  previous and the next one. The others are dimmed. The dividers can be
+  previous and the next one. The others are dimmed. With
+  `macos-focus-follows-mouse=yes` in `[main]`, moving the mouse to one
+  focuses it too (in the window that has the focus, as Ghostty's
+  `focus-follows-mouse`). The dividers can be
   dragged, or moved with `Cmd+Ctrl+arrow`; `Cmd+Ctrl+=` makes all the
   same size. `Cmd+Shift+Return` zooms the focused one to the whole
   window, and back. `Cmd+W` closes it, `Cmd+Shift+W` the whole window,

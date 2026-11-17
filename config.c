@@ -1177,6 +1177,9 @@ parse_section_main(struct context *ctx)
     else if (streq(key, "macos-split-animations"))
         return value_to_bool(ctx, &conf->macos.split_animations);
 
+    else if (streq(key, "macos-focus-follows-mouse"))
+        return value_to_bool(ctx, &conf->macos.focus_follows_mouse);
+
     else if (streq(key, "macos-sessions"))
         return value_to_bool(ctx, &conf->macos.sessions);
 

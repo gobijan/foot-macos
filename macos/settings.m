@@ -560,6 +560,8 @@ submenu(NSMenu *menu, NSString *title)
                        section:@"main" key:@"macos-confirm-close"]];
     [menu addItem:[self toggle:@"Animate Splits" on:conf->macos.split_animations
                        section:@"main" key:@"macos-split-animations"]];
+    [menu addItem:[self toggle:@"Focus Follows the Mouse (Splits)" on:conf->macos.focus_follows_mouse
+                       section:@"main" key:@"macos-focus-follows-mouse"]];
 
     /* (macos/tabs.m) */
     if (@available(macOS 26, *)) {

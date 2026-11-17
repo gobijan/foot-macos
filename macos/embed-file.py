@@ -22,6 +22,7 @@ MACOS_DEFAULTS = [
      "# macos-follow-appearance=yes  (switches between [colors-dark] and [colors-light] with the system's appearance)\n"
      "# macos-confirm-close=yes  (asks before closing a window, or quitting, with something other than the shell running)\n"
      "# macos-split-animations=yes  (panes move to where they go, when a window is split, or a pane closed, zoomed or moved)\n"
+     "# macos-focus-follows-mouse=no  (the pane the mouse is moved to gets the focus, without a click; in the window that has it)\n"
      "# macos-sessions=yes  (terminals keep running when foot quits, and its next start shows them again)\n"
      "# macos-shell-integration=yes  (zsh, bash and fish mark their prompts and report the working directory, without setting it up)\n"
      "# macos-notify-on-command-finish=never  (or seconds, e.g. 10: a notification when a command that took that long ends, in a terminal without the keyboard focus)\n"
