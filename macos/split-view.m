@@ -41,11 +41,21 @@
 #define DRAG_IMAGE_SCALE .2
 
 /*
- * Panes, and dividers, move to where they go (as Hyprland's tiles):
- * this long (seconds), fast first (ease out quint)
+ * Panes, and dividers, move to where they go, as Hyprland's tiles, with
+ * Omarchy's timing (its "windows": 3.79, easeOutQuint): this long
+ * (seconds), fast first
  */
-#define ANIMATION_DURATION .3
+#define ANIMATION_DURATION .379
 #define ANIMATION_CURVE .23 :1. :.32 :1.
+
+/*
+ * A pane that's closed gets smaller, to this, and fades out (its
+ * "windowsOut": 1.49, linear, popin 87%; "fadeOut": 1.46, almostLinear)
+ */
+#define CLOSE_SCALE .87
+#define CLOSE_DURATION .149
+#define CLOSE_FADE_DURATION .146
+#define CLOSE_FADE_CURVE .5 :.5 :.75 :1.
 
 /* What a pane's handle puts on the pasteboard (the pane is the drag's source) */
 static NSPasteboardType const pane_pasteboard_type = @"io.github.gobijan.foot.pane";
@@ -1276,8 +1286,8 @@ drop_side(NSPoint p, struct split_rect r)
 }
 
 /*
- * What the pane shows stays where it was, below the others, and fades
- * out, while they take its place (see -removePane:)
+ * What the pane shows stays where it was, above the others, getting
+ * smaller and fading out, while they take its place (see -removePane:)
  */
 - (void)paneWillClose:(struct wl_window *)win
 {
@@ -1285,10 +1295,14 @@ drop_side(NSPoint p, struct split_rect r)
     if (self.count < 2 || [self leafOf:win] == NULL || view.hidden || ![self animates])
         return;
 
-    CALayer *layer = view_create_layer();
-    layer.hidden = NO;
-    layer.geometryFlipped = YES;
-    layer.backgroundColor = view.rootLayer.backgroundColor;
+    const NSSize size = view.bounds.size;
+
+    /* Around its middle */
+    CALayer *pane = [CALayer layer];
+    pane.bounds = CGRectMake(0, 0, size.width, size.height);
+    pane.position = CGPointMake(size.width / 2, size.height / 2);
+    pane.geometryFlipped = YES;
+    pane.backgroundColor = view.rootLayer.backgroundColor;
 
     CGImageRef image = grid_image(view);
     if (image != NULL) {
@@ -1297,27 +1311,41 @@ drop_side(NSPoint p, struct split_rect r)
         grid.contents = (__bridge id)image;
         grid.contentsScale = view.gridLayer.contentsScale;
         grid.frame = view.gridLayer.frame;
-        [layer addSublayer:grid];
+        [pane addSublayer:grid];
         CGImageRelease(image);
     }
+
+    CALayer *layer = view_create_layer();
+    layer.hidden = NO;
+    [layer addSublayer:pane];
 
     NSView *ghost = [[NSView alloc] initWithFrame:view.frame];
     ghost.layer = layer;
     ghost.wantsLayer = YES;
-    ghost.clipsToBounds = YES;
-    [self addSubview:ghost positioned:NSWindowBelow relativeTo:nil];
+    [self addSubview:ghost positioned:NSWindowAbove relativeTo:nil];
+
+    CABasicAnimation *scale = [CABasicAnimation animationWithKeyPath:@"transform.scale"];
+    scale.fromValue = @1;
+    scale.toValue = @CLOSE_SCALE;
+    scale.duration = CLOSE_DURATION;
+    scale.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionLinear];
 
     CABasicAnimation *fade = [CABasicAnimation animationWithKeyPath:@"opacity"];
     fade.fromValue = @1;
     fade.toValue = @0;
-    fade.duration = ANIMATION_DURATION / 2;
+    fade.duration = CLOSE_FADE_DURATION;
+    fade.timingFunction = [CAMediaTimingFunction functionWithControlPoints:CLOSE_FADE_CURVE];
 
     [CATransaction begin];
     [CATransaction setCompletionBlock:^{
         [ghost removeFromSuperview];
     }];
-    layer.opacity = 0.;
-    [layer addAnimation:fade forKey:@"fade"];
+    for (CABasicAnimation *animation in @[scale, fade]) {
+        /* As it ends, until it's removed */
+        animation.fillMode = kCAFillModeForwards;
+        animation.removedOnCompletion = NO;
+        [pane addAnimation:animation forKey:animation.keyPath];
+    }
     [CATransaction commit];
 }
 
