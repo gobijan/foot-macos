@@ -86,8 +86,8 @@ static struct {
     struct terminal *initial_term;
     CFAbsoluteTime started;
 
-    bool (*settings)(void *data);
-    void *settings_data;
+    bool (*editor)(void *data, const char *path, int line, int column);
+    void *editor_data;
 
     /* The quake terminal: Shell > Show Quake Terminal, the Dock menu, the hotkey */
     void (*quake)(void *data);
@@ -427,11 +427,18 @@ app_show_in_pager(const char *command, const char *path)
 }
 
 void
-wayl_set_settings_handler(struct wayland *wayl, bool (*handler)(void *data),
-                          void *data)
+wayl_set_editor_handler(struct wayland *wayl,
+                        bool (*handler)(void *data, const char *path, int line, int column),
+                        void *data)
 {
-    app.settings = handler;
-    app.settings_data = data;
+    app.editor = handler;
+    app.editor_data = data;
+}
+
+bool
+wayl_open_in_editor(struct wayland *wayl, const char *path, int line, int column)
+{
+    return app.editor != NULL && app.editor(app.editor_data, path, line, column);
 }
 
 void
@@ -1523,8 +1530,13 @@ app_remove_footd(NSString *host)
 
 - (void)openSettings:(id)sender
 {
-    if (app.settings != NULL && !app.settings(app.settings_data))
+    char *path = windows_settings_path();
+    if (path != NULL)
+        windows_create_settings(path);
+
+    if (path == NULL || !wayl_open_in_editor(app.wayl, path, 0, 0))
         LOG_ERR("failed to open the settings");
+    free(path);
 }
 
 - (void)reloadConfiguration:(id)sender

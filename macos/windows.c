@@ -20,8 +20,10 @@
 #include "log.h"
 #include "client-protocol.h"
 #include "config.h"
+#include "debug.h"
 #include "terminal.h"
 #include "tokenize.h"
+#include "util.h"
 #include "wayland.h"
 #include "windows.h"
 #include "xmalloc.h"
@@ -339,41 +341,114 @@ open_pager(void *data, const char *command, const char *path)
     return ret;
 }
 
-/* Opens the configuration in $EDITOR, in a new window */
+/*
+ * How an editor is told where in a file to begin: by its command's
+ * name. The last one is for all others: the line as vi takes it, and
+ * most do.
+ */
+static const struct editor {
+    const char *names;   /* Each between spaces */
+    const char *option;  /* What's before the line */
+    const char *column;  /* What's between the line and the column; NULL: the line only */
+    bool after_path;     /* 'a.c:12:5', not: +12:5 'a.c' */
+} editors[] = {
+    {" code code-insiders codium cursor windsurf ", "-g ", ":", true},
+    {" hx subl zed ", "", ":", true},
+    {" emacs emacsclient kak micro ", "+", ":", false},
+    {" nano ", "+", ",", false},
+    {" mate xed ", "-l ", NULL, false},
+    {"", "+", NULL, false},
+};
+
+/*
+ * The shell's command for 'editor' ($EDITOR: a command, maybe with
+ * options) with a file, at 'line' and 'column' (0: none)
+ */
+static char *
+editor_command(const char *editor, const char *path, int line, int column)
+{
+    if (line <= 0)
+        return xasprintf("%s '%s'", editor, path);
+
+    const char *end = editor + strcspn(editor, " ");
+    const char *name = end;
+    while (name > editor && name[-1] != '/')
+        name--;
+
+    char *key = xasprintf(" %.*s ", (int)(end - name), name);
+    const struct editor *e = editors;
+    while (e->names[0] != '\0' && strstr(e->names, key) == NULL)
+        e++;
+    free(key);
+
+    char *at = column > 0 && e->column != NULL
+        ? xasprintf("%d%s%d", line, e->column, column)
+        : xasprintf("%d", line);
+    char *cmd = e->after_path
+        ? xasprintf("%s %s'%s:%s'", editor, e->option, path, at)
+        : xasprintf("%s %s%s '%s'", editor, e->option, at, path);
+    free(at);
+    return cmd;
+}
+
+UNITTEST
+{
+    static const char *const expected[][2] = {
+        {"vi", "vi +12 'a b.c'"},
+        {"/opt/homebrew/bin/nvim -u NONE", "/opt/homebrew/bin/nvim -u NONE +12 'a b.c'"},
+        {"hx", "hx 'a b.c:12:5'"},
+        {"code -w", "code -w -g 'a b.c:12:5'"},
+        {"/usr/local/bin/subl -w", "/usr/local/bin/subl -w 'a b.c:12:5'"},
+        {"emacsclient -t", "emacsclient -t +12:5 'a b.c'"},
+        {"nano", "nano +12,5 'a b.c'"},
+        {"mate -w", "mate -w -l 12 'a b.c'"},
+    };
+
+    for (size_t i = 0; i < ALEN(expected); i++) {
+        char *cmd = editor_command(expected[i][0], "a b.c", 12, 5);
+        xassert(streq(cmd, expected[i][1]));
+        free(cmd);
+    }
+
+    char *cmd = editor_command("hx", "a.c", 12, 0);
+    xassert(streq(cmd, "hx 'a.c:12'"));
+    free(cmd);
+
+    cmd = editor_command("hx", "a.c", 0, 0);
+    xassert(streq(cmd, "hx 'a.c'"));
+    free(cmd);
+}
+
+/*
+ * Opens a file (its absolute path) in $EDITOR, in a new window, in the
+ * file's folder; at 'line' and 'column', if they aren't 0
+ */
 static bool
-open_settings(void *data)
+open_editor(void *data, const char *path, int line, int column)
 {
     struct new_window_context *ctx = data;
 
-    char *path = settings_path(ctx);
-    if (path == NULL)
-        return false;
-
-    if (strchr(path, '\'') != NULL) {
-        LOG_ERR("%s: unsupported configuration path", path);
-        free(path);
+    if (path[0] != '/' || strchr(path, '\'') != NULL) {
+        LOG_ERR("%s: not a path the editor is started with", path);
         return false;
     }
-
-    windows_create_settings(path);
 
     /* The editor runs in the user's login shell (e.g. for $PATH) */
     char **shell_argv = NULL;
     if (!tokenize_cmdline(ctx->conf->shell, &shell_argv) || shell_argv[0] == NULL) {
         free(shell_argv);
-        free(path);
         return false;
     }
 
     char *editor = get_editor(shell_argv[0]);
-    char *cmd = xasprintf("%s '%s'", editor, path);
+    char *cmd = editor_command(editor, path, line, column);
     char *argv[] = {shell_argv[0], "-l", "-c", cmd, NULL};
 
     char *dir = xstrdup(path);
     *strrchr(dir, '/') = '\0';
 
-    LOG_INFO("opening settings: %s", cmd);
-    bool ret = new_terminal(ctx, dir, 4, argv, NULL, false);
+    LOG_INFO("opening in the editor: %s", cmd);
+    bool ret = new_terminal(ctx, dir[0] != '\0' ? dir : "/", 4, argv, NULL, false);
 
     free(dir);
     free(cmd);
@@ -381,7 +456,6 @@ open_settings(void *data)
     for (char **a = shell_argv; *a != NULL; a++)
         free(*a);
     free(shell_argv);
-    free(path);
     return ret;
 }
 
@@ -400,7 +474,7 @@ wayl_enable_new_windows(struct wayland *wayl, const struct config *conf,
 
     wayl_set_new_window_handler(wayl, &new_window, &context);
     wayl_set_run_script_handler(wayl, &run_script, &context);
-    wayl_set_settings_handler(wayl, &open_settings, &context);
+    wayl_set_editor_handler(wayl, &open_editor, &context);
     wayl_set_pager_handler(wayl, &open_pager, &context);
     wayl_set_launch_handler(wayl, &launch, &context);
     wayl_set_quake_handler(wayl, &toggle_quake, &context,

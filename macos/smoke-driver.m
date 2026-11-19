@@ -7,16 +7,17 @@
  *
  * The test writes an action's selector (e.g. "splitRight:") to
  * $FOOT_SMOKE_DIR/action; it's removed once performed. Actions go to
- * the first terminal window that's shown. "windows" (not a selector)
- * writes the terminal windows that are shown to $FOOT_SMOKE_DIR/windows
- * instead, as JSON: their tabs, and how many panes each has.
+ * the first terminal window that's shown (or its first pane). "windows"
+ * (not a selector) writes the terminal windows that are shown to
+ * $FOOT_SMOKE_DIR/windows instead, as JSON: their tabs, and how many
+ * panes each has.
  * "dragSelection" drags a selection in the first pane, beyond its top
  * and bottom edges and back, again and again (the events are the
  * view's only, not the system's), and creates $FOOT_SMOKE_DIR/dragged
  * when it's done. "palette TEXT" opens the command palette (View >
  * Command Palette), types TEXT there, and presses Return. "optionClick
  * PERCENT" clicks in the first pane's first row, that far from the left,
- * with Option.
+ * with Option; "commandClick PERCENT" with Command.
  */
 
 #import <AppKit/AppKit.h>
@@ -48,14 +49,14 @@ mouse_event(NSView *view, NSEventType type, NSPoint p)
 
 /* In the first row (below the padding), 'percent' of the width from the left */
 static void
-option_click(NSView *view, int percent)
+click(NSView *view, int percent, NSEventModifierFlags flags)
 {
     const NSRect b = view.bounds;
     const NSPoint p = NSMakePoint(
         NSMinX(b) + b.size.width * percent / 100, view.isFlipped ? NSMinY(b) + 16 : NSMaxY(b) - 16);
 
-    [view mouseDown:mouse_event_with(view, NSEventTypeLeftMouseDown, p, NSEventModifierFlagOption)];
-    [view mouseUp:mouse_event_with(view, NSEventTypeLeftMouseUp, p, NSEventModifierFlagOption)];
+    [view mouseDown:mouse_event_with(view, NSEventTypeLeftMouseDown, p, flags)];
+    [view mouseUp:mouse_event_with(view, NSEventTypeLeftMouseUp, p, flags)];
 }
 
 /*
@@ -193,10 +194,13 @@ poll_action(void)
         return;
     }
 
-    if ([action hasPrefix:@"optionClick "]) {
+    const BOOL command = [action hasPrefix:@"commandClick "];
+    if (command || [action hasPrefix:@"optionClick "]) {
+        const int percent = [action componentsSeparatedByString:@" "].lastObject.intValue;
         for (NSView *view in splits.subviews) {
             if ([NSStringFromClass([view class]) isEqualToString:@"FootView"]) {
-                option_click(view, [action substringFromIndex:12].intValue);
+                click(view, percent,
+                      command ? NSEventModifierFlagCommand : NSEventModifierFlagOption);
                 break;
             }
         }
@@ -208,10 +212,21 @@ poll_action(void)
         return;
     }
 
-    /* The window's, or the application's (e.g. terminate:, Cmd+Q) */
+    /* The window's, its first pane's, or the application's (e.g. terminate:, Cmd+Q) */
     const SEL selector = NSSelectorFromString(action);
-    if (![splits tryToPerform:selector with:nil] && ![NSApp tryToPerform:selector with:nil])
+    NSView *pane = nil;
+    for (NSView *view in splits.subviews) {
+        if ([NSStringFromClass([view class]) isEqualToString:@"FootView"]) {
+            pane = view;
+            break;
+        }
+    }
+
+    if (![splits tryToPerform:selector with:nil] && ![pane tryToPerform:selector with:nil] &&
+        ![NSApp tryToPerform:selector with:nil])
+    {
         fprintf(stderr, "smoke-driver: %s: not performed\n", action.UTF8String);
+    }
 }
 
 __attribute__((constructor))

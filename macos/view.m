@@ -105,7 +105,7 @@ utf8_offset(NSString *str, NSUInteger idx)
     /* Mouse wheels may report fractional steps */
     double _wheelSteps[2];
 
-    /* Cmd+click on a URL */
+    /* Cmd+click on a URL, or a file's path */
     BOOL _urlClicked;         /* Whose release must be ignored */
     BOOL _urlCursor;          /* Showing the hand */
     int _urlCursorCol;        /* The cell it was determined for; -1: none */
@@ -780,47 +780,10 @@ wayl_input_sent(struct terminal *term, const void *data, size_t len)
 }
 
 /*
- * Cmd+click opens the URL under the mouse: URL mode's URLs (url.regex,
- * OSC-8) and launcher (url.launch), without its labels. Returns whether
- * there is one.
+ * Cmd+click opens the URL, or the file whose path is, under the mouse:
+ * what View > Open URL or Path has (hints.h). While Command is down,
+ * they get the hand.
  */
-static bool
-url_under_mouse(struct seat *seat, struct terminal *term, bool activate)
-{
-    if (urls_mode_is_active(term) || seat->mouse.col < 0 || seat->mouse.row < 0)
-        return false;
-
-    const int col = seat->mouse.col;
-    const int row = term->grid->view + seat->mouse.row;
-    bool found = false;
-
-    url_list_t urls = tll_init();
-    urls_collect(term, URL_ACTION_LAUNCH, &term->conf->url.preg, true, &urls);
-
-    tll_foreach(urls, it) {
-        const struct coord *start = &it->item.range.start;
-        const struct coord *end = &it->item.range.end;
-
-        if (!found &&
-            (row > start->row || (row == start->row && col >= start->col)) &&
-            (row < end->row || (row == end->row && col <= end->col)))
-        {
-            found = true;
-
-            /* OSC-8 URLs can be anything: not an option for the launcher */
-            if (activate && it->item.url[0] != '-')
-                urls_activate(seat, term, &it->item, app_next_serial());
-        }
-
-        free(it->item.url);
-        free(it->item.key);
-        tll_remove(urls, it);
-    }
-
-    return found;
-}
-
-/* While Command is down, URLs get the hand */
 - (void)updateURLCursor:(NSEventModifierFlags)flags
 {
     struct terminal *term = self.term;
@@ -836,14 +799,14 @@ url_under_mouse(struct seat *seat, struct terminal *term, bool activate)
         return;
     }
 
-    /* URL detection scans the whole view */
+    /* Looking for them scans the whole view */
     if (seat->mouse.col == _urlCursorCol && seat->mouse.row == _urlCursorRow)
         return;
 
     _urlCursorCol = seat->mouse.col;
     _urlCursorRow = seat->mouse.row;
 
-    const BOOL over_url = url_under_mouse(seat, term, false);
+    const BOOL over_url = hints_open_at(seat, term, seat->mouse.row, seat->mouse.col, false, 0);
 
     if (over_url)
         [[NSCursor pointingHandCursor] set];
@@ -943,7 +906,9 @@ url_under_mouse(struct seat *seat, struct terminal *term, bool activate)
         const NSPoint p = [self locationOf:event];
         input_pointer_motion(seat, p.x, p.y);
 
-        if (url_under_mouse(seat, self.term, true)) {
+        if (hints_open_at(seat, self.term, seat->mouse.row, seat->mouse.col, true,
+                          app_next_serial()))
+        {
             _urlClicked = YES;
             return;
         }

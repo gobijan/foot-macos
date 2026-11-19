@@ -451,9 +451,15 @@ void wayl_set_launch_handler(
                     const char *const *envp, bool hold),
     void *data);
 
-/* Opens the configuration in an editor (application menu: Settings) */
-void wayl_set_settings_handler(
-    struct wayland *wayl, bool (*handler)(void *data), void *data);
+/*
+ * Opens a file in an editor, in a new window, at 'line' and 'column'
+ * (0: none): the configuration (application menu: Settings), a path
+ * with a line number (macos/hints.h)
+ */
+void wayl_set_editor_handler(
+    struct wayland *wayl,
+    bool (*handler)(void *data, const char *path, int line, int column), void *data);
+bool wayl_open_in_editor(struct wayland *wayl, const char *path, int line, int column);
 
 /*
  * Toggles the quake terminal (application and Dock menus); and, when

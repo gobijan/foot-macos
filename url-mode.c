@@ -14,6 +14,7 @@
 #include "log.h"
 #include "char32.h"
 #include "grid.h"
+#include "hints.h"
 #include "key-binding.h"
 #include "render.h"
 #include "selection.h"
@@ -175,6 +176,11 @@ activate_url(struct seat *seat, struct terminal *term, const struct url *url,
 
     case URL_ACTION_LAUNCH:
     case URL_ACTION_PERSISTENT: {
+#if defined(__APPLE__)
+        /* A file's line: in the editor (macos/hints.h) */
+        if (hints_open_line(term, url->url))
+            break;
+#endif
         spawn_url_launcher(seat, term, url_string, serial);
         break;
     }

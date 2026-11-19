@@ -196,7 +196,19 @@ frameworks.
   paths of the files and folders there are as well: typing a label
   opens it, a file as Finder would (`launch` in `[url]`, which gets a
   file's path). Relative paths are the shell's directory's, which the
-  shell integration reports.
+  shell integration reports. A name alone is one too (`Makefile`, a
+  folder as `ls` lists it), as is a path in git's diffs
+  (`a/macos/view.m`). A name may have spaces: in quotes, after `\`
+  (`My\ File.txt`), or as `ls` lists it (up to four words with a space
+  between them are looked for as one name; the longest there is a file
+  of is it). A path with a line number (`macos/view.m:12:5`, or
+  Python's `"a.py", line 12`) is opened in `$EDITOR` at that line and
+  column, in a new window, as foot.ini is. The editor is told as it
+  takes it: Helix, Sublime Text and Zed `a.c:12:5`, VS Code and its
+  kin `-g a.c:12:5`, Emacs, Kakoune and micro `+12:5`, nano `+12,5`,
+  TextMate and Xcode's `xed` `-l 12`, and all others vi's `+12`. So is
+  a hyperlink to a file with the line for its fragment
+  (`file:///a.c#12`, as kitty's). `Cmd`+click opens the same.
 * `Option` and a click at the shell's prompt moves the cursor there, as
   in Terminal.app and Ghostty: the shell gets the arrow keys it takes
   (with the shell integration; not while a command runs, nor in
@@ -217,9 +229,10 @@ frameworks.
   does on Wayland. macOS has no public API for that: like kitty,
   Ghostty and iTerm2, foot asks the window server directly, so a macOS
   update could end it (the window is transparent without blur then).
-* `Cmd`+click opens a URL or a hyperlink (OSC 8), with `[url]`'s
-  `launch`; the mouse pointer shows which text is one while `Cmd` is
-  down.
+* `Cmd`+click opens a URL, a hyperlink (OSC 8), or the path of a file
+  or folder there is, with `[url]`'s `launch` (a path with a line
+  number: in `$EDITOR`, at that line); the mouse pointer shows which
+  text is one while `Cmd` is down.
 * Like other Mac apps, foot keeps running when its last window is
   closed, until `Cmd+Q`; the Dock icon opens a new window. Started from
   a shell, foot exits with its last window, as on Linux.

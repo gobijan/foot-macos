@@ -28,7 +28,7 @@ void urls_input(struct seat *seat, struct terminal *term,
                 uint32_t serial);
 
 #if defined(__APPLE__)
-/* Cmd+click (macos/view.m); 'url' as returned by urls_collect() */
+/* Cmd+click (macos/hints.c); 'url' as returned by urls_collect() */
 void urls_activate(struct seat *seat, struct terminal *term, const struct url *url,
                    uint32_t serial);
 #endif

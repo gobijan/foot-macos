@@ -575,8 +575,9 @@ class Tests:
                 f.write(f'shell=/bin/sh {self.script}\nlogin-shell=no\n'
                         f'macos-confirm-close=no\n{options}')
 
-        def start(self, *args):
-            env = dict(ENV, DYLD_INSERT_LIBRARIES=self.tests.driver, FOOT_SMOKE_DIR=self.tmp)
+        def start(self, *args, env={}):
+            env = dict(ENV, **env, DYLD_INSERT_LIBRARIES=self.tests.driver,
+                       FOOT_SMOKE_DIR=self.tmp)
             self.foot = subprocess.Popen(
                 [self.tests.foot, f'--config={self.config}', '--window-size-chars=100x30', *args],
                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -757,6 +758,98 @@ class Tests:
             count = len(got) // 3
             if got != b'\x1b[D' * count or not 35 <= count <= 39:
                 raise Failure(f'the keys: {got!r}')
+        finally:
+            out = t.quit()
+
+        if t.foot.returncode != 0:
+            raise Failure(f'foot: exit code {t.foot.returncode}\n{out}')
+
+    def test_open_path(self):
+        """Command and a click on a file's path opens it: [url]'s launch, or $EDITOR at its line"""
+        t = self.Panes(self, 'open-path')
+        opened = os.path.join(t.tmp, 'opened')
+        ready = os.path.join(t.tmp, 'ready')
+        files = os.path.join(t.tmp, 'files')
+        os.makedirs(os.path.join(files, 's'))
+        for name in 'Makefile', 's/m.c', 'My File.c', 'Foo (1).c':
+            open(os.path.join(files, name), 'w').close()
+
+        # The launcher and the editor (one that takes the line as Helix does): what
+        # they're started with
+        launch = os.path.join(t.tmp, 'hx')
+        with open(launch, 'w') as f:
+            f.write(f'#!/bin/sh\necho "$@" >> {opened}\n')
+        os.chmod(launch, 0o755)
+        t.configure(f'[url]\nlaunch={launch} open ${{url}}\n')
+
+        # The shell's directory (OSC 7), and in every 14th column (of 100): no file, a
+        # path with a line, a name at a sentence's end, a path as in git's diffs, and
+        # names with a space: as it is, in quotes, and as the shell takes it
+        with open(t.script, 'w') as f:
+            f.write(f"""
+                printf '\\033]7;file://localhost{files}\\007'
+                printf '%-14s%-14s%-14s%-14s%-14s%-14s%s' s/none.c s/m.c:12:5: Makefile. a/s/m.c \\
+                    'My File.c:7' "'Foo (1).c'" 'My\\ File.c'
+                # (All of the answer, ESC [ 1 ; 9 5 R, 7 bytes: foot has read it all)
+                stty -icanon -echo min 1 time 0
+                printf '\\033[6n'; dd bs=1 count=7 > /dev/null 2>&1
+                touch {ready}
+                while [ ! -e {t.tmp}/quit ]; do sleep .1; done
+            """)
+
+        def wait(what, check):
+            deadline = time.time() + TIMEOUT
+            while not check():
+                if time.time() > deadline or t.foot.poll() is not None:
+                    raise Failure(what)
+                time.sleep(.1)
+
+        def lines():
+            if not os.path.exists(opened):
+                return []
+            with open(opened) as f:
+                return f.read().splitlines()
+
+        def perform(action):
+            t.perform(action)
+            wait(f'{action}: not performed', lambda: not os.path.exists(
+                os.path.join(t.tmp, 'action')))
+
+        t.start(env=dict(VISUAL='', EDITOR=f'{launch} edit'))
+        try:
+            wait('the paths aren\'t there', lambda: os.path.exists(ready))
+            time.sleep(1)
+
+            expected = []
+            for percent, how, name in ((3, None, None), (17, 'edit', 's/m.c:12:5'),
+                                       (31, 'open', 'Makefile'), (45, 'open', 's/m.c'),
+                                       (62, 'edit', 'My File.c:7'), (75, 'open', 'Foo (1).c'),
+                                       (88, 'open', 'My File.c')):
+                perform(f'commandClick {percent}')
+                if name is not None:
+                    expected.append(f'{how} {os.path.join(files, name)}')
+                    wait(f'{name}: not opened', lambda: len(lines()) >= len(expected))
+
+                    # (The editor's window closes: the next click isn't for it)
+                    time.sleep(1)
+            if lines() != expected:
+                raise Failure(f'opened: {lines()}, expected {expected}')
+
+            # foot > Settings is that editor too, with foot.ini
+            perform('openSettings:')
+            expected.append(f'edit {t.config}')
+            wait('foot.ini: not opened', lambda: len(lines()) >= len(expected))
+            time.sleep(1)
+            if lines() != expected:
+                raise Failure(f'opened: {lines()}, expected {expected}')
+
+            # View > Open URL or Path labels them (for the sanitizers); a click
+            # isn't for what's below the labels then
+            perform('showURLs:')
+            perform('commandClick 31')
+            time.sleep(.5)
+            if lines() != expected:
+                raise Failure(f'opened with the labels shown: {lines()}')
         finally:
             out = t.quit()
 
