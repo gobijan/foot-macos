@@ -405,6 +405,7 @@ session_layout_restore(struct fdm *fdm)
 
     for (NSArray<NSDictionary *> *unit in units) {
         NSWindow *tab_parent = nil;
+        BOOL first = YES;
 
         for (NSDictionary *window in unit) {
             NSDictionary *tree = prune(window[@"tree"], available);
@@ -419,12 +420,14 @@ session_layout_restore(struct fdm *fdm)
 
             /* Tabs share the window's frame */
             NSString *frame = window[@"frame"];
-            if (tab_parent == nil && [frame isKindOfClass:[NSString class]]) {
+            if (first && [frame isKindOfClass:[NSString class]]) {
                 [layout.frames setObject:[NSValue valueWithRect:NSRectFromString(frame)]
                                   forKey:nswindow];
             }
-            if (tab_parent == nil)
-                tab_parent = nswindow;
+
+            /* The next tab is the one after this one (a tab is added after its parent) */
+            first = NO;
+            tab_parent = nswindow;
 
             NSMutableDictionary<NSNumber *, NSValue *> *panes = [NSMutableDictionary dictionary];
             restore_node(tree, term->window, panes);

@@ -224,6 +224,23 @@ find_superview(NSView *view, NSString *name)
 }
 
 /*
+ * AppKit asks each window that's shown, whenever one is ordered out
+ * (a menu that closes, too). With tabs in a state it doesn't expect (a
+ * tab bar without a selected tab), that's an exception: nothing catches
+ * it where a menu is closed for foot (e.g. another application is
+ * activated), and foot would be gone.
+ */
+- (BOOL)isOnActiveSpace
+{
+    @try {
+        return [super isOnActiveSpace];
+    } @catch (NSException *exception) {
+        LOG_WARN("AppKit's tabs: %s", exception.reason.UTF8String);
+        return YES;
+    }
+}
+
+/*
  * macos-titlebar-style=tabs
  */
 
