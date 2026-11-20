@@ -88,6 +88,14 @@ void split_swap(struct split *a, struct split *b);
 struct split *split_move_to_edge(
     struct split **root, struct split *leaf, enum split_dir dir);
 
+/*
+ * The split around 'leaf' is stacked instead of side by side, or the
+ * other way round: its first stays first (left is top), and its ratio.
+ * Returns whether it is; not the only pane's, nor without room for both
+ * that way (as of the last layout).
+ */
+bool split_toggle(struct split *leaf);
+
 /* Sets the frames of all nodes, within 'area' */
 void split_layout(struct split *root, struct split_rect area);
 

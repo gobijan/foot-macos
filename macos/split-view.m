@@ -1772,6 +1772,30 @@ drop_side(NSPoint p, struct split_rect r)
 - (void)moveSplitRight:(id)sender  { [self moveSplitInDirection:SPLIT_RIGHT]; }
 
 /*
+ * Toggle Split Direction (Hyprland's togglesplit): the focused pane and
+ * what it shares a split with are stacked instead of side by side, or
+ * the other way round
+ */
+- (void)toggleSplitDirection:(id)sender
+{
+    struct split *leaf = [self focusedLeaf];
+    if (leaf == NULL)
+        return;
+
+    [self setZoomed:NULL];
+
+    if (!split_toggle(leaf)) {
+        NSBeep();
+        return;
+    }
+
+    _raised = view_of(leaf->pane);
+    [self updateMinimumSize];
+    [self relayoutAnimated];
+    app_run_hooks();
+}
+
+/*
  * Send Input to All Splits: what's typed (and pasted) in one pane, the
  * window's others get too (view.m). None is dimmed meanwhile.
  */
@@ -1842,7 +1866,8 @@ drop_side(NSPoint p, struct split_rect r)
         action == @selector(moveDividerUp:) || action == @selector(moveDividerDown:) ||
         action == @selector(moveDividerLeft:) || action == @selector(moveDividerRight:) ||
         action == @selector(moveSplitUp:) || action == @selector(moveSplitDown:) ||
-        action == @selector(moveSplitLeft:) || action == @selector(moveSplitRight:))
+        action == @selector(moveSplitLeft:) || action == @selector(moveSplitRight:) ||
+        action == @selector(toggleSplitDirection:))
     {
         return many;
     }

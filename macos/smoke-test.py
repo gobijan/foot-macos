@@ -857,7 +857,7 @@ class Tests:
             raise Failure(f'foot: exit code {t.foot.returncode}\n{out}')
 
     def test_splits(self):
-        """Splits: right and down, zoomed, moved, closed; each pane's terminal size"""
+        """Splits: right and down, zoomed, moved, closed, toggled; each pane's terminal size"""
         t = self.Panes(self, 'splits')
         wait, perform = t.wait, t.perform
 
@@ -917,6 +917,12 @@ class Tests:
             wait('moved to the top', lambda got: (
                 got[a][1] == got[b][1] == 100 and abs(got[a][0] - got[b][0]) <= 1 and
                 25 <= got[a][0] + got[b][0] < 30))
+
+            # Toggled: the two are side by side again, in their order
+            perform('toggleSplitDirection:')
+            wait('toggled', lambda got: (
+                got[a][0] == got[b][0] == 30 and abs(got[a][1] - got[b][1]) <= 1 and
+                90 <= got[a][1] + got[b][1] < 100))
         finally:
             out = t.quit()
 

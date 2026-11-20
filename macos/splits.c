@@ -188,6 +188,29 @@ split_move_to_edge(struct split **root, struct split *leaf, enum split_dir dir)
     return moved;
 }
 
+bool
+split_toggle(struct split *leaf)
+{
+    struct split *node = leaf->parent;
+    if (node == NULL)
+        return false;
+
+    int w1, h1, w2, h2;
+    split_min_size(node->first, &w1, &h1);
+    split_min_size(node->second, &w2, &h2);
+
+    /* Room for both, the other way */
+    const bool stacked = node->kind == SPLIT_VERTICAL;
+    const bool fits = stacked
+        ? node->frame.width >= w1 + SPLIT_DIVIDER + w2
+        : node->frame.height >= h1 + SPLIT_DIVIDER + h2;
+    if (!fits)
+        return false;
+
+    node->kind = stacked ? SPLIT_HORIZONTAL : SPLIT_VERTICAL;
+    return true;
+}
+
 void
 split_min_size(const struct split *node, int *width, int *height)
 {
@@ -758,5 +781,48 @@ UNITTEST
 
     root = split_new(&a);
     xassert(split_move_to_edge(&root, root, SPLIT_UP) == NULL);
+    split_free(root);
+}
+
+UNITTEST
+{
+    int a, b, c;
+
+    /* The only pane: nothing to toggle */
+    struct split *root = split_new(&a);
+    struct split *la = root;
+    xassert(!split_toggle(la));
+
+    /* A | (B / C), a third of the width for A */
+    struct split *lb = split_insert(&root, la, &b, SPLIT_RIGHT);
+    struct split *lc = split_insert(&root, lb, &c, SPLIT_DOWN);
+    root->ratio = 1. / 3;
+    test_layout(root, 301, 101);
+
+    /* The split around the pane: B | C; first stays first, and the ratio */
+    xassert(split_toggle(lc));
+    xassert(root->kind == SPLIT_HORIZONTAL && root->second->kind == SPLIT_HORIZONTAL);
+    xassert(root->second->first == lb && root->second->second == lc);
+    test_layout(root, 301, 101);
+    xassert(lb->frame.height == 101 && lc->frame.height == 101);
+    xassert(lb->frame.x < lc->frame.x);
+
+    /* A's is the window's: A / (B | C), a third of the height for A */
+    xassert(split_toggle(la));
+    xassert(root->kind == SPLIT_VERTICAL && root->first == la);
+    test_layout(root, 301, 101);
+    xassert(la->frame.width == 301 && la->frame.height == 33);
+    xassert(split_toggle(la));
+    xassert(root->kind == SPLIT_HORIZONTAL);
+    test_layout(root, 301, 101);
+
+    /* Not without room for both, the other way */
+    lb->min_height = lc->min_height = 60;
+    xassert(!split_toggle(lb));
+    xassert(root->second->kind == SPLIT_HORIZONTAL);
+    lb->min_height = 40;
+    xassert(split_toggle(lb));
+    xassert(root->second->kind == SPLIT_VERTICAL);
+
     split_free(root);
 }

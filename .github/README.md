@@ -180,6 +180,9 @@ frameworks.
   with its neighbor in that direction, as Hyprland's `swapwindow`. With
   no neighbor there, it goes to that side of the window, along all of
   it: of two stacked ones, the one moved right is next to the other.
+  `Cmd+Ctrl+J` (Toggle Split Direction, Hyprland's `togglesplit`) has
+  the focused one and what it shares a split with stacked instead of
+  side by side, or the other way round, in their order.
   The panes move to where they go, as the tiles of a tiling window
   manager (Hyprland's, with Omarchy's timing): a new one pops in, and
   one that's closed gets smaller and fades out, while the others make

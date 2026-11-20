@@ -1264,13 +1264,19 @@ create_menu(void)
             {"Select Split Right", @selector(selectSplitRight:), NSRightArrowFunctionKey},
         }, cmd | NSEventModifierFlagOption, nil)];
 
-        /* Select Split's keys, with Shift: the pane goes along */
+        /*
+         * Select Split's keys, with Shift: the pane goes along. Toggle
+         * Split Direction has Omarchy's key for it (Super+J), with
+         * Resize Split's modifiers (Cmd+J is Jump to Selection, on macOS)
+         */
         [menu addItem:splits_submenu(@"Move Split", (const struct split_item[]){
             {"Move Split Up", @selector(moveSplitUp:), NSUpArrowFunctionKey},
             {"Move Split Down", @selector(moveSplitDown:), NSDownArrowFunctionKey},
             {"Move Split Left", @selector(moveSplitLeft:), NSLeftArrowFunctionKey},
             {"Move Split Right", @selector(moveSplitRight:), NSRightArrowFunctionKey},
-        }, cmd | NSEventModifierFlagOption | NSEventModifierFlagShift, nil)];
+        }, cmd | NSEventModifierFlagOption | NSEventModifierFlagShift,
+           menu_item(@"Toggle Split Direction", @selector(toggleSplitDirection:), @"j",
+                     cmd | NSEventModifierFlagControl))];
         [menu addItem:splits_submenu(@"Resize Split", (const struct split_item[]){
             {"Move Divider Up", @selector(moveDividerUp:), NSUpArrowFunctionKey},
             {"Move Divider Down", @selector(moveDividerDown:), NSDownArrowFunctionKey},
