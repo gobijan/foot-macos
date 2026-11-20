@@ -12,13 +12,12 @@ happens in the terminal core, which this port doesn't touch.
 ## Syncing
 
 ```sh
-make upstream   # what's new upstream
 make sync       # macos/sync-upstream.sh
 ```
 
-The script fetches upstream, prints what's coming (and flags upstream
-changes to platform code, see below), merges, builds and runs the
-tests. `git rerere` is enabled, so a conflict resolution is recorded
+The script fetches upstream (the remote `upstream`, which it adds),
+prints what's coming (and flags upstream changes to platform code, see
+below), merges, builds and runs the tests. `git rerere` is enabled, so a conflict resolution is recorded
 and re-applied automatically if the same conflict shows up again.
 
 In addition, the *Upstream sync* GitHub workflow tries the merge every
@@ -139,8 +138,8 @@ For humans and AI assistants alike:
    unit tests at startup).
 5. **Update this file** if the way the port touches upstream changes.
 
-To see the port's complete diff against upstream (`make port-diff`
-prints a summary):
+To see the port's complete diff against upstream (with `--stat`, a
+summary):
 
 ```sh
 git diff master...main -- . ':!macos' ':!.github' ':!Makefile' ':!AGENTS.md' ':!CLAUDE.md'

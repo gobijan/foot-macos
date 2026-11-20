@@ -33,8 +33,9 @@ echo "==> Building with instrumentation ($pgo)"
 # From scratch: with LTO, objects built before an update of the SDK
 # (Xcode, the Command Line Tools) don't link with those built after it
 # ("linking module flags 'SDK Version': IDs have conflicting values")
+# Only foot: not the tests, nor the subprojects' tools
 ninja -C "$pgo" clean
-ninja -C "$pgo"
+ninja -C "$pgo" macos/foot
 
 echo "==> Profiling"
 rm -f "$pgo"/default_*.profraw
@@ -56,5 +57,6 @@ echo "==> Building with the profile ($build)"
 [[ -f $build/build.ninja ]] || meson setup "$build" "$@"
 meson configure "$build" -Db_lto=true -Db_pgo=use
 # ninja doesn't know that objects depend on the profile
+# foot.app, with foot, footclient and footd (make release builds the rest)
 ninja -C "$build" clean
-ninja -C "$build"
+ninja -C "$build" macos/foot.app

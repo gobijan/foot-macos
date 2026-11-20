@@ -4,7 +4,7 @@
 # itself when a window is opened there (Shell > New Window on): copies
 # it to ~/.local/bin/footd there. Nothing else is installed there.
 #
-# Usage: macos/install-footd.sh [user@]host   (make install-footd HOST=...)
+# Usage: macos/install-footd.sh [user@]host
 #
 # Needs Docker (footd is built by footd-linux.sh: linked statically, it
 # runs on any Linux), and SSH access to the machine. A footd that runs

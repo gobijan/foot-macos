@@ -27,9 +27,16 @@ version.
    The first `make publish` asks for `<profile>`, and remembers it.
 
 3. **Sparkle:** the key that updates are signed with, also in the
-   keychain: `make sparkle-key`. It prints the public key; it goes in
-   `macos/dist.sh` (`SPARKLE_PUBLIC_KEY`). Back the private key up, e.g.
-   in a password manager:
+   keychain:
+
+   ```sh
+   macos/dist.sh --fetch-sparkle
+   build-release/sparkle-*/bin/generate_keys --account foot-macos
+   ```
+
+   It prints the public key; it goes in `macos/dist.sh`
+   (`SPARKLE_PUBLIC_KEY`). Back the private key up, e.g. in a password
+   manager:
 
    ```sh
    build-release/sparkle-*/bin/generate_keys --account foot-macos -x sparkle-private-key

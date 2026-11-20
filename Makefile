@@ -24,10 +24,6 @@ APP := $(RELEASE_DIR)/macos/foot.app
 INSTALLED_APP := /Applications/foot.app
 LSREGISTER := /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
 
-UPSTREAM_URL := https://codeberg.org/dnkl/foot.git
-# The port's own files, i.e. not changes to upstream's
-PORT_FILES := ':!macos' ':!.github' ':!Makefile' ':!AGENTS.md' ':!CLAUDE.md'
-
 VERSION = $(shell git describe --tags --always 2>/dev/null)
 
 ##@ Start
@@ -36,24 +32,12 @@ VERSION = $(shell git describe --tags --always 2>/dev/null)
 run: build ## Build and run foot (debug build: assertions, unit tests at startup)
 	./$(DEBUG_DIR)/macos/foot $(ARGS)
 
-.PHONY: run-release
-run-release: release ## Build and run the optimized build
-	./$(RELEASE_DIR)/macos/foot $(ARGS)
-
-.PHONY: open
-open: release ## Build foot.app and open it, like the Finder would
-	open $(APP)
-
 .PHONY: install
 install: release ## Build foot.app and install it to /Applications
 	rm -rf $(INSTALLED_APP)
 	ditto $(APP) $(INSTALLED_APP)
 	@$(LSREGISTER) -f $(INSTALLED_APP)
 	@if pgrep -xq foot; then echo 'Installed. Running instances keep the old version until restarted.'; fi
-
-.PHONY: uninstall
-uninstall: ## Remove foot.app from /Applications
-	rm -rf $(INSTALLED_APP)
 
 ##@ Build
 
@@ -70,20 +54,9 @@ release: $(RELEASE_DIR)/build.ninja ## Build the optimized version and foot.app 
 pgo: ## Like release, with profile guided optimization, as in releases (a window opens)
 	macos/pgo.sh $(RELEASE_DIR) $(RELEASE_OPTIONS)
 
-.PHONY: setup
-setup: ## Configure both builds again (after changing meson options)
-	$(MESON) setup --reconfigure $(DEBUG_DIR) $(MESON_OPTIONS) --buildtype=debug
-	$(MESON) setup --reconfigure $(RELEASE_DIR) $(RELEASE_OPTIONS) -Db_lto=true
-
 .PHONY: clean
-clean: ## Remove the compiled files, keep the configuration
-	@for dir in $(DEBUG_DIR) $(RELEASE_DIR); do \
-		if [[ -f $$dir/build.ninja ]]; then echo "$(NINJA) -C $$dir clean"; $(NINJA) -C $$dir clean >/dev/null; fi; \
-	done
-
-.PHONY: distclean
-distclean: ## Remove both build directories
-	rm -rf $(DEBUG_DIR) $(RELEASE_DIR) $(RELEASE_DIR)-pgo $(SANITIZE_DIR)
+clean: ## Remove all build directories (the next build configures them again)
+	rm -rf $(DEBUG_DIR) $(RELEASE_DIR) $(RELEASE_DIR)-pgo $(SANITIZE_DIR) build-x86_64 build-x86_64-pgo
 
 ##@ Test
 
@@ -94,8 +67,8 @@ test: build ## Run foot's tests: the configuration, sessions, and the unit tests
 	./$(DEBUG_DIR)/macos/foot --version
 
 .PHONY: smoke
-smoke: build ## Run foot for real: output, footclient, the quake terminal (windows open)
-	macos/smoke-test.py $(DEBUG_DIR)/macos
+smoke: build ## Run foot for real, in windows: all smoke tests, or ARGS=splits for one
+	macos/smoke-test.py $(DEBUG_DIR)/macos $(ARGS)
 
 .PHONY: sanitize
 sanitize: $(SANITIZE_DIR)/build.ninja ## All of the above, with AddressSanitizer and UBSan, in build-sanitize/
@@ -107,26 +80,9 @@ sanitize: $(SANITIZE_DIR)/build.ninja ## All of the above, with AddressSanitizer
 linux: ## Build footd for Linux and run its tests, in a container (Docker; PLATFORM=linux/amd64)
 	macos/linux.sh $(PLATFORM)
 
-.PHONY: install-footd
-install-footd: ## Install footd on another machine (Linux) by hand (foot.app does it itself)
-	@test -n "$(HOST)" || { echo 'make install-footd HOST=user@host'; exit 1; }
-	macos/install-footd.sh '$(HOST)'
-
-.PHONY: check-config
-check-config: build ## Check your foot.ini (or CONFIG=path)
-	./$(DEBUG_DIR)/macos/foot --check-config $(if $(CONFIG),--config='$(CONFIG)')
-	@echo 'The configuration is valid.'
-
 .PHONY: bench
 bench: pgo ## Benchmark foot against kitty and Ghostty (macos/bench; ~10 minutes, windows open)
 	macos/bench/bench.py $(ARGS)
-
-.PHONY: crash
-crash: ## Open foot's newest crash report in Console
-	@report=$$(ls -t ~/Library/Logs/DiagnosticReports/foot*.ips 2>/dev/null | head -1); \
-	if [[ -z "$$report" ]]; then echo 'No crash reports, good.'; exit 0; fi; \
-	echo "$$report"; \
-	open -a Console "$$report"
 
 ##@ Release
 
@@ -138,88 +94,19 @@ dist: ## Build foot.app for distribution: universal, notarized, zipped (no relea
 publish: ## Publish a release: GitHub, Sparkle, Homebrew (asks for everything)
 	@macos/publish.sh
 
-.PHONY: sparkle-key
-sparkle-key: ## Create the key that updates are signed with, in the keychain (once)
-	macos/dist.sh --fetch-sparkle
-	build-release/sparkle-$$(sed -n 's/^SPARKLE_VERSION=//p' macos/dist.sh)/bin/generate_keys --account foot-macos
-
-##@ Upstream
-
-.PHONY: upstream
-upstream: ## List the upstream commits that aren't merged yet
-	@git remote get-url upstream >/dev/null 2>&1 || git remote add upstream $(UPSTREAM_URL)
-	@git fetch --quiet --tags upstream master
-	@count=$$(git rev-list --count HEAD..upstream/master); \
-	if [[ $$count -eq 0 ]]; then echo "Up to date with upstream ($$(git describe --tags --always upstream/master))."; exit 0; fi; \
-	echo "$$count upstream commit(s) to merge, up to $$(git describe --tags --always upstream/master) (make sync):"; \
-	git log --oneline --no-decorate HEAD..upstream/master | sed 's/^/  /'
+##@ More
 
 .PHONY: sync
 sync: ## Merge upstream foot, then build and test (macos/sync-upstream.sh)
 	macos/sync-upstream.sh
 
-.PHONY: port-diff
-port-diff: ## Show which upstream files the port changes, and how much
-	@git remote get-url upstream >/dev/null 2>&1 || git remote add upstream $(UPSTREAM_URL)
-	@git fetch --quiet --tags upstream master
-	@git diff --stat upstream/master...HEAD -- . $(PORT_FILES)
-
-##@ GitHub
-
-.PHONY: ci
-ci: ## Show the latest GitHub Actions runs
-	gh run list --limit 8
-
-.PHONY: ci-watch
-ci-watch: ## Follow the newest GitHub Actions run until it's done
-	@id=$$(gh run list --limit 1 --json databaseId --jq '.[0].databaseId'); \
-	gh run watch "$$id" --exit-status
-
-.PHONY: ci-sync
-ci-sync: ## Run the upstream sync workflow on GitHub now (it runs every Monday)
-	gh workflow run upstream-sync.yml
-	@echo 'Started. make ci-watch follows it.'
-
-.PHONY: repo
-repo: ## Open the repository on GitHub
-	gh repo view --web
-
-##@ Setup
-
 .PHONY: deps
 deps: ## Install the build tools with Homebrew (meson, ninja, bison)
 	brew install meson ninja bison
 
-.PHONY: doctor
-doctor: ## Check the build tools and print their versions
-	@status=0; \
-	for tool in $(MESON) $(NINJA) /opt/homebrew/opt/bison/bin/bison xcrun; do \
-		if command -v $$tool >/dev/null; then \
-			printf '  %-8s %s\n' "$${tool##*/}" "$$($$tool --version 2>&1 | head -1)"; \
-		else \
-			printf '  %-8s missing (make deps)\n' "$${tool##*/}"; status=1; \
-		fi; \
-	done; \
-	printf '  %-8s %s\n' clang "$$(clang --version | head -1)"; \
-	printf '  %-8s %s\n' macOS "$$(sw_vers -productVersion)"; \
-	command -v rsvg-convert >/dev/null || echo '  (optional: brew install librsvg, for make icon)'; \
-	exit $$status
-
-.PHONY: icon
-icon: ## Generate the app icon from upstream's logo (needs librsvg)
-	macos/icon/make-icon.py
-
-##@ Website
-
 .PHONY: site
 site: ## Serve the website (macos/site) at http://localhost:8000
 	python3 -m http.server 8000 --bind 127.0.0.1 --directory macos/site
-
-.PHONY: site-assets
-site-assets: ## Generate the website's themes and images (needs librsvg and webp)
-	macos/site/make-assets.py
-
-##@ Help
 
 .PHONY: help
 help: ## List the commands
@@ -235,7 +122,7 @@ help: ## List the commands
 	awk -v b="$$b" -v r="$$r" 'BEGIN { FS = ":.*## "; split("36;172;212 71;180;19 227;196;1 242;175;253 19;194;153 246;43;90 230;230;230", palette, " ") } \
 		/^##@/ { c = b == "" ? "" : "\033[38;2;" palette[n++ % 7 + 1] "m"; printf "\n  %s%s%s\n", b, substr($$0, 5), r } \
 		/^[a-z0-9-]+:.*## / { printf "    %s%-14s%s %s\n", c, $$1, r, $$2 }' $(MAKEFILE_LIST); \
-	printf "\n  $${d}Variables: ARGS='-e htop' for run and run-release, ARGS='--save' (or --help) for bench, CONFIG=<path> for check-config$${r}\n\n"
+	printf "\n  $${d}Variables: ARGS='-e htop' for run, ARGS=splits for smoke, ARGS='--save' (or --help) for bench$${r}\n\n"
 
 # Configures a build directory the first time it's used.
 $(DEBUG_DIR)/build.ninja:
