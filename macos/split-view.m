@@ -1736,6 +1736,42 @@ drop_side(NSPoint p, struct split_rect r)
 - (void)moveDividerRight:(id)sender  { [self moveDividerInDirection:SPLIT_RIGHT]; }
 
 /*
+ * Move Split: the focused pane and its neighbor in that direction
+ * change places (as kitty's move_window). With none there, it goes to
+ * that side of the window, along all of it: stacked panes are side by
+ * side then, or the other way round.
+ */
+- (void)moveSplitInDirection:(enum split_dir)dir
+{
+    struct split *leaf = [self focusedLeaf];
+    if (leaf == NULL)
+        return;
+
+    /* The neighbors as they are without the zoom */
+    [self setZoomed:NULL];
+
+    struct wl_window *pane = leaf->pane;
+    struct split *neighbor = split_neighbor(_root, leaf, dir);
+
+    if (neighbor != NULL)
+        split_swap(leaf, neighbor);
+    else if (split_move_to_edge(&_root, leaf, dir) == NULL) {
+        NSBeep();
+        return;
+    }
+
+    _raised = view_of(pane);
+    [self updateMinimumSize];
+    [self relayoutAnimated];
+    app_run_hooks();
+}
+
+- (void)moveSplitUp:(id)sender     { [self moveSplitInDirection:SPLIT_UP]; }
+- (void)moveSplitDown:(id)sender   { [self moveSplitInDirection:SPLIT_DOWN]; }
+- (void)moveSplitLeft:(id)sender   { [self moveSplitInDirection:SPLIT_LEFT]; }
+- (void)moveSplitRight:(id)sender  { [self moveSplitInDirection:SPLIT_RIGHT]; }
+
+/*
  * Send Input to All Splits: what's typed (and pasted) in one pane, the
  * window's others get too (view.m). None is dimmed meanwhile.
  */
@@ -1804,7 +1840,9 @@ drop_side(NSPoint p, struct split_rect r)
         action == @selector(selectSplitLeft:) || action == @selector(selectSplitRight:) ||
         action == @selector(equalizeSplits:) ||
         action == @selector(moveDividerUp:) || action == @selector(moveDividerDown:) ||
-        action == @selector(moveDividerLeft:) || action == @selector(moveDividerRight:))
+        action == @selector(moveDividerLeft:) || action == @selector(moveDividerRight:) ||
+        action == @selector(moveSplitUp:) || action == @selector(moveSplitDown:) ||
+        action == @selector(moveSplitLeft:) || action == @selector(moveSplitRight:))
     {
         return many;
     }

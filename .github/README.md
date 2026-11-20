@@ -175,7 +175,11 @@ frameworks.
   with all tabs and splits. Each split is a terminal of its own (e.g.
   its font size). To move one, drag it by the dots at its top (they
   show when the mouse is near them) onto another one: it goes to the
-  side of that one that's highlighted.
+  side of that one that's highlighted. Or with the keyboard:
+  `Cmd+Option+Shift+arrow` (Window > Move Split) has it change places
+  with its neighbor in that direction, as Hyprland's `swapwindow`. With
+  no neighbor there, it goes to that side of the window, along all of
+  it: of two stacked ones, the one moved right is next to the other.
   The panes move to where they go, as the tiles of a tiling window
   manager (Hyprland's, with Omarchy's timing): a new one pops in, and
   one that's closed gets smaller and fades out, while the others make

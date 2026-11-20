@@ -45,27 +45,38 @@ replace(struct split **root, struct split *node, struct split *with)
         with->parent = parent;
 }
 
+static enum split_kind
+kind_along(enum split_dir dir)
+{
+    return dir == SPLIT_RIGHT || dir == SPLIT_LEFT ? SPLIT_HORIZONTAL : SPLIT_VERTICAL;
+}
+
+/* 'node' (a leaf, or a split) gets half of its place; 'pane', in 'dir', the other */
+static struct split *
+insert(struct split **root, struct split *node, void *pane, enum split_dir dir)
+{
+    struct split *parent = xcalloc(1, sizeof(*parent));
+    parent->kind = kind_along(dir);
+    parent->ratio = .5;
+    parent->frame = node->frame;
+
+    replace(root, node, parent);
+
+    struct split *new = split_new(pane);
+    const bool after = dir == SPLIT_RIGHT || dir == SPLIT_DOWN;
+    parent->first = after ? node : new;
+    parent->second = after ? new : node;
+    node->parent = parent;
+    new->parent = parent;
+
+    return new;
+}
+
 struct split *
 split_insert(struct split **root, struct split *leaf, void *pane, enum split_dir dir)
 {
     xassert(leaf->kind == SPLIT_LEAF);
-
-    struct split *node = xcalloc(1, sizeof(*node));
-    node->kind = dir == SPLIT_RIGHT || dir == SPLIT_LEFT
-        ? SPLIT_HORIZONTAL : SPLIT_VERTICAL;
-    node->ratio = .5;
-    node->frame = leaf->frame;
-
-    replace(root, leaf, node);
-
-    struct split *new = split_new(pane);
-    const bool after = dir == SPLIT_RIGHT || dir == SPLIT_DOWN;
-    node->first = after ? leaf : new;
-    node->second = after ? new : leaf;
-    leaf->parent = node;
-    new->parent = node;
-
-    return new;
+    return insert(root, leaf, pane, dir);
 }
 
 static struct split *
@@ -125,6 +136,53 @@ split_move(struct split **root, struct split *leaf, struct split *to, enum split
     split_remove(root, leaf);
 
     struct split *moved = split_insert(root, to, pane, dir);
+    moved->min_width = min_width;
+    moved->min_height = min_height;
+    return moved;
+}
+
+void
+split_swap(struct split *a, struct split *b)
+{
+    xassert(a->kind == SPLIT_LEAF && b->kind == SPLIT_LEAF);
+
+    void *pane = a->pane;
+    const int min_width = a->min_width;
+    const int min_height = a->min_height;
+
+    a->pane = b->pane;
+    a->min_width = b->min_width;
+    a->min_height = b->min_height;
+
+    b->pane = pane;
+    b->min_width = min_width;
+    b->min_height = min_height;
+}
+
+struct split *
+split_move_to_edge(struct split **root, struct split *leaf, enum split_dir dir)
+{
+    xassert(leaf->kind == SPLIT_LEAF);
+
+    const enum split_kind kind = kind_along(dir);
+    const bool after = dir == SPLIT_RIGHT || dir == SPLIT_DOWN;
+
+    /* It's all of that side, if every split around it has it there */
+    bool there = true;
+    for (const struct split *it = leaf; it->parent != NULL && there; it = it->parent) {
+        const struct split *parent = it->parent;
+        there = parent->kind == kind && (after ? parent->second : parent->first) == it;
+    }
+    if (there)
+        return NULL;
+
+    void *pane = leaf->pane;
+    const int min_width = leaf->min_width;
+    const int min_height = leaf->min_height;
+
+    split_remove(root, leaf);
+
+    struct split *moved = insert(root, *root, pane, dir);
     moved->min_width = min_width;
     moved->min_height = min_height;
     return moved;
@@ -642,5 +700,63 @@ UNITTEST
     lb = split_move(&root, lb, la, SPLIT_LEFT);
     xassert(root->kind == SPLIT_HORIZONTAL && root->first == lb && root->second == la);
     xassert(root->parent == NULL && la->parent == root);
+    split_free(root);
+}
+
+UNITTEST
+{
+    int a, b, c;
+
+    /* A | (B / C) */
+    struct split *root = split_new(&a);
+    struct split *la = root;
+    struct split *lb = split_insert(&root, la, &b, SPLIT_RIGHT);
+    struct split *lc = split_insert(&root, lb, &c, SPLIT_DOWN);
+    la->min_width = 7;
+    lc->min_width = 9;
+
+    /* Swapped: the panes change places, in the tree as it is */
+    split_swap(la, lc);
+    xassert(la->pane == &c && la->min_width == 9);
+    xassert(lc->pane == &a && lc->min_width == 7);
+    xassert(root->first == la && root->second->first == lb && root->second->second == lc);
+    split_swap(la, lc);
+    xassert(la->pane == &a && lc->pane == &c);
+
+    /* A is all of the left side, and stays; the only pane of a tree too */
+    xassert(split_move_to_edge(&root, la, SPLIT_LEFT) == NULL);
+    xassert(split_count(root) == 3 && root->first == la);
+
+    /* B to the right, along all of it: (A | C) | B */
+    lb = split_move_to_edge(&root, lb, SPLIT_RIGHT);
+    xassert(lb != NULL && lb->pane == &b);
+    xassert(root->kind == SPLIT_HORIZONTAL && root->second == lb && lb->parent == root);
+    xassert(root->first->kind == SPLIT_HORIZONTAL && root->first->parent == root);
+    xassert(root->first->first == la && root->first->second == lc);
+    xassert(split_count(root) == 3);
+    test_layout(root, 203, 51);
+    xassert(lb->frame.x == 102 && lb->frame.width == 101 && lb->frame.height == 51);
+
+    /* It's there now */
+    xassert(split_move_to_edge(&root, lb, SPLIT_RIGHT) == NULL);
+
+    /* C to the bottom: ((A | B) / C), with its minimum size */
+    lc = split_move_to_edge(&root, lc, SPLIT_DOWN);
+    xassert(lc != NULL && lc->pane == &c && lc->min_width == 9);
+    xassert(root->kind == SPLIT_VERTICAL && root->second == lc);
+    xassert(root->first->first == la && root->first->second == lb);
+    test_layout(root, 203, 51);
+    xassert(lc->frame.width == 203 && lc->frame.y == 26);
+
+    /* The first of two: the other way round */
+    xassert(split_remove(&root, lc) == lb);
+    la = split_move_to_edge(&root, la, SPLIT_RIGHT);
+    xassert(root->kind == SPLIT_HORIZONTAL && root->first == lb && root->second == la);
+    xassert(split_move_to_edge(&root, la, SPLIT_UP) != NULL);
+    xassert(root->kind == SPLIT_VERTICAL && root->second == lb && root->first->pane == &a);
+    split_free(root);
+
+    root = split_new(&a);
+    xassert(split_move_to_edge(&root, root, SPLIT_UP) == NULL);
     split_free(root);
 }

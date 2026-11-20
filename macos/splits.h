@@ -74,6 +74,20 @@ struct split *split_remove(struct split **root, struct split *leaf);
 struct split *split_move(
     struct split **root, struct split *leaf, struct split *to, enum split_dir dir);
 
+/*
+ * Leaves 'a' and 'b' exchange their panes (and minimum sizes): each is
+ * where the other one was, in the tree as it is
+ */
+void split_swap(struct split *a, struct split *b);
+
+/*
+ * Moves 'leaf' to the tree's side in 'dir', along all of it: as if it
+ * was removed, and what's left then split. Returns its new leaf, or NULL
+ * if it's that side already (nothing changed then).
+ */
+struct split *split_move_to_edge(
+    struct split **root, struct split *leaf, enum split_dir dir);
+
 /* Sets the frames of all nodes, within 'area' */
 void split_layout(struct split *root, struct split_rect area);
 

@@ -857,7 +857,7 @@ class Tests:
             raise Failure(f'foot: exit code {t.foot.returncode}\n{out}')
 
     def test_splits(self):
-        """Splits: right and down, zoomed, closed; each pane's terminal size"""
+        """Splits: right and down, zoomed, moved, closed; each pane's terminal size"""
         t = self.Panes(self, 'splits')
         wait, perform = t.wait, t.perform
 
@@ -888,6 +888,7 @@ class Tests:
                 got[b][1] == got[c][1] == b_size[1] and abs(got[b][0] - got[c][0]) <= 1 and
                 25 <= got[b][0] + got[c][0] < 30))
             c = new_pane(got, [a, b])
+            b_half, c_half = got[b], got[c]
 
             # Zoomed: the whole window; the other panes keep their size
             perform('toggleSplitZoom:')
@@ -895,9 +896,27 @@ class Tests:
             perform('toggleSplitZoom:')
             wait('zoom out', lambda got: got[c][1] == b_size[1] and got[c][0] < 30)
 
-            # Closing the new pane: the one it split gets its space back
+            # Moved: it changes places with its neighbor there. A | (B / C) is
+            # C | (B / A), then B | (C / A), then B | (A / C)
+            perform('moveSplitLeft:')
+            wait('moved left', lambda got: (
+                got[c] == a_size and got[a] == c_half and got[b] == b_half))
+            perform('moveSplitRight:')
+            wait('moved right', lambda got: (
+                got[b] == a_size and got[c] == b_half and got[a] == c_half))
+            perform('moveSplitDown:')
+            wait('moved down', lambda got: (
+                got[b] == a_size and got[a] == b_half and got[c] == c_half))
+
+            # Closing the new pane: the one it's below now gets its space
             perform('performClose:')
-            wait('close', lambda got: got[b] == b_size and got[a] == a_size)
+            wait('close', lambda got: got[a] == b_size and got[b] == a_size)
+
+            # Moved up, with no neighbor there: it's the window's top, above the other one
+            perform('moveSplitUp:')
+            wait('moved to the top', lambda got: (
+                got[a][1] == got[b][1] == 100 and abs(got[a][0] - got[b][0]) <= 1 and
+                25 <= got[a][0] + got[b][0] < 30))
         finally:
             out = t.quit()
 

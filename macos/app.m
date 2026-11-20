@@ -1043,7 +1043,7 @@ menu_item(NSString *title, SEL action, NSString *key, NSEventModifierFlags mods)
     return item;
 }
 
-/* Window > Select Split, Resize Split: one item for each direction */
+/* Window > Select Split, Move Split, Resize Split: one item for each direction */
 struct split_item {
     const char *title;
     SEL action;
@@ -1263,6 +1263,14 @@ create_menu(void)
             {"Select Split Left", @selector(selectSplitLeft:), NSLeftArrowFunctionKey},
             {"Select Split Right", @selector(selectSplitRight:), NSRightArrowFunctionKey},
         }, cmd | NSEventModifierFlagOption, nil)];
+
+        /* Select Split's keys, with Shift: the pane goes along */
+        [menu addItem:splits_submenu(@"Move Split", (const struct split_item[]){
+            {"Move Split Up", @selector(moveSplitUp:), NSUpArrowFunctionKey},
+            {"Move Split Down", @selector(moveSplitDown:), NSDownArrowFunctionKey},
+            {"Move Split Left", @selector(moveSplitLeft:), NSLeftArrowFunctionKey},
+            {"Move Split Right", @selector(moveSplitRight:), NSRightArrowFunctionKey},
+        }, cmd | NSEventModifierFlagOption | NSEventModifierFlagShift, nil)];
         [menu addItem:splits_submenu(@"Resize Split", (const struct split_item[]){
             {"Move Divider Up", @selector(moveDividerUp:), NSUpArrowFunctionKey},
             {"Move Divider Down", @selector(moveDividerDown:), NSDownArrowFunctionKey},
