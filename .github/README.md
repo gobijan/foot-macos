@@ -461,6 +461,12 @@ is sent while the windows are idle.
   shows the ports open (`ports 3000, 5432`), and its menu closes one.
   Any TCP port works; a footd from before isn't asked (it's replaced
   when a window is opened there the next time).
+* A download through a port doesn't hold up what you type, though both
+  share the SSH connection: foot sends only as much of it ahead as
+  arrives without delay, which it measures. Measured with a server
+  behind a line limited to 10 Mbit/s (`tc netem`, 20 ms away): a key's
+  echo takes 65 ms during a download (25 ms without one), and 1.5 s
+  with `ssh -L` on the same connection. The download is as fast.
 * Shell > Remove footd from (in a window on that machine) removes it
   again; the sessions there end.
 * A session there gets that machine's environment (the SSH login's),

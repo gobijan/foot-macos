@@ -8,6 +8,7 @@
 #include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <sys/epoll.h>
@@ -40,6 +41,24 @@
 #define TCP_HIGH_WATER (256 * 1024)
 #define TCP_LOW_WATER (64 * 1024)
 
+/*
+ * And not beyond what the other side has received (ACK) by more than
+ * a window: the stream is one connection (ssh's), and what's sent is
+ * behind all that's on its way, in ssh's buffers and the network's.
+ * How long that takes is measured, from sending some of it to its ACK.
+ * The window grows while that's (nearly) as short as it was with
+ * nothing on the way, and shrinks once it's longer by TCP_DELAY: a
+ * download fills the line, but not its queues, and a key's echo isn't
+ * later than that. (As LEDBAT, RFC 6817.)
+ */
+#define TCP_CHUNK (16 * 1024)
+#define TCP_WINDOW (64 * 1024)
+#define TCP_WINDOW_MIN TCP_CHUNK
+#define TCP_WINDOW_MAX (16 * 1024 * 1024)
+#define TCP_DELAY (60 * 1000 * 1000)            /* ns */
+#define TCP_ADJUST_EVERY (20 * 1000 * 1000)     /* ns, at least (else: the round trip's time) */
+#define TCP_MARKS 32
+
 struct channel {
     struct session_mux *mux;
     uint32_t id;
@@ -71,6 +90,25 @@ struct session_mux {
     tll(struct channel *) channels;
     bool full;          /* The stream: STREAM_HIGH_WATER */
     bool busy;          /* TCP_HIGH_WATER */
+
+    /* TCP connections' data, on all channels (TCP_WINDOW) */
+    uint64_t tcp_sent;
+    uint64_t tcp_acked;         /* By the other side */
+    uint64_t tcp_received;
+    uint64_t tcp_ack_sent;      /* Its ACK is sent */
+    size_t tcp_window;
+    bool tcp_waiting;           /* For ACKs: the window is used up */
+    bool tcp_limited;           /* It was, since the window was adjusted */
+    int64_t tcp_adjusted;       /* When (ns) */
+    int64_t tcp_fastest;        /* The shortest time from sending to its ACK (ns); 0: unknown */
+
+    /* When what was sent: its ACK tells how long it took */
+    struct {
+        uint64_t sent;
+        int64_t at;
+    } tcp_marks[TCP_MARKS];
+    unsigned tcp_mark_first;
+    unsigned tcp_mark_count;
     bool writing;       /* EPOLLOUT on the stream */
     bool dead;          /* Failed: the callback is told (once) */
     bool reported;
@@ -93,7 +131,7 @@ channel_find(struct session_mux *mux, uint32_t id)
 static void
 channel_update_reading(struct channel *ch)
 {
-    const bool full = ch->tcp ? ch->mux->busy : ch->mux->full;
+    const bool full = ch->tcp ? ch->mux->busy || ch->mux->tcp_waiting : ch->mux->full;
     const bool read = !ch->paused && !full && !ch->ended && !ch->shut_in;
     if (read == ch->reading)
         return;
@@ -296,11 +334,98 @@ static void
 send_data(struct channel *ch, const uint8_t *buf, size_t len)
 {
     struct session_msg msg = {0};
-    session_msg_begin(&msg, SESSION_MSG_DATA);
+    session_msg_begin(&msg, ch->tcp ? SESSION_MSG_TCP : SESSION_MSG_DATA);
     session_msg_u32(&msg, ch->id);
     session_msg_blob(&msg, buf, len);
     session_mux_send(ch->mux, &msg);
     session_msg_free(&msg);
+}
+
+static int64_t
+now_ns(void)
+{
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (int64_t)now.tv_sec * 1000000000 + now.tv_nsec;
+}
+
+/* The TCP connections' sockets are read while the window isn't used up */
+static void
+tcp_update(struct session_mux *mux)
+{
+    const bool waiting = mux->tcp_sent - mux->tcp_acked >= mux->tcp_window;
+    if (waiting)
+        mux->tcp_limited = true;
+    if (waiting == mux->tcp_waiting)
+        return;
+
+    mux->tcp_waiting = waiting;
+    tll_foreach(mux->channels, it) {
+        if (it->item->tcp)
+            channel_update_reading(it->item);
+    }
+}
+
+/* A TCP connection's data is sent */
+static void
+tcp_send(struct channel *ch, const uint8_t *buf, size_t len)
+{
+    struct session_mux *mux = ch->mux;
+    send_data(ch, buf, len);
+    mux->tcp_sent += len;
+
+    if (mux->tcp_mark_count < TCP_MARKS) {
+        const unsigned i = (mux->tcp_mark_first + mux->tcp_mark_count++) % TCP_MARKS;
+        mux->tcp_marks[i].sent = mux->tcp_sent;
+        mux->tcp_marks[i].at = now_ns();
+    }
+    tcp_update(mux);
+}
+
+/* ACK: the other side has received that much; false: malformed */
+static bool
+tcp_acked(struct session_mux *mux, struct session_reader *r)
+{
+    const uint64_t total = session_read_u64(r);
+    if (!r->ok || total > mux->tcp_sent || total < mux->tcp_acked)
+        return false;
+    mux->tcp_acked = total;
+
+    /* How long the last of it took */
+    const int64_t now = now_ns();
+    int64_t took = -1;
+    while (mux->tcp_mark_count > 0 && mux->tcp_marks[mux->tcp_mark_first].sent <= total) {
+        took = now - mux->tcp_marks[mux->tcp_mark_first].at;
+        mux->tcp_mark_first = (mux->tcp_mark_first + 1) % TCP_MARKS;
+        mux->tcp_mark_count--;
+    }
+
+    if (took >= 0) {
+        if (mux->tcp_fastest == 0 || took < mux->tcp_fastest)
+            mux->tcp_fastest = took > 0 ? took : 1;
+
+        /* Longer than that: it waited, behind what was sent before it */
+        const int64_t delay = took - mux->tcp_fastest;
+        const int64_t every =
+            mux->tcp_fastest > TCP_ADJUST_EVERY ? mux->tcp_fastest : TCP_ADJUST_EVERY;
+
+        if (now - mux->tcp_adjusted >= every) {
+            if (delay > TCP_DELAY) {
+                mux->tcp_window -= mux->tcp_window / 4;
+                if (mux->tcp_window < TCP_WINDOW_MIN)
+                    mux->tcp_window = TCP_WINDOW_MIN;
+            } else if (delay < TCP_DELAY / 2 && mux->tcp_limited) {
+                mux->tcp_window += mux->tcp_window / 4;
+                if (mux->tcp_window > TCP_WINDOW_MAX)
+                    mux->tcp_window = TCP_WINDOW_MAX;
+            }
+            mux->tcp_limited = false;
+            mux->tcp_adjusted = now;
+        }
+    }
+
+    tcp_update(mux);
+    return true;
 }
 
 /*
@@ -318,11 +443,11 @@ tcp_channel_read(struct channel *ch, int events)
     const bool all = events & (EPOLLHUP | EPOLLERR);
 
     while (!ch->shut_in) {
-        uint8_t buf[CHUNK];
+        uint8_t buf[TCP_CHUNK];
         const ssize_t n = read(ch->fd, buf, sizeof(buf));
 
         if (n > 0) {
-            send_data(ch, buf, n);
+            tcp_send(ch, buf, n);
             if (mux->cb->input != NULL)
                 mux->cb->input(mux, ch->id, mux->data);
             if (!all)
@@ -479,11 +604,16 @@ channel_message(struct session_mux *mux, uint32_t type, struct session_reader *r
             mux->cb->announced(mux, id, mux->data);
         return true;
 
+    case SESSION_MSG_TCP:
     case SESSION_MSG_DATA: {
         size_t len;
         const void *data = session_read_blob(r, &len);
         if (!r->ok)
             return false;
+
+        /* (Whatever becomes of it: the other side counts it too) */
+        if (type == SESSION_MSG_TCP)
+            mux->tcp_received += len;
 
         /* Already closed here: the other side will know (our EOF) */
         struct channel *ch = channel_find(mux, id);
@@ -584,14 +714,26 @@ fdm_stream(struct fdm *fdm, int fd, int events, void *data)
         struct session_reader r;
         bool error;
         while (!mux->dead && session_conn_next(&mux->conn, &type, &r, &error)) {
-            bool handled = type >= SESSION_MSG_CHANNEL && type <= SESSION_MSG_SHUT
-                ? channel_message(mux, type, &r)
-                : mux->cb->message(mux, type, &r, mux->data);
+            bool handled =
+                type == SESSION_MSG_ACK ? tcp_acked(mux, &r) :
+                (type >= SESSION_MSG_CHANNEL && type <= SESSION_MSG_SHUT) || type == SESSION_MSG_TCP
+                    ? channel_message(mux, type, &r)
+                    : mux->cb->message(mux, type, &r, mux->data);
             if (!handled) {
                 LOG_ERR("malformed message (type %u)", type);
                 stream_closed(mux);
                 return true;
             }
+        }
+
+        /* What was received of TCP connections, with this: the other side may send as much more */
+        if (!mux->dead && mux->tcp_received != mux->tcp_ack_sent) {
+            struct session_msg msg = {0};
+            session_msg_begin(&msg, SESSION_MSG_ACK);
+            session_msg_u64(&msg, mux->tcp_received);
+            session_mux_send(mux, &msg);
+            session_msg_free(&msg);
+            mux->tcp_ack_sent = mux->tcp_received;
         }
 
         if (mux->dead || !ok || error) {
@@ -611,7 +753,9 @@ session_mux_new(struct fdm *fdm, int in_fd, int out_fd,
                 const struct session_mux_callbacks *callbacks, void *data)
 {
     struct session_mux *mux = xmalloc(sizeof(*mux));
-    *mux = (struct session_mux){.fdm = fdm, .cb = callbacks, .data = data};
+    *mux = (struct session_mux){
+        .fdm = fdm, .cb = callbacks, .data = data, .tcp_window = TCP_WINDOW,
+    };
     session_conn_init_stream(&mux->conn, in_fd, out_fd);
 
     for (int i = 0; i < (in_fd == out_fd ? 1 : 2); i++) {

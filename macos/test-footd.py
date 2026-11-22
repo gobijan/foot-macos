@@ -81,7 +81,16 @@ class Client:
 
     def __init__(self, path):
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.sock.connect(path)
+        # (A footd just started: its socket is there before it listens)
+        deadline = time.time() + 2
+        while True:
+            try:
+                self.sock.connect(path)
+                break
+            except ConnectionRefusedError:
+                if time.time() > deadline:
+                    raise
+                time.sleep(.02)
         self.buf = b''
         self.detached = []  # DETACHED notifications, in any order with replies
 

@@ -27,7 +27,8 @@
  * each connection to it is a channel too, which the bridge connects to
  * the port there (CONNECT), for any protocol over TCP. Unlike a
  * window's, such a channel's two directions end one by one (SHUT), and
- * it waits while the stream is busy: what's typed comes first.
+ * its data is acknowledged (TCP, ACK): only as much of it is under way
+ * as arrives without much delay, as what's typed is behind it.
  */
 
 #include <stdbool.h>
@@ -116,6 +117,15 @@ enum session_msg_type {
                                    whether something listens there) */
     SESSION_MSG_CONNECTED,      /* u32 channel */
     SESSION_MSG_REFUSED,        /* u32 channel, str reason */
+
+    /*
+     * A TCP connection's data, as DATA: but all of it is counted, and
+     * the count is sent back (ACK). No more of it is sent ahead than
+     * gets there without much delay (session-mux.c): it shares the
+     * stream with what's typed.
+     */
+    SESSION_MSG_TCP,            /* u32 channel, blob: written to the socket */
+    SESSION_MSG_ACK,            /* u64 bytes: of TCP received so far, on all channels */
 };
 
 /* WELCOME's features */
