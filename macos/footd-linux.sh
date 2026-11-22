@@ -23,10 +23,11 @@ fi
 mkdir -p "$out"
 out=$(cd "$out" && pwd)
 
-# What footd is built from: the sources' contents (and this script's)
+# What footd is built from: the sources' contents (and this script's).
+# The patterns are git's (set -f), not the shell's: those in macos/ too
 sources="*.c *.h *meson.build meson_options.txt subprojects/*.wrap macos/footd-linux.sh"
 # shellcheck disable=SC2086
-key=$(cd "$root" && git ls-files -z -- $sources | xargs -0 shasum | shasum | cut -c1-16)
+key=$(cd "$root" && set -f && git ls-files -z -- $sources | xargs -0 shasum | shasum | cut -c1-16)
 
 for arch in x86_64 aarch64; do
     bin=$out/footd-linux-$arch
