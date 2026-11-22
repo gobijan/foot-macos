@@ -9,6 +9,12 @@ unofficial, and not affiliated with upstream foot.
 
 ![foot on macOS, split in three: Helix, GitUI and eza](splits.png)
 
+[![Play the film: foot in 40 seconds](film.webp)](https://screenisland.com/foot-macos/#film)
+
+[The film](https://screenisland.com/foot-macos/#film), 40 seconds without
+sound: splits that glide into place, the command palette, and a
+server's ports on your Mac.
+
 **Status:** work in progress. Usable day to day, but expect rough edges.
 
 foot's terminal core (VT parser, grid, sixel, search, URL mode etc) is
