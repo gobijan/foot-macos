@@ -154,6 +154,11 @@ h1 { max-width: 23ch; font-size: clamp(1.75rem, 1.1rem + 2.7vw, 2.875rem); line-
 .shot img { display: block; width: 103.8%; max-width: none; margin-inline: -1.9%; }
 .shot figcaption { margin-top: -0.6rem; color: var(--dim); }
 
+/* The film: a recording of foot (demo.mp4), with its own backdrop */
+.film { margin-top: clamp(40px, 6vw, 72px); }
+.film video { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; border: 1px solid var(--rule); background: #0a0a0a; }
+.film figcaption { margin-top: 0.6rem; color: var(--dim); }
+
 /* Sections */
 .sec { padding-block: clamp(64px, 9vw, 120px); }
 .sec + .sec { border-top: 1px solid var(--rule); }
@@ -368,6 +373,11 @@ footer nav { display: flex; flex-wrap: wrap; gap: 0.4rem 3ch; margin-top: 1.4rem
 <figure class="wrap shot">
   <img src="splits.webp" srcset="splits-small.webp 1262w, splits.webp 2524w" sizes="(min-width: 1160px) 1125px, 97vw" width="2524" height="1468" alt="A foot window on macOS with three splits: the Helix editor on the left, GitUI's commit log at the top right and a shell listing files below it.">
   <figcaption class="small">One window, three splits: Helix, GitUI and eza.</figcaption>
+</figure>
+
+<figure class="wrap film">
+  <video id="film" src="demo.mp4" poster="demo.webp" width="1920" height="1080" controls muted loop playsinline preload="none" aria-label="A recording of foot, 40 seconds, without sound: a window is split into three panes that glide into place, are moved with the keyboard and zoomed. The command palette opens a tab on a server. A web server is started there, a click on its localhost URL opens it in a browser on the Mac, and Shell > Open Port of opens the server's database port."></video>
+  <figcaption class="small">foot in 40 seconds: splits that glide into place, the command palette, and a server's ports on your Mac. Recorded as it is, without sound.</figcaption>
 </figure>
 
 <section class="sec" id="performance">
@@ -802,6 +812,17 @@ footer nav { display: flex; flex-wrap: wrap; gap: 0.4rem 3ch; margin-top: 1.4rem
   const root = document.documentElement;
   const $ = (selector) => document.querySelector(selector);
   const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+
+  // -- The film: it plays while it's seen (not with Reduce Motion: its controls then) --
+  const film = $('#film');
+  if (film && 'IntersectionObserver' in window) {
+    new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting && !reducedMotion.matches)
+        film.play().catch(() => {});
+      else
+        film.pause();
+    }, { threshold: 0.5 }).observe(film);
+  }
 
   // -- Themes: View > Theme ----------------------------------------------
   // themes.js has each theme's colors, in this order
