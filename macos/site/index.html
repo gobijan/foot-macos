@@ -228,6 +228,13 @@ thead th { color: var(--dim); }
 .ssh.lost code { color: inherit; }
 .term .said { color: var(--r3); }
 
+/* A server's port, on this Mac */
+.term.short { height: calc(4 * 1.35em + 16px); }
+.term u { color: var(--r4); text-underline-offset: 2px; }
+.ssh span { color: var(--r2); }
+#ports-link { flex-wrap: wrap; align-content: center; row-gap: 0; }
+#ports-link code { white-space: nowrap; }
+
 .facts { display: grid; gap: 2rem clamp(32px, 5vw, 72px); margin-top: clamp(48px, 6vw, 80px); }
 @media (min-width: 760px) { .facts { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 .facts p { margin: 0; color: var(--dim); }
@@ -491,6 +498,41 @@ footer nav { display: flex; flex-wrap: wrap; gap: 0.4rem 3ch; margin-top: 1.4rem
       </div>
     </div>
 
+    <div class="cols">
+      <div class="prose">
+        <h2>The server's localhost is yours, too.</h2>
+        <p>Start a web server in a window on a server, and <kbd>⌘</kbd> click the URL it prints: it opens in your browser. foot opens the port on your Mac first, and passes its connections on through the SSH connection that's already there.</p>
+        <p class="dim">Not only the web, any TCP port: Shell &gt; Open Port of lists what listens there, with the programs' names, and the one you choose is a port of this Mac. The server's database, say, for your client at <code>localhost:5432</code>. There's nothing to forward and nothing to configure: the port takes connections from this Mac only, and is closed again with the windows there.</p>
+      </div>
+      <div class="demo" id="ports">
+        <div class="machine">
+          <p class="machine-name small">This Mac</p>
+          <div class="win">
+            <div class="win-bar" aria-hidden="true"><i></i><i></i><i></i><span><b class="badge"></b>build-1 — npm run dev</span></div>
+            <pre class="term short"><span><b class="prompt">~/app ❯</b> npm run dev</span><span>ready in 212 ms</span><span>Local: <u>http://localhost:3000/</u></span></pre>
+          </div>
+          <div class="socket" aria-hidden="true"></div>
+          <div class="footd">
+            <b>footd</b>
+            <span id="ports-here">listens on port 3000</span>
+            <output id="ports-used">Safari</output>
+          </div>
+        </div>
+        <div class="ssh" id="ports-link"><code>ssh build-1 footd --bridge</code><span id="ports-carried">and port 3000</span></div>
+        <div class="machine">
+          <p class="machine-name small">build-1, a Linux server</p>
+          <div class="footd">
+            <b>footd</b>
+            <span id="ports-there">connects to node, at its port 3000</span>
+          </div>
+        </div>
+        <div class="demo-controls" hidden>
+          <button class="ghost" type="button" id="ports-toggle"><kbd>⌘</kbd> click the URL</button>
+          <p class="small" id="ports-note" role="status"></p>
+        </div>
+      </div>
+    </div>
+
     <div class="facts">
       <div>
         <h3>Everything comes back</h3>
@@ -498,7 +540,7 @@ footer nav { display: flex; flex-wrap: wrap; gap: 0.4rem 3ch; margin-top: 1.4rem
       </div>
       <div>
         <h3>One connection per machine</h3>
-        <p>All windows, tabs and splits on a machine share it, and it uses your SSH configuration, keys and agent. Shell &gt; Connections lists the machines, and how they're connected.</p>
+        <p>All windows, tabs and splits on a machine share it, as do the ports you open from there, and it uses your SSH configuration, keys and agent. Shell &gt; Connections lists the machines, how they're connected, and which of their ports are open.</p>
       </div>
       <div>
         <h3>Nothing to set up there</h3>
@@ -526,7 +568,7 @@ footer nav { display: flex; flex-wrap: wrap; gap: 0.4rem 3ch; margin-top: 1.4rem
         <div><dt><kbd>⌘</kbd> <kbd>K</kbd></dt><dd>Clear, keeping what you've typed</dd></div>
         <div><dt><kbd>⌘</kbd> <kbd>,</kbd></dt><dd>Open foot.ini in $EDITOR</dd></div>
         <div><dt><kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>,</kbd></dt><dd>Reload foot.ini, in the open windows too</dd></div>
-        <div><dt><kbd>⌘</kbd> click</dt><dd>Open a URL, a hyperlink, or a file (at its line, in $EDITOR)</dd></div>
+        <div><dt><kbd>⌘</kbd> click</dt><dd>Open a URL, a hyperlink, or a file (at its line, in $EDITOR); a server's <code>localhost</code> URL too</dd></div>
         <div><dt><kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>K</kbd></dt><dd>Connections to other machines</dd></div>
         <div><dt><kbd>⌥</kbd> <kbd>`</kbd></dt><dd>Quake terminal, from any app</dd></div>
       </dl>
@@ -637,7 +679,7 @@ footer nav { display: flex; flex-wrap: wrap; gap: 0.4rem 3ch; margin-top: 1.4rem
     <div class="facts two">
       <div>
         <h3>foot or Apple's Terminal</h3>
-        <p>Terminal is already there, and since macOS 26 it has 24-bit color. foot adds what it leaves out: splits with a shell each, sessions that outlive the application, windows on your servers, a command palette, a drop-down terminal, sixel images, and a configuration that is one text file.</p>
+        <p>Terminal is already there, and since macOS 26 it has 24-bit color. foot adds what it leaves out: splits with a shell each, sessions that outlive the application, windows on your servers and their ports on your Mac, a command palette, a drop-down terminal, sixel images, and a configuration that is one text file.</p>
         <p>Stay with Terminal if you open one now and then, and don't want another application for it.</p>
       </div>
       <div>
@@ -657,7 +699,7 @@ footer nav { display: flex; flex-wrap: wrap; gap: 0.4rem 3ch; margin-top: 1.4rem
       </div>
       <div>
         <h3>foot or WezTerm</h3>
-        <p>WezTerm comes closest to foot's sessions: its multiplexer keeps them too, also over SSH, if WezTerm is installed on the server. foot installs footd there itself, without sudo. WezTerm is configured in Lua and runs on Windows too; foot is an .ini file and a Mac application.</p>
+        <p>WezTerm comes closest to foot's sessions: its multiplexer keeps them too, also over SSH, if WezTerm is installed on the server. foot installs footd there itself, without sudo, and opens the server's ports on your Mac with a click. WezTerm is configured in Lua and runs on Windows too; foot is an .ini file and a Mac application.</p>
         <p>Stay with WezTerm if you want to program your terminal, or use the same one on Windows.</p>
       </div>
       <div>
@@ -998,6 +1040,50 @@ footer nav { display: flex; flex-wrap: wrap; gap: 0.4rem 3ch; margin-top: 1.4rem
     toggle.parentElement.hidden = false;
 
     everySecondWhileVisible(remote, render);
+  }
+
+  // -- A server's ports: the dev server's URL is clicked, then the --------
+  // -- database is chosen in Shell > Open Port of ---------------------------
+  const ports = $('#ports');
+  if (ports) {
+    const here = $('#ports-here'), used = $('#ports-used'), carried = $('#ports-carried');
+    const there = $('#ports-there'), toggle = $('#ports-toggle'), note = $('#ports-note');
+    const key = toggle.firstElementChild;   // ⌘
+    const states = [
+      {
+        here: 'passes it on to the window', used: '', carried: '',
+        there: '1 session: npm run dev', button: [key, ' click the URL'], note: '',
+      },
+      {
+        here: 'listens on port 3000', used: 'Safari', carried: 'and port 3000',
+        there: 'connects to node, at its port 3000', button: ['Open Port of build-1…'],
+        note: 'It opens in your browser: footd listens on port 3000 here, and connects to node there.',
+      },
+      {
+        here: 'listens on ports 3000 and 5432', used: 'Safari, psql',
+        carried: 'and ports 3000, 5432', there: 'connects to node and postgres',
+        button: ['Start over'],
+        note: 'The menu lists what listens there: node — 3000, postgres — 5432. Chosen, the database is at localhost:5432 on this Mac.',
+      },
+    ];
+    let state = 0;
+
+    function render() {
+      const now = states[state];
+      here.textContent = now.here;
+      used.textContent = now.used;
+      carried.textContent = now.carried;
+      there.textContent = now.there;
+      toggle.replaceChildren(...now.button);
+      note.textContent = now.note;
+    }
+
+    toggle.addEventListener('click', () => {
+      state = (state + 1) % states.length;
+      render();
+    });
+    toggle.parentElement.hidden = false;
+    render();
   }
 
   // -- Quake terminal ------------------------------------------------------
