@@ -146,6 +146,13 @@ bool palette_is_open(void);
  * control.m). And running one.
  */
 NSArray<FootCommand *> *palette_commands(NSResponder *first);
+
+/*
+ * The menus' items that are for a pane's machine (Shell > Open Port of)
+ * are for 'first's, while the palette lists them; nil: the main window's
+ * focused pane's again, as in the menus
+ */
+void app_menus_for(NSResponder *first);
 void palette_run(FootCommand *command);
 
 /*

@@ -7,16 +7,20 @@
 #
 # Usage: smoke-test.py <directory with foot and footclient> [tests...]
 
+import http.server
 import importlib.util
 import json
 import os
+import re
 import shutil
 import signal
 import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
+import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TIMEOUT = 180  # Seconds, for each step (the sanitizers on CI take a minute)
@@ -1247,6 +1251,232 @@ class Tests:
             t.wait('footd exiting', lambda: not os.path.exists(t.sock))
         finally:
             t.done(foot)
+
+    def test_ports(self):
+        """Another machine's ports: a server's URL clicked in a window there, or its port chosen in Shell > Open Port of, is open here"""
+        t = self.Sessions(self, 'ports')
+        tmp = t.tmp
+
+        # "Another machine": this one, behind footd --bridge (a script for
+        # ssh), with a footd of its own; ~/.ssh/config has it, so the menus do
+        footd = os.path.join(os.path.dirname(self.foot), 'footd')
+        remote_sock = os.path.join(tmp, 'r.sock')
+        ssh = os.path.join(tmp, 'ssh')
+        with open(ssh, 'w') as f:
+            f.write('#!/bin/sh\nwhile [ "$1" != -- ]; do shift; done\n'
+                    f'exec "{footd}" --bridge --socket="{remote_sock}"\n')
+        os.chmod(ssh, 0o755)
+        os.mkdir(os.path.join(tmp, '.ssh'))
+        with open(os.path.join(tmp, '.ssh', 'config'), 'w') as f:
+            f.write('Host testhost\n')
+
+        # (The shell there is that machine's user's: its foot.ini's)
+        os.makedirs(os.path.join(tmp, '.config', 'foot'))
+        with open(os.path.join(tmp, '.config', 'foot', 'foot.ini'), 'w') as f:
+            f.write('shell=/bin/sh\nlogin-shell=no\n')
+
+        # What's opened: the launcher's arguments
+        opened = os.path.join(tmp, 'opened')
+        launch = os.path.join(tmp, 'launch')
+        with open(launch, 'w') as f:
+            f.write(f'#!/bin/sh\necho "$@" >> {opened}\n')
+        os.chmod(launch, 0o755)
+        with open(t.config, 'a') as f:
+            f.write(f'[url]\nlaunch={launch} ${{url}}\n')
+
+        # The server "there": its port is taken here, so it's another one here
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                body = f'from there: {self.path}'.encode()
+                self.send_response(200)
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):
+                pass
+
+        server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        port = server.server_address[1]
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+
+        env = dict(t.env, HOME=tmp, XDG_CONFIG_HOME=os.path.join(tmp, '.config'), FOOTD_SSH=ssh,
+                   FOOTD_LINGER='500')
+        foot = subprocess.Popen(
+            [self.foot, f'--config={t.config}', '--window-size-chars=100x30'],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, env=env)
+
+        def at(*args):
+            return run(self.foot, '@', *args, env=env)
+
+        def terminals():
+            return json.loads(at('ls'))
+
+        def lines():
+            if not os.path.exists(opened):
+                return []
+            with open(opened) as f:
+                return f.read().splitlines()
+
+        def perform(action):
+            t.perform(action)
+            t.wait(f'{action}: performed', lambda: not os.path.exists(
+                os.path.join(tmp, 'action')), foot)
+
+        try:
+            wait_for(env['FOOT_CONTROL_SOCKET'])
+            t.wait('the first window', lambda: len(terminals()) == 1, foot)
+            here = terminals()[0]['id']
+
+            # A window there, and that one only (the driver's clicks are the first window's)
+            titles = [line.split('\t')[0] for line in at('commands').split('\n')]
+            on = [title for title in titles
+                  if title.startswith('New Window on') and 'testhost' in title]
+            if len(on) != 1:
+                raise Failure(f'no New Window on testhost: {titles}')
+            if any(title.startswith('Open Port') for title in titles):
+                raise Failure(f'Open Port, in a window on this Mac: {titles}')
+            at('run', on[0])
+            t.wait('a window there', lambda: any(
+                e.get('host') == 'testhost' for e in terminals()), foot)
+            there = [e['id'] for e in terminals() if e.get('host') == 'testhost'][0]
+            at('close', f'--id={here}')
+            t.wait('the window here closing', lambda: len(terminals()) == 1, foot)
+
+            def show(text):
+                """In the window there: the first row's beginning, where the driver clicks"""
+                typed = f"printf '\\033[2J\\033[1;1H{text}\\033[3;1H'\r"
+                subprocess.run([self.foot, '@', 'send-text', '--stdin', f'--id={there}'],
+                               input=typed.encode(), env=env, check=True, timeout=TIMEOUT)
+                t.wait(f'{text} being shown', lambda: at(
+                    'get-text', f'--id={there}').split('\n')[0].rstrip() == text, foot)
+                time.sleep(1)
+
+            # As servers say where they listen: a URL
+            url = f'http://localhost:{port}/a?b=1'
+            show(url)
+            perform('commandClick 5')
+            t.wait('the URL being opened', lambda: len(lines()) >= 1, foot)
+            got = lines()[0]
+            match = re.fullmatch(r'http://localhost:(\d+)/a\?b=1', got)
+            if match is None or int(match.group(1)) == port:
+                raise Failure(f'opened: {got!r}, not {url} with the port here')
+            with urllib.request.urlopen(got, timeout=TIMEOUT) as response:
+                body = response.read()
+            if body != b'from there: /a?b=1':
+                raise Failure(f'{got}: {body!r}')
+
+            # An address without one: the same port, open already; and "all
+            # addresses" is localhost here
+            show(f'0.0.0.0:{port}')
+            perform('commandClick 5')
+            t.wait('the address being opened', lambda: len(lines()) >= 2, foot)
+            if lines()[1] != f'http://localhost:{match.group(1)}':
+                raise Failure(f'opened: {lines()[1]!r}')
+
+            # Nothing listens there: nothing is opened (a sheet says so)
+            with socket.socket() as probe:
+                probe.bind(('127.0.0.1', 0))
+                nothing = probe.getsockname()[1]
+            show(f'http://localhost:{nothing}/')
+            perform('commandClick 5')
+            time.sleep(2)
+            if len(lines()) != 2:
+                raise Failure(f'opened, with nothing listening there: {lines()}')
+
+            def produced(name, action):
+                """What the driver writes for 'action' (JSON)"""
+                path = os.path.join(tmp, name)
+                if os.path.exists(path):
+                    os.unlink(path)
+                action()
+                t.wait(f'the {name}', lambda: os.path.exists(path), foot)
+                with open(path) as f:
+                    return json.load(f)
+
+            def sheet_with(text):
+                """The window's sheet, once it says 'text'"""
+                got = {}
+                deadline = time.time() + TIMEOUT
+                while not any(text in each for each in got.get('texts', [])):
+                    if time.time() > deadline or foot.poll() is not None:
+                        raise Failure(f'no sheet with {text!r}: {got}')
+                    time.sleep(.2)
+                    got = produced('sheet', lambda: perform('sheet'))
+                return got
+
+            def no_sheet():
+                t.wait('the sheet closing', lambda: produced(
+                    'sheet', lambda: perform('sheet')) == {}, foot)
+
+            got = sheet_with(f'Port {nothing} of testhost can’t be opened')
+            if 'Nothing is listening on it.' not in got['texts']:
+                raise Failure(f'the sheet: {got}')
+            perform('sheetButton OK')
+            no_sheet()
+
+            # Shell > Open Port of, in a window there: the ports programs listen on
+            # there, the server's with its program; the one chosen is open here
+            def port_menu():
+                return produced('menu', lambda: at('run', f'--id={there}', 'Open Port of testhost…'))
+
+            titles = port_menu()
+            mine = [title for title in titles if title.endswith(f' — {port}')]
+            if len(mine) != 1 or titles[-1] != 'Other Port…':
+                raise Failure(f'the ports: {titles}')
+            perform(f'menu {mine[0]}')
+            got = sheet_with(f'Port {port} of testhost is open on this Mac')
+            here = match.group(1)
+            if not any(f'localhost:{here}' in text and f'Port {port} is in use' in text
+                       for text in got['texts']) or \
+                    got['buttons'][:3] != ['Copy Address', 'Open in Browser', 'Done']:
+                raise Failure(f'the sheet: {got}')
+            perform('sheetButton Open in Browser')
+            t.wait('the port being opened in the browser', lambda: len(lines()) >= 3, foot)
+            if lines()[2] != f'http://localhost:{here}':
+                raise Failure(f'opened: {lines()[2]!r}')
+            no_sheet()
+
+            # Other Port: asked for; one nothing listens on isn't opened
+            port_menu()
+            perform('menu Other Port…')
+            sheet_with('Open Port of testhost')
+            perform(f'sheetText {nothing}')
+            perform('sheetButton Open')
+            sheet_with(f'Port {nothing} of testhost can’t be opened')
+            perform('sheetButton OK')
+            no_sheet()
+            if len(lines()) != 3:
+                raise Failure(f'opened: {lines()}')
+
+            # Not in a window on this Mac
+            at('run', f'--id={there}', 'New Window on: This Mac')
+            t.wait('a window here', lambda: len(terminals()) == 2, foot)
+            other = [e['id'] for e in terminals() if e['id'] != there][0]
+            titles = [line.split('\t')[0] for line in at('commands', f'--id={other}').split('\n')]
+            if any(title.startswith('Open Port') for title in titles):
+                raise Failure(f'Open Port, in a window on this Mac: {titles}')
+        except Failure as e:
+            failure = e
+        else:
+            failure = None
+        finally:
+            server.shutdown()
+            server.server_close()
+            if foot.poll() is None:
+                foot.kill()
+            out, _ = foot.communicate()
+            for sock in t.sock, remote_sock:
+                if os.path.exists(sock):
+                    subprocess.run(['pkill', '-f', '--', f'--socket={sock}'])
+            t.done(None)
+
+        if failure is not None:
+            raise Failure(f'{failure}\n{out}')
+        for line in out.splitlines():
+            if 'Sanitizer' in line or 'runtime error' in line:
+                raise Failure(f'foot:\n{out}')
 
     def test_server(self):
         """foot --server, footclient, and the quake terminal"""

@@ -19,9 +19,10 @@ int footd_bridge(const char *socket_path);
 /*
  * What this footd --bridge can do: `footd --bridge-level` prints it.
  * footd on the other machine is replaced (installed anew) when its
- * level is lower, or it has none (see footd.c).
+ * level is lower, or it has none (see footd.c). 2: its machine's
+ * ports (CONNECT and PORTS, which it answers itself; footd-ports.h).
  */
-#define FOOTD_BRIDGE_LEVEL 1
+#define FOOTD_BRIDGE_LEVEL 2
 
 /* This footd's executable (NULL: unknown) */
 char *footd_own_path(void);

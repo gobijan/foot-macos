@@ -215,7 +215,9 @@ frameworks.
   kin `-g a.c:12:5`, Emacs, Kakoune and micro `+12:5`, nano `+12,5`,
   TextMate and Xcode's `xed` `-l 12`, and all others vi's `+12`. So is
   a hyperlink to a file with the line for its fragment
-  (`file:///a.c#12`, as kitty's). `Cmd`+click opens the same.
+  (`file:///a.c#12`, as kitty's). A server's address, as servers print
+  where they listen (`localhost:3000`, `0.0.0.0:3000`), is its URL
+  (`http://localhost:3000`). `Cmd`+click opens the same.
 * `Option` and a click at the shell's prompt moves the cursor there, as
   in Terminal.app and Ghostty: the shell gets the arrow keys it takes
   (with the shell integration; not while a command runs, nor in
@@ -439,6 +441,26 @@ is sent while the windows are idle.
   distribution) and macOS. An older one there is replaced without
   asking. Also used: foot.app in `/Applications` (on a Mac), and footd
   in `$PATH`.
+* A machine's ports are this Mac's when you need them. `Cmd`+click on a
+  server's URL in a window there (`http://localhost:3000`, also
+  `127.0.0.1`, `[::1]` and `0.0.0.0:3000`; a database's too, e.g.
+  `postgres://localhost:5432/app`) opens it here: foot opens the port
+  on this Mac first, and passes its connections on to the one there,
+  through the SSH connection. If nothing listens there, a sheet says
+  so.
+* Shell > Open Port of (in a window on that machine) lists the ports
+  programs listen on there, yours first, with their names (`node —
+  3000`), and Other Port… takes any. The one chosen is open on this
+  Mac, for its programs (e.g. a database's client at
+  `localhost:5432`): Copy Address, or Open in Browser.
+* There's nothing to set up: the port here is the same if it's free
+  (else another one, which the URL opened has, and the sheet says); it
+  takes connections from this Mac only, not from the network; and it's
+  open as long as a window on that machine is, or a connection through
+  it. After the connection was lost, it's back by itself. Connections
+  shows the ports open (`ports 3000, 5432`), and its menu closes one.
+  Any TCP port works; a footd from before isn't asked (it's replaced
+  when a window is opened there the next time).
 * Shell > Remove footd from (in a window on that machine) removes it
   again; the sessions there end.
 * A session there gets that machine's environment (the SSH login's),

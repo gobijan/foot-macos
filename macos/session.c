@@ -83,6 +83,15 @@ struct session_link {
     char *host;             /* On another machine (over SSH); NULL: here */
 };
 
+/* What was asked about another machine's ports, until footd has answered */
+struct port_request {
+    uint64_t id;
+    struct session_link *link;
+    sessions_port_cb opened;    /* sessions_open_port() */
+    sessions_ports_cb listed;   /* sessions_list_ports() */
+    void *data;
+};
+
 static struct {
     bool enabled;
     struct fdm *fdm;
@@ -120,6 +129,10 @@ static struct {
     /* sessions_list(), waiting for footd's answer */
     struct session_list *list;
     bool list_done;
+
+    /* sessions_open_port(), sessions_list_ports() */
+    tll(struct port_request) port_requests;
+    uint64_t next_request;
 } client = {.conn = {.fd = -1}};
 
 void
@@ -208,6 +221,100 @@ send_watch(bool on)
     session_msg_free(&msg);
 }
 
+/*
+ * Those of 'link' (NULL: all) aren't answered any more: they're told
+ * why, or ('gone') that the link's terminal is gone
+ */
+static void
+port_requests_end(const struct session_link *link, bool gone, const char *error)
+{
+    tll_foreach(client.port_requests, it) {
+        const struct port_request request = it->item;
+        if (link != NULL && request.link != link)
+            continue;
+
+        tll_remove(client.port_requests, it);
+        struct terminal *term = gone ? NULL : request.link->term;
+        if (request.opened != NULL)
+            request.opened(term, 0, error, request.data);
+        else
+            request.listed(term, NULL, 0, error, request.data);
+    }
+}
+
+/* footd's answer to the request 'id' (taken); false: there's none */
+static bool
+port_request_take(uint64_t id, struct port_request *request)
+{
+    tll_foreach(client.port_requests, it) {
+        if (it->item.id == id) {
+            *request = it->item;
+            tll_remove(client.port_requests, it);
+            return true;
+        }
+    }
+    return false;
+}
+
+static void
+handle_forwarded(struct session_reader *r)
+{
+    const uint64_t id = session_read_u64(r);
+    const uint32_t port = session_read_u32(r);
+    char *error = session_read_str(r);
+
+    struct port_request request;
+    if (r->ok && port_request_take(id, &request) && request.opened != NULL) {
+        const bool failed = port == 0 || port > UINT16_MAX || (error != NULL && error[0] != '\0');
+        request.opened(request.link->term, failed ? 0 : port,
+                       !failed ? NULL : error != NULL && error[0] != '\0' ? error : "it failed",
+                       request.data);
+    }
+    free(error);
+}
+
+static void
+handle_listening(struct session_reader *r)
+{
+    const uint64_t id = session_read_u64(r);
+    char *error = session_read_str(r);
+    const uint32_t count = session_read_u32(r);
+    if (!r->ok || count > SESSION_MAX_PAYLOAD / 8) {
+        free(error);
+        return;
+    }
+
+    struct session_port *ports = xcalloc(count > 0 ? count : 1, sizeof(ports[0]));
+    size_t n = 0;
+    for (uint32_t i = 0; i < count && r->ok; i++) {
+        const uint32_t port = session_read_u32(r);
+        char *program = session_read_str(r);
+        const bool own = session_read_u8(r);
+
+        if (r->ok && port > 0 && port <= UINT16_MAX) {
+            const bool named = program != NULL && program[0] != '\0';
+            ports[n++] = (struct session_port){
+                .port = port, .program = named ? program : NULL, .own = own,
+            };
+            if (named)
+                continue;
+        }
+        free(program);
+    }
+
+    struct port_request request;
+    if (r->ok && port_request_take(id, &request) && request.listed != NULL) {
+        const bool failed = error != NULL && error[0] != '\0';
+        request.listed(request.link->term, failed ? NULL : ports, failed ? 0 : n,
+                       failed ? error : NULL, request.data);
+    }
+
+    for (size_t i = 0; i < n; i++)
+        free(ports[i].program);
+    free(ports);
+    free(error);
+}
+
 static void
 handle_remotes(struct session_reader *r)
 {
@@ -235,12 +342,35 @@ handle_remotes(struct session_reader *r)
         }
     }
 
+    /* Their ports that are open here (not from an older footd) */
+    const uint32_t ports = r->ok && session_read_more(r) ? session_read_u32(r) : 0;
+    for (uint32_t i = 0; i < ports && r->ok && ports <= SESSION_MAX_PAYLOAD / 8; i++) {
+        char *host = session_read_str(r);
+        const uint32_t port = session_read_u32(r);
+        const uint32_t local_port = session_read_u32(r);
+
+        for (size_t j = 0; r->ok && j < n; j++) {
+            struct session_remote *remote = &remotes[j];
+            if (strcmp(remote->host, host) != 0)
+                continue;
+
+            remote->ports = xreallocarray(remote->ports, remote->port_count + 1,
+                                          sizeof(remote->ports[0]));
+            remote->ports[remote->port_count++] = (struct session_remote_port){
+                .port = port, .local_port = local_port,
+            };
+            break;
+        }
+        free(host);
+    }
+
     if (r->ok)
         client.remotes_changed(remotes, n, client.remotes_data);
 
     for (size_t i = 0; i < n; i++) {
         free(remotes[i].host);
         free(remotes[i].detail);
+        free(remotes[i].ports);
     }
     free(remotes);
 }
@@ -263,6 +393,14 @@ handle_message(uint32_t type, struct session_reader *r)
 
     case SESSION_MSG_REMOTES:
         handle_remotes(r);
+        break;
+
+    case SESSION_MSG_FORWARDED:
+        handle_forwarded(r);
+        break;
+
+    case SESSION_MSG_LISTENING:
+        handle_listening(r);
         break;
 
     case SESSION_MSG_ASK: {
@@ -450,6 +588,7 @@ disconnect(void)
     /* (Its connections to other machines are gone with it) */
     if (client.remotes_changed != NULL)
         client.remotes_changed(NULL, 0, client.remotes_data);
+    port_requests_end(NULL, false, "footd is gone");
 
     tll_foreach(client.links, it) {
         struct session_link *link = it->item;
@@ -820,6 +959,7 @@ session_link_destroy(struct session_link *link)
     close_footd_fd(link);
     if (link->window_fd >= 0)
         close(link->window_fd);
+    port_requests_end(link, true, NULL);
 
     tll_foreach(client.links, it) {
         if (it->item == link) {
@@ -920,6 +1060,67 @@ sessions_answer(uint64_t id, bool ok, const char *answer)
 
     /* (The password, in the message) */
     memset(msg.data, 0, msg.len);
+    session_msg_free(&msg);
+}
+
+bool
+sessions_ports_supported(void)
+{
+    return client.conn.fd >= 0 && (client.features & SESSION_FEATURE_PORTS);
+}
+
+/* Asks footd about a port, or the ports, of 'link's machine */
+static bool
+port_request(struct session_link *link, uint16_t port, sessions_port_cb opened,
+             sessions_ports_cb listed, void *data)
+{
+    if (link == NULL || link->host == NULL || !sessions_ports_supported())
+        return false;
+
+    const uint64_t id = ++client.next_request;
+
+    struct session_msg msg = {0};
+    session_msg_begin(&msg, opened != NULL ? SESSION_MSG_FORWARD : SESSION_MSG_PORTS);
+    session_msg_u64(&msg, id);
+    session_msg_str(&msg, link->host);
+    if (opened != NULL) {
+        session_msg_u32(&msg, port);
+        session_msg_u32(&msg, 0);
+    }
+    const bool ok = send_msg(&msg, -1);
+    session_msg_free(&msg);
+    if (!ok)
+        return false;
+
+    tll_push_back(client.port_requests, ((struct port_request){
+        .id = id, .link = link, .opened = opened, .listed = listed, .data = data,
+    }));
+    return true;
+}
+
+bool
+sessions_open_port(struct session_link *link, uint16_t port, sessions_port_cb done, void *data)
+{
+    return port != 0 && port_request(link, port, done, NULL, data);
+}
+
+bool
+sessions_list_ports(struct session_link *link, sessions_ports_cb done, void *data)
+{
+    return port_request(link, 0, NULL, done, data);
+}
+
+void
+sessions_close_port(const char *host, uint16_t port)
+{
+    if (!sessions_ports_supported())
+        return;
+
+    struct session_msg msg = {0};
+    session_msg_begin(&msg, SESSION_MSG_UNFORWARD);
+    session_msg_str(&msg, host);
+    session_msg_u32(&msg, port);
+    send_msg(&msg, -1);
     session_msg_free(&msg);
 }
 

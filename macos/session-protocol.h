@@ -22,6 +22,12 @@
  * `footd --bridge` passes them on to the footd there. That connection
  * is a stream (no file descriptors): what a window's socket would carry
  * goes in messages of its own instead, on a channel per socket.
+ *
+ * Ports of other machines: footd listens on a port here (FORWARD), and
+ * each connection to it is a channel too, which the bridge connects to
+ * the port there (CONNECT), for any protocol over TCP. Unlike a
+ * window's, such a channel's two directions end one by one (SHUT), and
+ * it waits while the stream is busy: what's typed comes first.
  */
 
 #include <stdbool.h>
@@ -56,6 +62,12 @@ enum session_msg_type {
     SESSION_MSG_ASKPASS,     /* u64 token, str prompt, u8 confirm: ssh asks (footd --askpass,
                                 for the ssh with that token); ANSWERED answers */
     SESSION_MSG_ANSWER,      /* u64 id, u8 ok, str answer: to an ASK (ok 0: refused) */
+    SESSION_MSG_FORWARD,     /* u64 request, str host, u32 port, u32 local port (0: the
+                                same, or else a free one): that machine's port is one
+                                of this machine's too; FORWARDED answers */
+    SESSION_MSG_UNFORWARD,   /* str host, u32 port: no longer */
+    SESSION_MSG_PORTS,       /* u64 request, str host: LISTENING answers (to footd
+                                --bridge too, over its stream: without the host) */
 
     /* footd -> window */
     SESSION_MSG_WELCOME = 100,  /* u32 version, i32 pid, u32 features (optional) */
@@ -68,12 +80,20 @@ enum session_msg_type {
     SESSION_MSG_UNINSTALLED,    /* str host, str error (empty: removed) */
     SESSION_MSG_REMOTES,        /* u32 count, {str host, u8 state (session_remote_state),
                                    u32 sessions, str detail} * count: the other
-                                   machines footd has had sessions on */
+                                   machines footd has had sessions on; u32 count,
+                                   {str host, u32 port, u32 local port} * count
+                                   (optional): their ports that are open here */
     SESSION_MSG_ASK,            /* u64 id, str host, str prompt, u8 confirm (else: a secret,
                                    e.g. a password), u8 again (the last answer was
                                    wrong): ssh asks; ANSWER answers */
     SESSION_MSG_ASKED,          /* u64 id: the ASK isn't to be answered any more */
     SESSION_MSG_ANSWERED,       /* u8 ok, str answer: to ASKPASS */
+    SESSION_MSG_FORWARDED,      /* u64 request, u32 local port, str error (empty: it's
+                                   open): to FORWARD */
+    SESSION_MSG_LISTENING,      /* u64 request, str error (empty: none), u32 count,
+                                   {u32 port, str program (empty: unknown), u8 the
+                                   user's own} * count: the TCP ports programs
+                                   listen on there; to PORTS */
 
     /*
      * Over a stream (footd --bridge), both ways: the windows' sockets, as
@@ -84,12 +104,25 @@ enum session_msg_type {
     SESSION_MSG_DATA,           /* u32 channel, blob: written to the socket */
     SESSION_MSG_EOF,            /* u32 channel: the socket is closed */
     SESSION_MSG_FLOW,           /* u32 channel, u8 paused: (not) to be read for now */
+    SESSION_MSG_SHUT,           /* u32 channel: nothing more comes from its socket
+                                   (a TCP connection's: it may still be written to) */
+
+    /*
+     * Another machine's ports (FORWARD): a channel is a TCP connection to
+     * one. footd --bridge connects, and answers CONNECTED or REFUSED.
+     */
+    SESSION_MSG_CONNECT,        /* u32 channel, str host ("localhost", or an address),
+                                   u32 port, u8 probe (it's closed again at once:
+                                   whether something listens there) */
+    SESSION_MSG_CONNECTED,      /* u32 channel */
+    SESSION_MSG_REFUSED,        /* u32 channel, str reason */
 };
 
 /* WELCOME's features */
 #define SESSION_FEATURE_REMOTE (1u << 0)     /* CREATE's host */
 #define SESSION_FEATURE_UNINSTALL (1u << 1)  /* UNINSTALL */
 #define SESSION_FEATURE_WATCH (1u << 2)      /* WATCH */
+#define SESSION_FEATURE_PORTS (1u << 3)      /* FORWARD, UNFORWARD, PORTS */
 
 /* HELLO's client features */
 #define SESSION_CLIENT_ASK (1u << 0)         /* It answers ASK */

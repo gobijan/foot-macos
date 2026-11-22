@@ -120,11 +120,20 @@ bool sessions_uninstall(const char *host,
  * The other machines footd has had sessions on, and how its connections
  * to them are (Shell > Connections)
  */
+struct session_remote_port {
+    uint16_t port;          /* There */
+    uint16_t local_port;    /* Here */
+};
+
 struct session_remote {
     char *host;
     uint8_t state;      /* enum session_remote_state (session-protocol.h) */
     uint32_t sessions;
     char *detail;       /* Why it can't connect, or the machine's system; NULL: none */
+
+    /* Its ports that are open here (sessions_open_port()) */
+    struct session_remote_port *ports;
+    size_t port_count;
 };
 
 /*
@@ -135,6 +144,45 @@ void sessions_watch_remotes(
     struct fdm *fdm,
     void (*changed)(const struct session_remote *remotes, size_t count, void *data),
     void *data);
+
+/*
+ * Another machine's ports, as ports of this Mac (footd-ports.h): a web
+ * server started in a window there is opened in the browser here, its
+ * database is reached by the programs here. footd listens here (for
+ * this Mac only), until nothing needs the connection to the machine
+ * any more. Not with an older footd.
+ */
+bool sessions_ports_supported(void);
+
+/*
+ * 'port' of the machine 'link's session runs on is opened here. 'done'
+ * gets the port it is here (the same, if that was free), or 0 and why
+ * not. 'term': the link's terminal; NULL if it's gone meanwhile (all
+ * that's left to do then is to free 'data'). False: it can't be asked
+ * for (a session here, or an older footd); 'done' isn't called.
+ */
+typedef void (*sessions_port_cb)(struct terminal *term, uint16_t port, const char *error,
+                                 void *data);
+bool sessions_open_port(struct session_link *link, uint16_t port, sessions_port_cb done,
+                        void *data);
+
+/* No longer (it's closed by itself with the connection to the machine) */
+void sessions_close_port(const char *host, uint16_t port);
+
+/* A port a program listens on, there */
+struct session_port {
+    uint16_t port;
+    char *program;      /* NULL: unknown (another user's) */
+    bool own;           /* The user's own program */
+};
+
+/*
+ * The ports programs listen on, on the machine 'link's session runs on
+ * (the user's own first), or why they aren't known. As above.
+ */
+typedef void (*sessions_ports_cb)(struct terminal *term, const struct session_port *ports,
+                                  size_t count, const char *error, void *data);
+bool sessions_list_ports(struct session_link *link, sessions_ports_cb done, void *data);
 
 /*
  * Logging in to other machines: ssh asks (e.g. for a password; footd

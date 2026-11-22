@@ -15,6 +15,7 @@
 #include "char32.h"
 #include "grid.h"
 #include "hints.h"
+#include "ports.h"
 #include "key-binding.h"
 #include "render.h"
 #include "selection.h"
@@ -179,6 +180,9 @@ activate_url(struct seat *seat, struct terminal *term, const struct url *url,
 #if defined(__APPLE__)
         /* A file's line: in the editor (macos/hints.h) */
         if (hints_open_line(term, url->url))
+            break;
+        /* A port of the session's machine: opened here first (macos/ports.h) */
+        if (ports_open_url(term, url->url))
             break;
 #endif
         spawn_url_launcher(seat, term, url_string, serial);
@@ -845,5 +849,15 @@ urls_activate(struct seat *seat, struct terminal *term, const struct url *url,
     term->url.launch = &term->conf->url.launch;
     activate_url(seat, term, url, serial, false);
     term->url.launch = NULL;
+}
+
+bool
+urls_launch(struct terminal *term, const char *url)
+{
+    const struct config_spawn_template *launch = term->url.launch;
+    term->url.launch = &term->conf->url.launch;
+    const bool ok = spawn_url_launcher_with_token(term, url, NULL);
+    term->url.launch = launch;
+    return ok;
 }
 #endif

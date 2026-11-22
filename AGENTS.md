@@ -80,6 +80,15 @@ footd and a script for ssh (`$FOOTD_SSH`). Shell > Connections
 them as they change (WATCH/REMOTES). Passwords: footd runs ssh with
 itself as `SSH_ASKPASS` (`macos/footd-askpass.c`), and asks foot
 (ASK/ANSWER), which asks in a window (`macos/login.m`, the Keychain).
+Ports: a machine's port is opened on the Mac (FORWARD/FORWARDED): footd
+listens on the Mac's loopback addresses, and each connection is a
+channel of its own, which the bridge connects to the port there
+(CONNECT; `macos/footd-ports.c`, which also lists the ports programs
+listen on: PORTS/LISTENING). In foot, that's `macos/ports.m`: Cmd+click
+on a URL of the machine itself (`localhost`) in a window there, and
+Shell > Open Port of. What the bridge can do is `FOOTD_BRIDGE_LEVEL`
+(an older footd there is replaced). `macos/smoke-test.py build/macos
+ports` checks it with windows.
 If footd isn't there, footd
 installs it over SSH (asking in the window first): foot.app has it for
 Linux, linked statically, built by `macos/footd-linux.sh` (Docker; `make

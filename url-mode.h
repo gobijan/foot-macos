@@ -31,4 +31,7 @@ void urls_input(struct seat *seat, struct terminal *term,
 /* Cmd+click (macos/hints.c); 'url' as returned by urls_collect() */
 void urls_activate(struct seat *seat, struct terminal *term, const struct url *url,
                    uint32_t serial);
+
+/* Opens 'url' with [url]'s launch, later (macos/ports.m: once its port is open) */
+bool urls_launch(struct terminal *term, const char *url);
 #endif

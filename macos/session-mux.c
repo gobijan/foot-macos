@@ -32,6 +32,14 @@
 #define STREAM_HIGH_WATER (4 * 1024 * 1024)
 #define STREAM_LOW_WATER (1024 * 1024)
 
+/*
+ * A TCP connection's socket isn't read beyond this already: what the
+ * windows' sockets carry (e.g. a key, and its echo) isn't to wait for
+ * more of e.g. a download than that
+ */
+#define TCP_HIGH_WATER (256 * 1024)
+#define TCP_LOW_WATER (64 * 1024)
+
 struct channel {
     struct session_mux *mux;
     uint32_t id;
@@ -46,6 +54,12 @@ struct channel {
     bool pausing;       /* The other side was told to stop */
     bool ended;         /* EOF from the other side: closed once written */
     bool reading;       /* EPOLLIN */
+
+    /* A TCP connection (session_mux_add_tcp()): each direction ends on its own */
+    bool tcp;
+    bool shut_in;       /* The socket's end was read: the other side was told (SHUT) */
+    bool shut_out;      /* SHUT from the other side: no more is written, once written */
+    bool shut_done;     /* shutdown(SHUT_WR) */
 };
 
 struct session_mux {
@@ -56,6 +70,7 @@ struct session_mux {
 
     tll(struct channel *) channels;
     bool full;          /* The stream: STREAM_HIGH_WATER */
+    bool busy;          /* TCP_HIGH_WATER */
     bool writing;       /* EPOLLOUT on the stream */
     bool dead;          /* Failed: the callback is told (once) */
     bool reported;
@@ -78,7 +93,8 @@ channel_find(struct session_mux *mux, uint32_t id)
 static void
 channel_update_reading(struct channel *ch)
 {
-    const bool read = !ch->paused && !ch->mux->full && !ch->ended;
+    const bool full = ch->tcp ? ch->mux->busy : ch->mux->full;
+    const bool read = !ch->paused && !full && !ch->ended && !ch->shut_in;
     if (read == ch->reading)
         return;
 
@@ -104,8 +120,10 @@ stream_update(struct session_mux *mux)
     }
 
     const bool full = mux->full ? len > STREAM_LOW_WATER : len > STREAM_HIGH_WATER;
-    if (full != mux->full) {
+    const bool busy = mux->busy ? len > TCP_LOW_WATER : len > TCP_HIGH_WATER;
+    if (full != mux->full || busy != mux->busy) {
         mux->full = full;
+        mux->busy = busy;
         tll_foreach(mux->channels, it)
             channel_update_reading(it->item);
     }
@@ -146,10 +164,14 @@ send_flow(struct channel *ch, bool paused)
     ch->pausing = paused;
 }
 
-/* Writes what's there for the socket; the other side may go on, once it's below the mark */
-static void
+/*
+ * Writes what's there for the socket; the other side may go on, once
+ * it's below the mark. False: the socket can't be written to any more.
+ */
+static bool
 channel_flush(struct channel *ch)
 {
+    bool gone = false;
     size_t done = 0;
     while (done < ch->out_len) {
         ssize_t n = write(ch->fd, &ch->out[done], ch->out_len - done);
@@ -157,8 +179,9 @@ channel_flush(struct channel *ch)
             if (errno == EINTR)
                 continue;
             if (errno != EAGAIN) {
-                /* It's gone: its HUP closes the channel */
+                /* It's gone: its HUP closes the channel (a TCP connection's: the caller) */
                 done = ch->out_len;
+                gone = true;
             }
             break;
         }
@@ -177,6 +200,7 @@ channel_flush(struct channel *ch)
         send_flow(ch, false);
     else if (!ch->pausing && ch->out_len > CHANNEL_HIGH_WATER)
         send_flow(ch, true);
+    return !gone;
 }
 
 static void
@@ -208,6 +232,46 @@ channel_close(struct channel *ch)
         mux->cb->channel_closed(mux, id, theirs, mux->data);
 }
 
+/* The same, and the other side is told, unless it was the one to end it */
+static void
+channel_end(struct channel *ch)
+{
+    if (!ch->ended)
+        send_channel_msg(ch->mux, SESSION_MSG_EOF, ch->id);
+    channel_close(ch);
+}
+
+/*
+ * After channel_flush() ('ok': what it returned): a channel that only
+ * had that left to do is done with (true: it's closed), and a TCP
+ * connection that gets no more is told so
+ */
+static bool
+channel_written(struct channel *ch, bool ok)
+{
+    if (ch->tcp && !ok) {
+        channel_end(ch);
+        return true;
+    }
+    if (ch->out_len > 0)
+        return false;
+
+    if (ch->ended) {
+        channel_close(ch);
+        return true;
+    }
+
+    if (ch->shut_out && !ch->shut_done) {
+        shutdown(ch->fd, SHUT_WR);
+        ch->shut_done = true;
+    }
+    if (ch->shut_in && ch->shut_done) {
+        channel_end(ch);
+        return true;
+    }
+    return false;
+}
+
 static void
 channel_free(struct channel *ch, bool close_fd)
 {
@@ -228,6 +292,64 @@ channel_free(struct channel *ch, bool close_fd)
     free(ch);
 }
 
+static void
+send_data(struct channel *ch, const uint8_t *buf, size_t len)
+{
+    struct session_msg msg = {0};
+    session_msg_begin(&msg, SESSION_MSG_DATA);
+    session_msg_u32(&msg, ch->id);
+    session_msg_blob(&msg, buf, len);
+    session_mux_send(ch->mux, &msg);
+    session_msg_free(&msg);
+}
+
+/*
+ * A TCP connection's socket. At its end, only that direction is done
+ * with (SHUT): the other side's answer may still be on its way. It's
+ * closed once both are, or it's broken.
+ */
+static void
+tcp_channel_read(struct channel *ch, int events)
+{
+    struct session_mux *mux = ch->mux;
+    const bool was_shut = ch->shut_in;
+
+    /* Its end (kqueue: HUP), or all of it is: what's left goes all the same (not read meanwhile) */
+    const bool all = events & (EPOLLHUP | EPOLLERR);
+
+    while (!ch->shut_in) {
+        uint8_t buf[CHUNK];
+        const ssize_t n = read(ch->fd, buf, sizeof(buf));
+
+        if (n > 0) {
+            send_data(ch, buf, n);
+            if (mux->cb->input != NULL)
+                mux->cb->input(mux, ch->id, mux->data);
+            if (!all)
+                return;
+            continue;
+        }
+
+        if (n < 0 && errno == EINTR)
+            continue;
+        if (n < 0 && errno == EAGAIN)
+            break;
+        if (n < 0) {
+            channel_end(ch);
+            return;
+        }
+
+        ch->shut_in = true;
+        send_channel_msg(mux, SESSION_MSG_SHUT, ch->id);
+        channel_update_reading(ch);
+    }
+
+    if (ch->shut_in && ch->shut_done)
+        channel_end(ch);
+    else if (all && ((events & EPOLLERR) || was_shut || !ch->shut_in))
+        channel_end(ch);
+}
+
 static bool
 fdm_channel(struct fdm *fdm, int fd, int events, void *data)
 {
@@ -235,11 +357,14 @@ fdm_channel(struct fdm *fdm, int fd, int events, void *data)
     struct session_mux *mux = ch->mux;
 
     if (events & EPOLLOUT) {
-        channel_flush(ch);
-        if (ch->ended && ch->out_len == 0) {
-            channel_close(ch);
+        if (channel_written(ch, channel_flush(ch)))
             return true;
-        }
+    }
+
+    if (ch->tcp) {
+        if (events & (EPOLLIN | EPOLLHUP | EPOLLERR))
+            tcp_channel_read(ch, events);
+        return true;
     }
 
     if ((events & EPOLLIN) && !(events & (EPOLLHUP | EPOLLERR))) {
@@ -250,12 +375,7 @@ fdm_channel(struct fdm *fdm, int fd, int events, void *data)
         } while (n < 0 && errno == EINTR);
 
         if (n > 0) {
-            struct session_msg msg = {0};
-            session_msg_begin(&msg, SESSION_MSG_DATA);
-            session_msg_u32(&msg, ch->id);
-            session_msg_blob(&msg, buf, n);
-            session_mux_send(mux, &msg);
-            session_msg_free(&msg);
+            send_data(ch, buf, n);
             if (mux->cb->input != NULL)
                 mux->cb->input(mux, ch->id, mux->data);
             return true;
@@ -273,14 +393,8 @@ fdm_channel(struct fdm *fdm, int fd, int events, void *data)
         uint8_t buf[CHUNK];
         ssize_t n;
         while ((n = read(fd, buf, sizeof(buf))) > 0 || (n < 0 && errno == EINTR)) {
-            if (n <= 0)
-                continue;
-            struct session_msg msg = {0};
-            session_msg_begin(&msg, SESSION_MSG_DATA);
-            session_msg_u32(&msg, ch->id);
-            session_msg_blob(&msg, buf, n);
-            session_mux_send(mux, &msg);
-            session_msg_free(&msg);
+            if (n > 0)
+                send_data(ch, buf, n);
         }
         send_channel_msg(mux, SESSION_MSG_EOF, ch->id);
         channel_close(ch);
@@ -289,8 +403,8 @@ fdm_channel(struct fdm *fdm, int fd, int events, void *data)
     return true;
 }
 
-bool
-session_mux_add(struct session_mux *mux, uint32_t channel, int fd)
+static bool
+channel_add(struct session_mux *mux, uint32_t channel, int fd, bool tcp)
 {
     xassert(channel_find(mux, channel) == NULL);
 
@@ -302,7 +416,7 @@ session_mux_add(struct session_mux *mux, uint32_t channel, int fd)
     }
 
     struct channel *ch = xmalloc(sizeof(*ch));
-    *ch = (struct channel){.mux = mux, .id = channel, .fd = fd};
+    *ch = (struct channel){.mux = mux, .id = channel, .fd = fd, .tcp = tcp};
 
     if (!fdm_add(mux->fdm, fd, 0, &fdm_channel, ch)) {
         close(fd);
@@ -313,6 +427,18 @@ session_mux_add(struct session_mux *mux, uint32_t channel, int fd)
     tll_push_back(mux->channels, ch);
     channel_update_reading(ch);
     return true;
+}
+
+bool
+session_mux_add(struct session_mux *mux, uint32_t channel, int fd)
+{
+    return channel_add(mux, channel, fd, false);
+}
+
+bool
+session_mux_add_tcp(struct session_mux *mux, uint32_t channel, int fd)
+{
+    return channel_add(mux, channel, fd, true);
 }
 
 bool
@@ -365,7 +491,7 @@ channel_message(struct session_mux *mux, uint32_t type, struct session_reader *r
             return true;
 
         channel_append(ch, data, len);
-        channel_flush(ch);
+        channel_written(ch, channel_flush(ch));
         return true;
     }
 
@@ -381,6 +507,23 @@ channel_message(struct session_mux *mux, uint32_t type, struct session_reader *r
         channel_update_reading(ch);
         if (ch->out_len == 0)
             channel_close(ch);
+        return true;
+    }
+
+    case SESSION_MSG_SHUT: {
+        if (!r->ok)
+            return false;
+        struct channel *ch = channel_find(mux, id);
+        if (ch == NULL || ch->ended)
+            return true;
+
+        /* (Not a TCP connection: there are no halves) */
+        if (!ch->tcp) {
+            ch->ended = true;
+            channel_update_reading(ch);
+        } else
+            ch->shut_out = true;
+        channel_written(ch, true);
         return true;
     }
 
@@ -441,7 +584,7 @@ fdm_stream(struct fdm *fdm, int fd, int events, void *data)
         struct session_reader r;
         bool error;
         while (!mux->dead && session_conn_next(&mux->conn, &type, &r, &error)) {
-            bool handled = type >= SESSION_MSG_CHANNEL && type <= SESSION_MSG_FLOW
+            bool handled = type >= SESSION_MSG_CHANNEL && type <= SESSION_MSG_SHUT
                 ? channel_message(mux, type, &r)
                 : mux->cb->message(mux, type, &r, mux->data);
             if (!handled) {

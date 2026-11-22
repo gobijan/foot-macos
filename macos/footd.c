@@ -70,6 +70,7 @@
 #include "rlimits.h"
 #include "reaper.h"
 #include "footd-bridge.h"
+#include "footd-ports.h"
 #include "session-mux.h"
 #include "session-protocol.h"
 #include "snapshot.h"
@@ -260,6 +261,40 @@ struct remote_session {
     uint64_t last_token;
 };
 
+/* A connection to a port of ours, until footd --bridge is connected to the one there */
+struct forward_connection {
+    uint32_t channel;
+    int fd;
+};
+
+/* Another machine's port, as one of this machine's (see "Ports" below) */
+struct forward {
+    struct remote *remote;
+    uint16_t port;              /* There */
+    uint16_t local_port;        /* Here */
+    int fds[2];                 /* Listening: on 127.0.0.1, and ::1 (-1: not) */
+    tll(struct forward_connection) connecting;
+    tll(uint32_t) channels;     /* Its connections */
+};
+
+/* A FORWARD, until it's known whether something listens there (a probe: 'channel') */
+struct forward_request {
+    struct client *client;
+    uint64_t id;
+    struct remote *remote;
+    uint32_t channel;
+    uint16_t port;
+    uint16_t local_port;        /* 0: the same, or a free one */
+};
+
+/* A PORTS, until footd --bridge has answered ('sent': our ID for it) */
+struct ports_request {
+    struct client *client;
+    uint64_t id;
+    struct remote *remote;
+    uint64_t sent;
+};
+
 static struct {
     struct fdm *fdm;
     struct reaper *reaper;
@@ -283,6 +318,11 @@ static struct {
     struct session_msg remotes_told;  /* The last REMOTES (to those who WATCH) */
     tll(struct ask *) asks;
     uint64_t next_id;       /* The asks' */
+
+    /* Their ports */
+    tll(struct forward *) forwards;
+    tll(struct forward_request) forward_requests;
+    tll(struct ports_request) ports_requests;
 
     /* The windows' layout, from the last window to tell */
     void *layout;
@@ -1256,6 +1296,7 @@ remote_session_close_window(struct remote_session *rs)
 static void remotes_changed(void);
 
 static void remote_maybe_idle(struct remote *r);
+static void remote_forwards_close(struct remote *r);
 
 static void
 remote_session_free(struct remote_session *rs)
@@ -1294,6 +1335,13 @@ remote_unused(const struct remote *r)
         if (rs->remote == r && (rs->channel != 0 || rs->fd >= 0))
             return false;
     }
+
+    /* Nor is anything connected to its ports */
+    tll_foreach(footd.forwards, it) {
+        const struct forward *f = it->item;
+        if (f->remote == r && (tll_length(f->channels) > 0 || tll_length(f->connecting) > 0))
+            return false;
+    }
     return true;
 }
 
@@ -1307,6 +1355,7 @@ fdm_remote_idle(struct fdm *fdm, int fd, int events, void *data)
 
     LOG_INFO("%s: no window needs it: disconnecting", r->host);
     timer_set(r->timer, 0);
+    remote_forwards_close(r);
     session_mux_destroy(r->mux);
     r->mux = NULL;
     if (r->ssh > 0)
@@ -1321,6 +1370,12 @@ fdm_remote_idle(struct fdm *fdm, int fd, int events, void *data)
 static void
 remote_maybe_idle(struct remote *r)
 {
+    /* Not connected, and no window waits for it: its ports are closed with it */
+    if (r->mux == NULL && !remote_awaited(r)) {
+        remote_forwards_close(r);
+        return;
+    }
+
     if (r->mux == NULL || !remote_unused(r))
         return;
     if (r->idle_timer < 0 && (r->idle_timer = timer_new(&fdm_remote_idle, r)) < 0)
@@ -1391,6 +1446,13 @@ remotes_changed(void)
                                 state == SESSION_REMOTE_FAILED ? r->error : NULL);
     }
 
+    session_msg_u32(&msg, tll_length(footd.forwards));
+    tll_foreach(footd.forwards, it) {
+        session_msg_str(&msg, it->item->remote->host);
+        session_msg_u32(&msg, it->item->port);
+        session_msg_u32(&msg, it->item->local_port);
+    }
+
     /* (The header's payload size is set when it's sent) */
     const struct session_msg *told = &footd.remotes_told;
     if (told->len == msg.len && memcmp(told->data + 8, msg.data + 8, msg.len - 8) == 0) {
@@ -1410,6 +1472,423 @@ static bool
 remote_send(struct remote *r, struct session_msg *msg)
 {
     return r->mux != NULL && session_mux_send(r->mux, msg);
+}
+
+static uint32_t
+remote_next_channel(struct remote *r)
+{
+    if (++r->next_channel == 0)
+        r->next_channel = 1;
+    return r->next_channel;
+}
+
+/*
+ * Ports: another machine's, as ports of this one (FORWARD;
+ * footd-ports.h). We listen here, on the same port if it's free, for
+ * this machine only. Each connection is a channel to footd --bridge
+ * there, which connects to the port (CONNECT). A port is opened once
+ * something listens on it there (a probe says); otherwise, the window
+ * is told. It's closed with the connection to its machine: when no
+ * window needs that any more, and nothing is connected to its ports.
+ * While the connection is lost, its ports stay (they refuse).
+ */
+
+static struct remote *
+remote_find(const char *host)
+{
+    tll_foreach(footd.remotes, it) {
+        if (strcmp(it->item->host, host) == 0)
+            return it->item;
+    }
+    return NULL;
+}
+
+static struct forward *
+forward_find(const struct remote *r, uint16_t port)
+{
+    tll_foreach(footd.forwards, it) {
+        if (it->item->remote == r && it->item->port == port)
+            return it->item;
+    }
+    return NULL;
+}
+
+static void
+send_connect(struct remote *r, uint32_t channel, uint16_t port, bool probe)
+{
+    struct session_msg msg = {0};
+    session_msg_begin(&msg, SESSION_MSG_CONNECT);
+    session_msg_u32(&msg, channel);
+    session_msg_str(&msg, "localhost");
+    session_msg_u32(&msg, port);
+    session_msg_u8(&msg, probe);
+    remote_send(r, &msg);
+    session_msg_free(&msg);
+}
+
+/* A channel we have no socket for (any more): the one there is closed */
+static void
+send_channel_eof(struct remote *r, uint32_t channel)
+{
+    struct session_msg msg = {0};
+    session_msg_begin(&msg, SESSION_MSG_EOF);
+    session_msg_u32(&msg, channel);
+    remote_send(r, &msg);
+    session_msg_free(&msg);
+}
+
+static void
+send_forwarded(struct client *c, uint64_t request, uint16_t local_port, const char *error)
+{
+    struct session_msg msg = {0};
+    session_msg_begin(&msg, SESSION_MSG_FORWARDED);
+    session_msg_u64(&msg, request);
+    session_msg_u32(&msg, local_port);
+    session_msg_str(&msg, error);
+    client_send(c, &msg, -1);
+    session_msg_free(&msg);
+}
+
+static void
+send_listening_error(struct client *c, uint64_t request, const char *error)
+{
+    struct session_msg msg = {0};
+    session_msg_begin(&msg, SESSION_MSG_LISTENING);
+    session_msg_u64(&msg, request);
+    session_msg_str(&msg, error);
+    session_msg_u32(&msg, 0);
+    client_send(c, &msg, -1);
+    session_msg_free(&msg);
+}
+
+static void forward_close(struct forward *f);
+
+/* A program here connects to the port */
+static bool
+fdm_forward(struct fdm *fdm, int fd, int events, void *data)
+{
+    struct forward *f = data;
+    struct remote *r = f->remote;
+
+    int conn;
+    while ((conn = ports_accept(fd)) >= 0) {
+        /* Not connected (again, yet): there's nobody to pass it on to */
+        if (r->mux == NULL || !r->connected) {
+            close(conn);
+            continue;
+        }
+
+        const uint32_t channel = remote_next_channel(r);
+        send_connect(r, channel, f->port, false);
+        tll_push_back(f->connecting,
+                      ((struct forward_connection){.channel = channel, .fd = conn}));
+    }
+
+    /*
+     * No file descriptor for it (or the like): the connection stays in
+     * the port's queue, which would wake footd up for ever. The port
+     * is closed (it can be opened again)
+     */
+    if (errno == EMFILE || errno == ENFILE || errno == ENOBUFS || errno == ENOMEM) {
+        LOG_ERRNO("%s: its port %u can't take a connection here", r->host, f->port);
+        forward_close(f);
+        remote_maybe_idle(r);
+        remotes_changed();
+    }
+    return true;
+}
+
+/* NULL: no port could be opened here */
+static struct forward *
+forward_open(struct remote *r, uint16_t port, uint16_t local_port)
+{
+    int fds[2];
+    uint16_t bound = ports_listen(local_port != 0 ? local_port : port, fds);
+    if (bound == 0)
+        bound = ports_listen(0, fds);
+    if (bound == 0)
+        return NULL;
+
+    struct forward *f = xmalloc(sizeof(*f));
+    *f = (struct forward){
+        .remote = r, .port = port, .local_port = bound, .fds = {fds[0], fds[1]},
+    };
+
+    for (size_t i = 0; i < 2; i++) {
+        if (f->fds[i] >= 0 && !fdm_add(footd.fdm, f->fds[i], EPOLLIN, &fdm_forward, f)) {
+            close(f->fds[i]);
+            f->fds[i] = -1;
+        }
+    }
+    if (f->fds[0] < 0) {
+        if (f->fds[1] >= 0)
+            fdm_del(footd.fdm, f->fds[1]);
+        free(f);
+        return NULL;
+    }
+
+    LOG_INFO("%s: its port %u is port %u here", r->host, port, bound);
+    tll_push_back(footd.forwards, f);
+    return f;
+}
+
+static void
+forward_close(struct forward *f)
+{
+    struct remote *r = f->remote;
+    LOG_INFO("%s: its port %u is closed here", r->host, f->port);
+
+    for (size_t i = 0; i < 2; i++) {
+        if (f->fds[i] >= 0)
+            fdm_del(footd.fdm, f->fds[i]);
+    }
+
+    tll_foreach(f->connecting, it) {
+        close(it->item.fd);
+        tll_remove(f->connecting, it);
+    }
+    tll_foreach(f->channels, it) {
+        const int fd = r->mux != NULL ? session_mux_take(r->mux, it->item) : -1;
+        if (fd >= 0)
+            close(fd);
+        tll_remove(f->channels, it);
+    }
+
+    tll_foreach(footd.forwards, it) {
+        if (it->item == f) {
+            tll_remove(footd.forwards, it);
+            break;
+        }
+    }
+    free(f);
+}
+
+/* What windows asked about its ports isn't answered from there any more: they're told */
+static void
+remote_requests_fail(struct remote *r, const char *why)
+{
+    tll_foreach(footd.forward_requests, it) {
+        if (it->item.remote != r)
+            continue;
+        send_forwarded(it->item.client, it->item.id, 0, why);
+        tll_remove(footd.forward_requests, it);
+    }
+    tll_foreach(footd.ports_requests, it) {
+        if (it->item.remote != r)
+            continue;
+        send_listening_error(it->item.client, it->item.id, why);
+        tll_remove(footd.ports_requests, it);
+    }
+}
+
+/* Its ports are closed here */
+static void
+remote_forwards_close(struct remote *r)
+{
+    remote_requests_fail(r, "the machine isn't connected");
+
+    bool closed = false;
+    tll_foreach(footd.forwards, it) {
+        if (it->item->remote == r) {
+            forward_close(it->item);
+            closed = true;
+        }
+    }
+    if (closed)
+        remotes_changed();
+}
+
+/* The connection is lost: its ports' connections are (their sockets are the connection's: closed with it) */
+static void
+remote_forwards_lost(struct remote *r)
+{
+    remote_requests_fail(r, "the connection to the machine was lost");
+
+    tll_foreach(footd.forwards, it) {
+        struct forward *f = it->item;
+        if (f->remote != r)
+            continue;
+
+        tll_foreach(f->connecting, conn) {
+            close(conn->item.fd);
+            tll_remove(f->connecting, conn);
+        }
+        tll_free(f->channels);
+    }
+}
+
+/* One of its ports' connections is closed */
+static void
+forward_channel_closed(struct remote *r, uint32_t channel)
+{
+    tll_foreach(footd.forwards, it) {
+        struct forward *f = it->item;
+        if (f->remote != r)
+            continue;
+
+        tll_foreach(f->channels, ch) {
+            if (ch->item == channel) {
+                tll_remove(f->channels, ch);
+                remote_maybe_idle(r);
+                return;
+            }
+        }
+    }
+}
+
+/* footd --bridge's answers: CONNECTED, REFUSED, LISTENING. False: malformed */
+static bool
+remote_ports_message(struct remote *remote, uint32_t type, struct session_reader *r)
+{
+    if (type == SESSION_MSG_LISTENING) {
+        const uint64_t sent = session_read_u64(r);
+        if (!r->ok)
+            return false;
+
+        tll_foreach(footd.ports_requests, it) {
+            if (it->item.remote != remote || it->item.sent != sent)
+                continue;
+
+            /* As it is, for the window's request */
+            struct session_msg msg = {0};
+            session_msg_begin(&msg, SESSION_MSG_LISTENING);
+            session_msg_u64(&msg, it->item.id);
+            session_msg_raw(&msg, r->p, r->end - r->p);
+            client_send(it->item.client, &msg, -1);
+            session_msg_free(&msg);
+
+            tll_remove(footd.ports_requests, it);
+            break;
+        }
+        return true;
+    }
+
+    const bool connected = type == SESSION_MSG_CONNECTED;
+    const uint32_t channel = session_read_u32(r);
+    char *reason = connected ? NULL : session_read_str(r);
+    if (!r->ok) {
+        free(reason);
+        return false;
+    }
+
+    /* A probe: something listens there, so the port is opened here */
+    tll_foreach(footd.forward_requests, it) {
+        if (it->item.remote != remote || it->item.channel != channel)
+            continue;
+
+        const struct forward_request request = it->item;
+        tll_remove(footd.forward_requests, it);
+
+        if (!connected) {
+            send_forwarded(request.client, request.id, 0,
+                           reason != NULL && reason[0] != '\0' ? reason : "it can't be reached");
+        } else {
+            struct forward *f = forward_find(remote, request.port);
+            if (f == NULL)
+                f = forward_open(remote, request.port, request.local_port);
+
+            if (f != NULL)
+                send_forwarded(request.client, request.id, f->local_port, NULL);
+            else {
+                send_forwarded(request.client, request.id, 0,
+                               "no port of this machine could be opened for it");
+            }
+            remotes_changed();
+        }
+
+        free(reason);
+        return true;
+    }
+
+    /* A connection to a port here: its socket is the channel's now */
+    tll_foreach(footd.forwards, it) {
+        struct forward *f = it->item;
+        if (f->remote != remote)
+            continue;
+
+        tll_foreach(f->connecting, conn) {
+            if (conn->item.channel != channel)
+                continue;
+
+            const int fd = conn->item.fd;
+            tll_remove(f->connecting, conn);
+            free(reason);
+
+            if (!connected) {
+                close(fd);
+                remote_maybe_idle(remote);
+            } else if (session_mux_add_tcp(remote->mux, channel, fd))
+                tll_push_back(f->channels, channel);
+            else
+                send_channel_eof(remote, channel);
+            return true;
+        }
+    }
+
+    /* Closed here meanwhile: the connection there is, too */
+    if (connected)
+        send_channel_eof(remote, channel);
+    free(reason);
+    return true;
+}
+
+static void
+handle_forward(struct client *c, uint64_t request, const char *host, uint16_t port,
+               uint16_t local_port)
+{
+    struct remote *remote = remote_find(host);
+    if (remote == NULL || remote->mux == NULL || !remote->connected) {
+        send_forwarded(c, request, 0, "the machine isn't connected");
+        return;
+    }
+
+    /* Open already (on whichever port here) */
+    const struct forward *f = forward_find(remote, port);
+    if (f != NULL) {
+        send_forwarded(c, request, f->local_port, NULL);
+        return;
+    }
+
+    const uint32_t channel = remote_next_channel(remote);
+    send_connect(remote, channel, port, true);
+    tll_push_back(footd.forward_requests, ((struct forward_request){
+        .client = c, .id = request, .remote = remote, .channel = channel,
+        .port = port, .local_port = local_port,
+    }));
+}
+
+static void
+handle_unforward(const char *host, uint16_t port)
+{
+    struct remote *remote = remote_find(host);
+    struct forward *f = remote != NULL ? forward_find(remote, port) : NULL;
+    if (f == NULL)
+        return;
+
+    forward_close(f);
+    remote_maybe_idle(remote);
+    remotes_changed();
+}
+
+static void
+handle_ports(struct client *c, uint64_t request, const char *host)
+{
+    struct remote *remote = remote_find(host);
+    if (remote == NULL || remote->mux == NULL || !remote->connected) {
+        send_listening_error(c, request, "the machine isn't connected");
+        return;
+    }
+
+    const uint64_t sent = ++footd.next_id;
+    struct session_msg msg = {0};
+    session_msg_begin(&msg, SESSION_MSG_PORTS);
+    session_msg_u64(&msg, sent);
+    remote_send(remote, &msg);
+    session_msg_free(&msg);
+
+    tll_push_back(footd.ports_requests, ((struct ports_request){
+        .client = c, .id = request, .remote = remote, .sent = sent,
+    }));
 }
 
 static bool fdm_disconnected_window(struct fdm *fdm, int fd, int events, void *data);
@@ -1438,10 +1917,7 @@ static void
 remote_send_with_window(struct remote_session *rs, struct session_msg *msg, int fd)
 {
     struct remote *r = rs->remote;
-
-    if (++r->next_channel == 0)
-        r->next_channel = 1;
-    const uint32_t channel = r->next_channel;
+    const uint32_t channel = remote_next_channel(r);
 
     if (r->mux == NULL || !session_mux_announce(r->mux, channel) || !remote_send(r, msg)) {
         /* Lost meanwhile: attached again, once connected */
@@ -1583,6 +2059,12 @@ remote_message(struct session_mux *mux, uint32_t type, struct session_reader *r,
         return true;
     }
 
+    if (type == SESSION_MSG_CONNECTED || type == SESSION_MSG_REFUSED ||
+        type == SESSION_MSG_LISTENING)
+    {
+        return remote_ports_message(remote, type, r);
+    }
+
     if (type != SESSION_MSG_STARTED && type != SESSION_MSG_FAILED &&
         type != SESSION_MSG_DETACHED)
     {
@@ -1651,8 +2133,10 @@ static void
 remote_channel_closed(struct session_mux *mux, uint32_t channel, bool theirs, void *data)
 {
     struct remote_session *rs = remote_session_on(data, channel);
-    if (rs == NULL)
+    if (rs == NULL) {
+        forward_channel_closed(data, channel);
         return;
+    }
 
     rs->channel = 0;
     rs->client = NULL;
@@ -1790,6 +2274,7 @@ remote_disconnected(struct remote *r)
             remote_session_free(rs);
     }
 
+    remote_forwards_lost(r);
     session_mux_destroy(r->mux);
     r->mux = NULL;
 
@@ -1801,6 +2286,10 @@ remote_disconnected(struct remote *r)
         remote_install_needed(r);
     else
         remote_retry(r);
+
+    /* Its ports are for when it's connected again: for the windows that wait for it */
+    if (!remote_awaited(r))
+        remote_forwards_close(r);
     remotes_changed();
 }
 
@@ -2676,6 +3165,7 @@ remote_get(const char *host)
 static pid_t
 remote_free(struct remote *r)
 {
+    remote_forwards_close(r);
     session_mux_destroy(r->mux);
     const pid_t ssh = r->ssh;
     if (ssh > 0)
@@ -2999,7 +3489,7 @@ handle_message(struct client *c, uint32_t type, struct session_reader *r)
         session_msg_u32(&msg, SESSION_PROTOCOL_VERSION);
         session_msg_i32(&msg, getpid());
         session_msg_u32(&msg, SESSION_FEATURE_REMOTE | SESSION_FEATURE_UNINSTALL |
-                              SESSION_FEATURE_WATCH);
+                              SESSION_FEATURE_WATCH | SESSION_FEATURE_PORTS);
         client_send(c, &msg, -1);
         session_msg_free(&msg);
         return true;
@@ -3135,6 +3625,39 @@ handle_message(struct client *c, uint32_t type, struct session_reader *r)
         return r->ok;
     }
 
+    case SESSION_MSG_FORWARD: {
+        const uint64_t request = session_read_u64(r);
+        char *host = session_read_str(r);
+        const uint32_t port = session_read_u32(r);
+        const uint32_t local_port = session_read_u32(r);
+        const bool ok = r->ok && host != NULL && port > 0 && port <= UINT16_MAX &&
+                        local_port <= UINT16_MAX;
+        if (ok)
+            handle_forward(c, request, host, port, local_port);
+        free(host);
+        return ok;
+    }
+
+    case SESSION_MSG_UNFORWARD: {
+        char *host = session_read_str(r);
+        const uint32_t port = session_read_u32(r);
+        const bool ok = r->ok && host != NULL && port <= UINT16_MAX;
+        if (ok)
+            handle_unforward(host, port);
+        free(host);
+        return ok;
+    }
+
+    case SESSION_MSG_PORTS: {
+        const uint64_t request = session_read_u64(r);
+        char *host = session_read_str(r);
+        const bool ok = r->ok && host != NULL;
+        if (ok)
+            handle_ports(c, request, host);
+        free(host);
+        return ok;
+    }
+
     case SESSION_MSG_WATCH: {
         const bool on = session_read_u8(r);
         if (!r->ok)
@@ -3220,6 +3743,16 @@ client_free(struct client *c)
             it->item->uninstalling = NULL;
     }
     asks_withdraw(NULL, c);
+
+    /* What it asked about ports isn't answered (a probe's answer is ignored, then) */
+    tll_foreach(footd.forward_requests, it) {
+        if (it->item.client == c)
+            tll_remove(footd.forward_requests, it);
+    }
+    tll_foreach(footd.ports_requests, it) {
+        if (it->item.client == c)
+            tll_remove(footd.ports_requests, it);
+    }
 
     tll_foreach(footd.clients, it) {
         if (it->item == c) {

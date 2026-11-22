@@ -34,6 +34,7 @@
 #define LOG_ENABLE_DBG 0
 #include "log.h"
 #include "fdm.h"
+#include "footd-ports.h"
 #include "session-mux.h"
 #include "session-protocol.h"
 #include "xmalloc.h"
@@ -47,6 +48,12 @@ struct pending {
     int fd;
 };
 
+/* A port here the other footd wants to reach (CONNECT), until it's connected */
+struct connect {
+    uint32_t channel;
+    bool probe;
+};
+
 static struct {
     struct fdm *fdm;
     struct session_mux *mux;     /* To the other footd (stdin, stdout) */
@@ -55,6 +62,7 @@ static struct {
 
     int announced;               /* The announced channel's socket (footd's end) */
     tll(struct pending) pending;
+    tll(struct connect *) connects;
 
     bool done;
 } bridge = {.announced = -1};
@@ -237,10 +245,99 @@ to_footd(struct session_msg *msg, int fd)
     return true;
 }
 
+/*
+ * This machine's ports, for the other one (footd-ports.h): they're
+ * ours to answer, footd has no part in it
+ */
+
+static void
+connected(int fd, const char *error, void *data)
+{
+    struct connect *c = data;
+    tll_foreach(bridge.connects, it) {
+        if (it->item == c) {
+            tll_remove(bridge.connects, it);
+            break;
+        }
+    }
+
+    struct session_msg msg = {0};
+    session_msg_begin(&msg, fd >= 0 ? SESSION_MSG_CONNECTED : SESSION_MSG_REFUSED);
+    session_msg_u32(&msg, c->channel);
+    if (fd < 0)
+        session_msg_str(&msg, error);
+    session_mux_send(bridge.mux, &msg);
+    session_msg_free(&msg);
+
+    if (fd >= 0 && c->probe)
+        close(fd);
+    else if (fd >= 0 && !session_mux_add_tcp(bridge.mux, c->channel, fd)) {
+        /* (The other side has its socket on the channel by now) */
+        session_msg_begin(&msg, SESSION_MSG_EOF);
+        session_msg_u32(&msg, c->channel);
+        session_mux_send(bridge.mux, &msg);
+        session_msg_free(&msg);
+    }
+    free(c);
+}
+
+static bool
+handle_connect(struct session_reader *r)
+{
+    const uint32_t channel = session_read_u32(r);
+    char *host = session_read_str(r);
+    const uint32_t port = session_read_u32(r);
+    const bool probe = session_read_u8(r);
+
+    if (!r->ok || port == 0 || port > UINT16_MAX) {
+        free(host);
+        return false;
+    }
+
+    struct connect *c = xmalloc(sizeof(*c));
+    *c = (struct connect){.channel = channel, .probe = probe};
+    tll_push_back(bridge.connects, c);
+    ports_connect(bridge.fdm, host, port, &connected, c);
+    free(host);
+    return true;
+}
+
+static bool
+handle_ports(struct session_reader *r)
+{
+    const uint64_t request = session_read_u64(r);
+    if (!r->ok)
+        return false;
+
+    size_t count;
+    struct listening_port *ports = ports_listening(&count);
+
+    struct session_msg msg = {0};
+    session_msg_begin(&msg, SESSION_MSG_LISTENING);
+    session_msg_u64(&msg, request);
+    session_msg_str(&msg, NULL);
+    session_msg_u32(&msg, count);
+    for (size_t i = 0; i < count; i++) {
+        session_msg_u32(&msg, ports[i].port);
+        session_msg_str(&msg, ports[i].program);
+        session_msg_u8(&msg, ports[i].own);
+    }
+    const bool ok = session_mux_send(bridge.mux, &msg);
+    session_msg_free(&msg);
+
+    ports_listening_free(ports, count);
+    return ok;
+}
+
 /* From the other footd: on to ours */
 static bool
 mux_message(struct session_mux *mux, uint32_t type, struct session_reader *r, void *data)
 {
+    if (type == SESSION_MSG_CONNECT)
+        return handle_connect(r);
+    if (type == SESSION_MSG_PORTS)
+        return handle_ports(r);
+
     struct session_msg msg = {0};
     session_msg_begin(&msg, type);
 
@@ -436,6 +533,8 @@ footd_bridge(const char *socket_path)
     ret = EXIT_SUCCESS;
 
 out:
+    ports_connect_cancel(NULL);
+    tll_free_and_free(bridge.connects, free);
     session_mux_destroy(bridge.mux);
     tll_foreach(bridge.pending, it) {
         close(it->item.fd);

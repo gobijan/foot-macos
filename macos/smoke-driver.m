@@ -18,14 +18,96 @@
  * Command Palette), types TEXT there, and presses Return. "optionClick
  * PERCENT" clicks in the first pane's first row, that far from the left,
  * with Option; "commandClick PERCENT" with Command.
+ *
+ * Menus that pop up (e.g. Shell > Open Port of's) would wait for the
+ * mouse: they aren't shown here. Their items' titles are written to
+ * $FOOT_SMOKE_DIR/menu instead (JSON), and "menu TITLE" chooses one of
+ * the last one's. "sheet" writes the window's sheet to
+ * $FOOT_SMOKE_DIR/sheet: its "texts" and its "buttons" titles (none:
+ * an empty object); "sheetText TEXT" fills in its text field, and
+ * "sheetButton TITLE" presses a button.
  */
 
 #import <AppKit/AppKit.h>
 
+#include <objc/runtime.h>
 #include <stdio.h>
 #include <stdlib.h>
 
 static NSString *action_path;
+
+/* The menu that would have popped up last */
+static NSMenu *shown_menu;
+
+/* (At once: the test may read the file at any time) */
+static void
+write_json(NSString *name, id object)
+{
+    NSData *json = [NSJSONSerialization dataWithJSONObject:object options:0 error:nil];
+    NSString *dir = action_path.stringByDeletingLastPathComponent;
+    NSString *tmp = [dir stringByAppendingPathComponent:[name stringByAppendingString:@".tmp"]];
+    [json writeToFile:tmp atomically:NO];
+    rename(tmp.fileSystemRepresentation,
+           [dir stringByAppendingPathComponent:name].fileSystemRepresentation);
+}
+
+/* What a sheet has: its labels' texts, its buttons, and its text field (to type in) */
+static void
+sheet_parts(NSView *view, NSMutableArray<NSString *> *texts, NSMutableArray<NSButton *> *buttons,
+            NSTextField **field)
+{
+    if ([view isKindOfClass:[NSButton class]]) {
+        [buttons addObject:(NSButton *)view];
+        return;
+    }
+    if ([view isKindOfClass:[NSTextField class]]) {
+        NSTextField *text = (NSTextField *)view;
+        if (text.editable)
+            *field = text;
+        else if (text.stringValue.length > 0)
+            [texts addObject:text.stringValue];
+        return;
+    }
+
+    for (NSView *subview in view.subviews)
+        sheet_parts(subview, texts, buttons, field);
+}
+
+static void
+sheet(NSWindow *window, NSString *action)
+{
+    NSMutableArray<NSString *> *texts = [NSMutableArray array];
+    NSMutableArray<NSButton *> *buttons = [NSMutableArray array];
+    NSTextField *field = nil;
+
+    NSWindow *sheet = window.attachedSheet;
+    if (sheet != nil)
+        sheet_parts(sheet.contentView, texts, buttons, &field);
+
+    if ([action isEqualToString:@"sheet"]) {
+        NSMutableArray<NSString *> *titles = [NSMutableArray array];
+        for (NSButton *button in buttons)
+            [titles addObject:button.title];
+        write_json(@"sheet", sheet != nil ? @{@"texts": texts, @"buttons": titles} : @{});
+        return;
+    }
+
+    if ([action hasPrefix:@"sheetText "] && field != nil) {
+        field.stringValue = [action substringFromIndex:10];
+        return;
+    }
+
+    if ([action hasPrefix:@"sheetButton "]) {
+        for (NSButton *button in buttons) {
+            if ([button.title isEqualToString:[action substringFromIndex:12]]) {
+                [button performClick:nil];
+                return;
+            }
+        }
+    }
+
+    fprintf(stderr, "smoke-driver: %s: not with this sheet\n", action.UTF8String);
+}
 
 static NSEvent *
 mouse_event_with(NSView *view, NSEventType type, NSPoint p, NSEventModifierFlags flags)
@@ -176,11 +258,23 @@ poll_action(void)
             }];
         }
 
-        NSData *json = [NSJSONSerialization dataWithJSONObject:windows options:0 error:nil];
-        NSString *dir = action_path.stringByDeletingLastPathComponent;
-        [json writeToFile:[dir stringByAppendingPathComponent:@"windows.tmp"] atomically:NO];
-        rename([dir stringByAppendingPathComponent:@"windows.tmp"].fileSystemRepresentation,
-               [dir stringByAppendingPathComponent:@"windows"].fileSystemRepresentation);
+        write_json(@"windows", windows);
+        return;
+    }
+
+    if ([action hasPrefix:@"sheet"]) {
+        sheet(splits.window, action);
+        return;
+    }
+
+    if ([action hasPrefix:@"menu "]) {
+        for (NSMenuItem *item in shown_menu.itemArray) {
+            if ([item.title isEqualToString:[action substringFromIndex:5]]) {
+                [NSApp sendAction:item.action to:item.target from:item];
+                return;
+            }
+        }
+        fprintf(stderr, "smoke-driver: %s: no such item\n", action.UTF8String);
         return;
     }
 
@@ -241,6 +335,21 @@ init(void)
         return;
 
     action_path = [@(dir) stringByAppendingPathComponent:@"action"];
+
+    /* A menu that pops up: its items, for the test to choose from */
+    Method pop_up = class_getInstanceMethod(
+        [NSMenu class], @selector(popUpMenuPositioningItem:atLocation:inView:));
+    method_setImplementation(pop_up, imp_implementationWithBlock(
+        ^BOOL(NSMenu *menu, NSMenuItem *item, NSPoint at, NSView *view) {
+            NSMutableArray<NSString *> *titles = [NSMutableArray array];
+            for (NSMenuItem *each in menu.itemArray) {
+                if (!each.separatorItem && !each.hidden)
+                    [titles addObject:each.title];
+            }
+            shown_menu = menu;
+            write_json(@"menu", titles);
+            return NO;
+        }));
 
     dispatch_async(dispatch_get_main_queue(), ^{
         NSTimer *timer = [NSTimer timerWithTimeInterval:.05 repeats:YES block:^(NSTimer *t) {

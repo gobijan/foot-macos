@@ -59,6 +59,15 @@ bool session_mux_announce(struct session_mux *mux, uint32_t channel);
 bool session_mux_add(struct session_mux *mux, uint32_t channel, int fd);
 
 /*
+ * The same, for a TCP connection (another machine's port: CONNECT).
+ * Its directions end on their own (SHUT): one that's closed for
+ * writing still gets the answer. And it yields to the other sockets:
+ * it's read only while little waits for the stream, so that a window
+ * isn't held up by e.g. a download.
+ */
+bool session_mux_add_tcp(struct session_mux *mux, uint32_t channel, int fd);
+
+/*
  * Stops relaying 'channel', and returns its socket (or -1): it stays
  * open. The other side's is closed.
  */

@@ -31,7 +31,7 @@
 #define PATH_LINE "(?::[0-9]+(?::[0-9]+)?)?"
 
 /* What may be a file's name, to open it (hints_show_open(), hints_open_at()) */
-enum { HINT_FILE = HINT_COUNT, HINT_QUOTED, PATTERN_COUNT };
+enum { HINT_FILE = HINT_COUNT, HINT_QUOTED, HINT_LOCAL, PATTERN_COUNT };
 
 static const char *const patterns[PATTERN_COUNT] = {
     /* With a slash (~/a, ./a/b, /a, a/b.c), or a name with an extension (a.c) */
@@ -61,6 +61,19 @@ static const char *const patterns[PATTERN_COUNT] = {
 
     /* In quotes, a name is anything; Python has the line as in: File "a.py", line 12 */
     [HINT_QUOTED] = "((?:\"[^\"]+\"|'[^']+')(?::[0-9]+(?::[0-9]+)?|, line [0-9]+)?)",
+
+    /*
+     * A port of the machine itself, as servers say where they listen:
+     * with any scheme (postgres://localhost:5432/app), or none
+     * (0.0.0.0:3000), which foot's own URLs don't have
+     */
+    [HINT_LOCAL] =
+        "(?:^|[^[:alnum:]_.:/@%+-])("
+        "(?:[[:alpha:]][[:alnum:]+.-]*://(?:[[:alnum:]_.~%!$&*+,;=:-]+@)?)?"
+        "(?:localhost|127(?:\\.[0-9]{1,3}){3}|0\\.0\\.0\\.0|\\[::1?\\])"
+        ":[0-9]{1,5}"
+        "(?:[/?#](?:[[:alnum:]:/?#@!$&*+,;=.~_%'-]*[[:alnum:]/#@$&*+=~_%-])?)?"
+        ")",
 };
 
 static regex_t compiled[PATTERN_COUNT];
@@ -360,10 +373,56 @@ add_files(const struct terminal *term, const struct range *at, url_list_t *names
 }
 
 /*
+ * Adds the machine's own ports (HINT_LOCAL) that aren't (in) a URL
+ * already. Without a scheme, it's a web server's: what a browser makes
+ * of it too; and "all addresses", which only a server has, is localhost.
+ */
+static void
+add_local(const struct terminal *term, url_list_t *found)
+{
+    const regex_t *preg = pattern_of(HINT_LOCAL);
+    if (preg == NULL)
+        return;
+
+    url_list_t local = tll_init();
+    urls_collect(term, URL_ACTION_LAUNCH, preg, false, &local);
+
+    tll_foreach(local, it) {
+        struct url url = it->item;
+        tll_remove(local, it);
+
+        bool taken = false;
+        tll_foreach(*found, other) {
+            if (is_in(term, &url, &other->item.range)) {
+                taken = true;
+                break;
+            }
+        }
+        if (taken) {
+            free(url.url);
+            continue;
+        }
+
+        if (strstr(url.url, "://") == NULL) {
+            const char *port = strrchr(url.url, ']') != NULL ? strrchr(url.url, ']') + 1
+                                                             : strchr(url.url, ':');
+            const bool any = strncmp(url.url, "0.0.0.0:", 8) == 0 ||
+                             strncmp(url.url, "[::]:", 5) == 0;
+            char *web = any ? xasprintf("http://localhost%s", port)
+                            : xasprintf("http://%s", url.url);
+            free(url.url);
+            url.url = web;
+        }
+        tll_push_back(*found, url);
+    }
+}
+
+/*
  * What can be opened: as foot's show-urls-launch, the URLs and the
- * hyperlinks (OSC 8), and the paths of files: first what's in quotes
- * (one name, whatever is in it), then the names in what's left. With
- * 'at', only what's there (and only there, it's looked for a file).
+ * hyperlinks (OSC 8), the machine's own ports, and the paths of files:
+ * first what's in quotes (one name, whatever is in it), then the names
+ * in what's left. With 'at', only what's there (and only there, it's
+ * looked for a file).
  */
 static void
 collect_open(const struct terminal *term, const struct range *at, url_list_t *found)
@@ -379,6 +438,7 @@ collect_open(const struct terminal *term, const struct range *at, url_list_t *fo
     }
 
     urls_collect(term, URL_ACTION_LAUNCH, &term->conf->url.preg, true, found);
+    add_local(term, found);
 
     for (size_t i = 0; i < ALEN(kinds); i++)
         add_files(term, at, &names[i], kinds[i] == HINT_FILE, found);
@@ -499,6 +559,12 @@ UNITTEST
     xassert(place_at("12, in", &line, &column) == 2 && line == 12 && column == 0);
     xassert(place_at("x", &line, &column) == 0 && line == 0);
     expect(HINT_FILE, "--- b/macos/view.m https://example.com/a/b.html", "---|b/macos/view.m|https|");
+
+    expect(HINT_LOCAL, "Listening on 0.0.0.0:3000 (http://localhost:3000/a?b=1).",
+           "0.0.0.0:3000|http://localhost:3000/a?b=1|");
+    expect(HINT_LOCAL, "postgres://me:pw@127.0.0.1:5432/app redis://[::1]:6379, example.com:80",
+           "postgres://me:pw@127.0.0.1:5432/app|redis://[::1]:6379|");
+    expect(HINT_LOCAL, "a.localhost:1 localhost: 12 [::]:8080/ localhost:3000.", "[::]:8080/|localhost:3000|");
 
     expect(HINT_HASH, "commit 1710e40c8a (HEAD -> main) 46c3b37a: 123456 deadbeefg",
            "1710e40c8a|46c3b37a|");

@@ -74,6 +74,10 @@ static const struct {
 @property (nonatomic) enum session_remote_state state;
 @property (nonatomic) uint32_t sessions;
 @property (nonatomic, copy) NSString *detail;   /* nil: none */
+
+/* Its ports that are open on this Mac (ports.h), and what they are here */
+@property (nonatomic, copy) NSArray<NSNumber *> *ports;
+@property (nonatomic, copy) NSArray<NSNumber *> *local_ports;
 @end
 
 @implementation FootServerStatus
@@ -477,6 +481,16 @@ status_text(FootServerStatus *s, NSString **symbol, NSColor **color)
     NSString *sessions = s.sessions == 1 ? @"1 session"
         : [NSString stringWithFormat:@"%u sessions", s.sessions];
 
+    /* Its ports that are open here: "ports 3000, 5432 (here: 5433)" */
+    NSMutableArray<NSString *> *ports = [NSMutableArray array];
+    for (NSUInteger i = 0; i < s.ports.count; i++) {
+        [ports addObject:[s.ports[i] isEqual:s.local_ports[i]]
+            ? s.ports[i].stringValue
+            : [NSString stringWithFormat:@"%@ (here: %@)", s.ports[i], s.local_ports[i]]];
+    }
+    NSString *open = ports.count == 0 ? @"" : [NSString stringWithFormat:@" · %@ %@",
+        ports.count == 1 ? @"port" : @"ports", [ports componentsJoinedByString:@", "]];
+
     switch (s.state) {
     case SESSION_REMOTE_IDLE:
         if (s.sessions == 0)
@@ -491,7 +505,8 @@ status_text(FootServerStatus *s, NSString **symbol, NSColor **color)
     case SESSION_REMOTE_CONNECTED:
         *symbol = @"checkmark.circle.fill";
         *color = NSColor.systemGreenColor;
-        return s.sessions > 0 ? [NSString stringWithFormat:@"Connected · %@", sessions] : @"Connected";
+        return s.sessions > 0 ? [NSString stringWithFormat:@"Connected · %@%@", sessions, open]
+                              : [@"Connected" stringByAppendingString:open];
 
     case SESSION_REMOTE_RETRYING:
         *symbol = @"exclamationmark.triangle.fill";
@@ -699,8 +714,6 @@ remotes_changed(const struct session_remote *remotes, size_t count, void *data);
     self.buttons = buttons;
 
     self.actions = [[NSMenu alloc] init];
-    [self.actions addItem:[self item:@"Edit…" action:@selector(editServer:)]];
-    [self.actions addItem:[self item:@"Remove footd from Server…" action:@selector(removeFootd:)]];
 
     NSButton *tab_button = [NSButton buttonWithTitle:@"New Tab" target:self action:@selector(newTab:)];
     tab_button.translatesAutoresizingMaskIntoConstraints = NO;
@@ -889,6 +902,12 @@ remotes_changed(const struct session_remote *remotes, size_t count, void *data);
         [self removeFromList:sender];
         break;
     case 2:
+        [self.actions removeAllItems];
+        [self.actions addItem:[self item:@"Edit…" action:@selector(editServer:)]];
+        [self.actions addItem:[self item:@"Remove footd from Server…" action:@selector(removeFootd:)]];
+        for (NSMenuItem *item in [self portItemsFor:self.selected])
+            [self.actions addItem:item];
+
         /* Below the button */
         [self.actions popUpMenuPositioningItem:nil
                                     atLocation:NSMakePoint(2 * BUTTON_WIDTH,
@@ -925,6 +944,31 @@ remotes_changed(const struct session_remote *remotes, size_t count, void *data);
     FootServer *server = [self serverFor:sender];
     if (server != nil)
         app_remove_footd(server.address);
+}
+
+/* For a menu: its ports that are open here, to close (after a separator; none: nothing) */
+- (NSArray<NSMenuItem *> *)portItemsFor:(FootServer *)server
+{
+    NSMutableArray<NSMenuItem *> *items = [NSMutableArray array];
+    FootServerStatus *status = server != nil ? self.status[server.address] : nil;
+    for (NSNumber *port in status.ports) {
+        if (items.count == 0)
+            [items addObject:[NSMenuItem separatorItem]];
+
+        NSMenuItem *item = [self item:[NSString stringWithFormat:@"Close Port %@", port]
+                               action:@selector(closePort:)];
+        item.representedObject = server;
+        item.tag = port.integerValue;
+        [items addObject:item];
+    }
+    return items;
+}
+
+- (void)closePort:(NSMenuItem *)sender
+{
+    FootServer *server = [self serverFor:sender];
+    if (server != nil && sender.tag > 0 && sender.tag <= UINT16_MAX)
+        sessions_close_port(server.address.UTF8String, sender.tag);
 }
 
 /* Adding one ('server' nil), or changing its name, address or color */
@@ -992,6 +1036,8 @@ remotes_changed(const struct session_remote *remotes, size_t count, void *data);
         item.representedObject = server;
         [menu addItem:item];
     }
+    for (NSMenuItem *item in [self portItemsFor:server])
+        [menu addItem:item];
 }
 
 /* footd's connections changed (or footd is gone: 'remotes' NULL) */
@@ -1007,6 +1053,15 @@ remotes_changed(const struct session_remote *remotes, size_t count, void *data);
         s.state = remotes[i].state;
         s.sessions = remotes[i].sessions;
         s.detail = remotes[i].detail != NULL ? [NSString stringWithUTF8String:remotes[i].detail] : nil;
+
+        NSMutableArray<NSNumber *> *ports = [NSMutableArray array];
+        NSMutableArray<NSNumber *> *local_ports = [NSMutableArray array];
+        for (size_t j = 0; j < remotes[i].port_count; j++) {
+            [ports addObject:@(remotes[i].ports[j].port)];
+            [local_ports addObject:@(remotes[i].ports[j].local_port)];
+        }
+        s.ports = ports;
+        s.local_ports = local_ports;
         status[host] = s;
     }
     self.status = status;

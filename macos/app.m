@@ -100,6 +100,8 @@ static struct {
     NSMenu *window_hosts_menu;  /* Shell > New Window on */
     NSMenu *tab_hosts_menu;     /* Shell > New Tab on */
     NSMenuItem *uninstall_item; /* Shell > Remove footd from (the focused terminal's machine) */
+    NSMenuItem *port_item;      /* Shell > Open Port of (the same) */
+    __weak NSResponder *menus_for;  /* app_menus_for() */
 
     FootAppDelegate *delegate;
 } app;
@@ -566,6 +568,24 @@ main_window_host(void)
 
     const struct wl_window *win = ((FootSplitView *)main.contentView).focused;
     return win != NULL && win->term != NULL ? session_link_host(win->term->session) : NULL;
+}
+
+void
+app_menus_for(NSResponder *first)
+{
+    app.menus_for = first;
+}
+
+/* The machine the menus' items are for: that pane's, or else the main window's */
+static const char *
+menus_host(void)
+{
+    NSResponder *first = app.menus_for;
+    if (![first isKindOfClass:[FootView class]])
+        return main_window_host();
+
+    struct terminal *term = ((FootView *)first).term;
+    return term != NULL ? session_link_host(term->session) : NULL;
 }
 
 struct terminal *
@@ -1138,6 +1158,10 @@ create_menu(void)
                                 cmd | NSEventModifierFlagShift)];
 
         /* Shown in a window on another machine (menuNeedsUpdate:) */
+        app.port_item = menu_item(@"Open Port…", @selector(openRemotePort:), @"", 0);
+        app.port_item.hidden = YES;
+        [menu addItem:app.port_item];
+
         app.uninstall_item = menu_item(@"Remove footd…", @selector(removeFootd:), @"", 0);
         app.uninstall_item.hidden = YES;
         [menu addItem:app.uninstall_item];
@@ -1435,13 +1459,20 @@ fill_hosts_menu(NSMenu *menu, bool tab)
     app.close_item.title = NSApp.keyWindow.tabbedWindows.count > 1
         ? @"Close Tab" : @"Close";
 
-    const char *host = main_window_host();
+    const char *host = menus_host();
     NSString *address = host != NULL ? [NSString stringWithUTF8String:host] : nil;
     app.uninstall_item.hidden = address == nil;
     if (address != nil) {
         app.uninstall_item.title = [NSString stringWithFormat:@"Remove footd from %@…",
                                     connections_title(address)];
         app.uninstall_item.representedObject = address;
+    }
+
+    /* (Not with an older footd) */
+    app.port_item.hidden = address == nil || !sessions_ports_supported();
+    if (address != nil) {
+        app.port_item.title = [NSString stringWithFormat:@"Open Port of %@…",
+                               connections_title(address)];
     }
 }
 

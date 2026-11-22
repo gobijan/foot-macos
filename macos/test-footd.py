@@ -5,29 +5,35 @@
 # ended; footd exits when there's nothing left. No windows involved.
 #
 # Then sessions on another machine: a second footd, behind footd
-# --bridge, that a script stands in for ssh to ($FOOTD_SSH).
+# --bridge, that a script stands in for ssh to ($FOOTD_SSH). And that
+# machine's ports: a server here stands in for one there.
 #
 # Usage: test-footd.py <footd>
 
+import hashlib
 import os
 import select
 import shutil
 import signal
 import socket
+import socketserver
 import struct
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 VERSION = 1
 
-HELLO, CREATE, ATTACH, RESIZE, KILL, LIST, LAYOUT, UNINSTALL, WATCH, ASKPASS, ANSWER = range(1, 12)
-WELCOME, STARTED, FAILED, DETACHED, SESSIONS, UNINSTALLED, REMOTES, ASK, ASKED, ANSWERED = \
-    range(100, 110)
+HELLO, CREATE, ATTACH, RESIZE, KILL, LIST, LAYOUT, UNINSTALL, WATCH, ASKPASS, ANSWER, \
+    FORWARD, UNFORWARD, PORTS = range(1, 15)
+WELCOME, STARTED, FAILED, DETACHED, SESSIONS, UNINSTALLED, REMOTES, ASK, ASKED, ANSWERED, \
+    FORWARDED, LISTENING = range(100, 112)
 FEATURE_REMOTE = 1 << 0
 FEATURE_UNINSTALL = 1 << 1
 FEATURE_WATCH = 1 << 2
+FEATURE_PORTS = 1 << 3
 CLIENT_ASK = 1 << 0
 
 # REMOTES: how the connection to another machine is
@@ -755,6 +761,341 @@ def test_remote(footd, tmp):
             subprocess.run(['pkill', '-f', '--', f'--socket={tmp}/'])
 
 
+class PortHandler(socketserver.BaseRequestHandler):
+    """
+    A server "there". Its first line says what it does: "echo" (what it
+    gets, until that ends), "digest" (of what it gets, once that has
+    ended: the answer to one who has closed its side), "blob N" (N bytes,
+    unasked)
+    """
+
+    def handle(self):
+        sock = self.request
+        line = b''
+        while not line.endswith(b'\n'):
+            byte = sock.recv(1)
+            if not byte:
+                return
+            line += byte
+        command = line.split()
+
+        if command[0] == b'echo':
+            while True:
+                data = sock.recv(65536)
+                if not data:
+                    return
+                sock.sendall(data)
+        elif command[0] == b'digest':
+            digest, count = hashlib.sha256(), 0
+            while True:
+                data = sock.recv(65536)
+                if not data:
+                    break
+                digest.update(data)
+                count += len(data)
+            sock.sendall(f'{digest.hexdigest()} {count}\n'.encode())
+        elif command[0] == b'blob':
+            sock.sendall(blob(int(command[1])))
+
+
+class PortServer(socketserver.ThreadingTCPServer):
+    allow_reuse_address = True
+    daemon_threads = True
+
+
+def blob(n):
+    return (bytes(range(256)) * (n // 256 + 1))[:n]
+
+
+def port_server():
+    server = PortServer(('127.0.0.1', 0), PortHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server, server.server_address[1]
+
+
+def free_port():
+    """One nothing listens on (for now)"""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(('127.0.0.1', 0))
+        return s.getsockname()[1]
+
+
+def port_connect(port, family=socket.AF_INET):
+    s = socket.socket(family, socket.SOCK_STREAM)
+    s.settimeout(TIMEOUT)
+    s.connect(('127.0.0.1' if family == socket.AF_INET else '::1', port))
+    return s
+
+
+def read_all(sock):
+    data = b''
+    while True:
+        try:
+            more = sock.recv(65536)
+        except socket.timeout:
+            raise Failure(f'ports: no end after {len(data)} bytes')
+        if not more:
+            return data
+        data += more
+
+
+def read_exact(sock, n):
+    data = b''
+    while len(data) < n:
+        try:
+            more = sock.recv(n - len(data))
+        except socket.timeout:
+            raise Failure(f'ports: {len(data)} of {n} bytes')
+        if not more:
+            raise Failure(f'ports: closed after {len(data)} of {n} bytes')
+        data += more
+    return data
+
+
+def port_refuses(port):
+    try:
+        port_connect(port).close()
+        return False
+    except ConnectionRefusedError:
+        return True
+
+
+def forward(client, request, host, port, local=0):
+    """FORWARD: the port here, and why not"""
+    client.send(FORWARD, u64(request) + string(host) + u32(port) + u32(local))
+    r = client.expect(FORWARDED)
+    if r.u64() != request:
+        raise Failure('ports: FORWARDED for another request')
+    return r.u32(), r.str()
+
+
+def read_remotes(r):
+    remotes = {}
+    for _ in range(r.u32()):
+        name = r.str()
+        remotes[name] = (r.u8(), r.u32(), r.str())
+    return remotes, [(r.str(), r.u32(), r.u32()) for _ in range(r.u32())]
+
+
+def watch_ports_until(watcher, expected):
+    """REMOTES (to a client that WATCHes), until the open ports are 'expected': (host, port, port here)"""
+    seen = []
+    try:
+        while True:
+            _, ports = read_remotes(watcher.expect(REMOTES))
+            seen.append(ports)
+            if ports == expected:
+                return
+    except Failure as e:
+        raise Failure(f'ports: not {expected}: {seen} ({e})')
+
+
+def test_ports(footd, tmp):
+    """Another machine's ports, as ports of this one: a server "there" is reached here"""
+    path = os.path.join(tmp, 'pl.sock')
+    remote_path = os.path.join(tmp, 'pr.sock')
+    ssh = os.path.join(tmp, 'ssh-ports')
+    with open(ssh, 'w') as f:
+        f.write('#!/bin/sh\n'
+                'while [ "$1" != -- ]; do shift; done\n'
+                'exec "$TEST_FOOTD" --bridge --socket="$TEST_REMOTE" --log-to-stderr\n')
+    os.chmod(ssh, 0o755)
+
+    linger = .3
+    env = dict(os.environ, FOOTD_SSH=ssh, TEST_FOOTD=os.path.abspath(footd),
+               TEST_REMOTE=remote_path, HOME=tmp, FOOTD_LINGER=str(int(linger * 1000)),
+               FOOTD_MIN_GAP='500')
+    proc = subprocess.Popen([footd, f'--socket={path}', '--log-to-stderr', '--log-level=warning'],
+                            env=env)
+    server, port = port_server()
+    server2, port2 = port_server()
+    try:
+        deadline = time.time() + TIMEOUT
+        while not os.path.exists(path):
+            if time.time() > deadline or proc.poll() is not None:
+                raise Failure('footd did not start')
+            time.sleep(.02)
+
+        c = Client(path)
+        c.hello()
+        if not c.features & FEATURE_PORTS:
+            raise Failure(f'no ports (features: {c.features})')
+
+        # Not of a machine there's no connection to
+        here, error = forward(c, 1, 'testhost', port)
+        if here != 0 or not error:
+            raise Failure(f'ports: without a connection: {here}, {error!r}')
+
+        win, _ = create(c, 200, 1, ['/bin/sh', '-c', 'echo up; read x'], host='testhost')
+        win.read_until(b'up')
+        watcher = Client(path)
+        watcher.hello()
+        watcher.send(WATCH, u8(1))
+        watch_ports_until(watcher, [])
+
+        # The same port, if it's free: here it isn't (the server "there" has it), so another
+        here, error = forward(c, 2, 'testhost', port)
+        if error or here in (0, port):
+            raise Failure(f'ports: the port here: {here}, {error!r}')
+        watch_ports_until(watcher, [('testhost', port, here)])
+
+        s = port_connect(here)
+        s.sendall(b'echo\nhello')
+        if read_exact(s, 5) != b'hello':
+            raise Failure('ports: echo')
+        s.close()
+
+        # As localhost, whichever that is
+        try:
+            s = port_connect(here, socket.AF_INET6)
+        except OSError:
+            s = None    # (No IPv6 here)
+        if s is not None:
+            s.sendall(b'echo\nsix')
+            if read_exact(s, 3) != b'six':
+                raise Failure('ports: echo over ::1')
+            s.close()
+
+        # One who has said all it has (its side is closed) still gets the answer
+        data = os.urandom(3 * 1024 * 1024 + 17)
+        s = port_connect(here)
+        s.sendall(b'digest\n' + data)
+        s.shutdown(socket.SHUT_WR)
+        answer = read_all(s)
+        s.close()
+        if answer != f'{hashlib.sha256(data).hexdigest()} {len(data)}\n'.encode():
+            raise Failure(f'ports: after closing one side: {answer!r}')
+
+        # A lot from there, and its end
+        s = port_connect(here)
+        s.sendall(b'blob 5000003\n')
+        if read_all(s) != blob(5000003):
+            raise Failure('ports: a lot from there')
+        s.close()
+
+        # A lot both ways at once
+        s = port_connect(here)
+        s.sendall(b'echo\n')
+
+        def send():
+            s.sendall(data)
+            s.shutdown(socket.SHUT_WR)
+        sender = threading.Thread(target=send, daemon=True)
+        sender.start()
+        if read_all(s) != data:
+            raise Failure('ports: a lot both ways')
+        sender.join()
+        s.close()
+
+        # Open already: the same one
+        again, error = forward(c, 3, 'testhost', port)
+        if (again, error) != (here, ''):
+            raise Failure(f'ports: opened again: {again}, {error!r}')
+
+        # On a port asked for, if that's free
+        wanted = free_port()
+        here2, error = forward(c, 4, 'testhost', port2, wanted)
+        if (here2, error) != (wanted, ''):
+            raise Failure(f'ports: the port asked for ({wanted}): {here2}, {error!r}')
+        watch_ports_until(watcher, [('testhost', port, here), ('testhost', port2, here2)])
+        s = port_connect(here2)
+        s.sendall(b'echo\ntwo')
+        if read_exact(s, 3) != b'two':
+            raise Failure('ports: the second one')
+        s.close()
+
+        # Nothing listens there: not opened, and why
+        nothing = free_port()
+        none, error = forward(c, 5, 'testhost', nothing)
+        if none != 0 or 'nothing is listening' not in error:
+            raise Failure(f'ports: nothing there: {none}, {error!r}')
+
+        # Which ports there are, there: the server's, and whose it is
+        c.send(PORTS, u64(6) + string('testhost'))
+        r = c.expect(LISTENING)
+        if r.u64() != 6 or r.str() != '':
+            raise Failure('ports: LISTENING')
+        listening = {}
+        for _ in range(r.u32()):
+            number = r.u32()
+            listening[number] = (r.str(), r.u8())
+        if port not in listening or port2 not in listening:
+            raise Failure(f'ports: {port} and {port2} are not listed: {listening}')
+        program, own = listening[port]
+        if not program or not own:
+            raise Failure(f'ports: whose {port} is: {program!r}, {own}')
+        if nothing in listening:
+            raise Failure(f'ports: {nothing} is listed, which nothing listens on')
+
+        # Closed
+        c.send(UNFORWARD, string('testhost') + u32(port2))
+        watch_ports_until(watcher, [('testhost', port, here)])
+        if not port_refuses(here2):
+            raise Failure('ports: a closed one accepts')
+
+        # The connection is lost: what was connected ends; connected again, the port is there
+        s = port_connect(here)
+        s.sendall(b'echo\nx')
+        read_exact(s, 1)
+        for pid in children(proc.pid):
+            os.kill(pid, signal.SIGKILL)
+        try:
+            if s.recv(1) != b'':
+                raise Failure('ports: a connection outlived its machine\'s')
+        except ConnectionError:
+            pass
+        s.close()
+        win.read_past(b'connection to testhost is lost')
+        win.read_until(b'up')
+        c.expect(STARTED)
+        deadline = time.time() + TIMEOUT
+        while True:
+            try:
+                s = port_connect(here)
+                s.sendall(b'echo\nback')
+                if s.recv(4) == b'back':
+                    break
+            except OSError:
+                pass
+            s.close()
+            if time.time() > deadline:
+                raise Failure('ports: not there after connecting again')
+            time.sleep(.05)
+
+        # No window needs the machine any more, but a connection to its port does
+        win.close()
+        c.send(KILL, u64(200) + u64(1))
+        time.sleep(3 * linger)
+        s.sendall(b'still')
+        if read_exact(s, 5) != b'still':
+            raise Failure('ports: a connection without windows')
+        s.close()
+
+        # Nothing does: it's hung up, and its ports are closed
+        watch_ports_until(watcher, [])
+        deadline = time.time() + TIMEOUT
+        while not port_refuses(here) or os.path.exists(remote_path):
+            if time.time() > deadline:
+                raise Failure('ports: not closed with the connection')
+            time.sleep(.05)
+
+        watcher.send(WATCH, u8(0))
+        watcher.close()
+        c.close()
+        if wait_exit(proc) != 0:
+            raise Failure('ports: footd failed')
+    finally:
+        server.shutdown()
+        server.server_close()
+        server2.shutdown()
+        server2.server_close()
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+        if os.path.exists(remote_path):
+            subprocess.run(['pkill', '-f', '--', f'--socket={remote_path}'])
+
+
 def main():
     global CONFIG, ENV
 
@@ -944,6 +1285,7 @@ def main():
 
         test_shell_integration(footd, tmp)
         test_remote(footd, tmp)
+        test_ports(footd, tmp)
 
         print('footd: all tests passed')
         return 0

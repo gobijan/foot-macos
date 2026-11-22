@@ -194,10 +194,12 @@ palette_commands(NSResponder *first)
     NSMutableArray<FootCommand *> *commands = [NSMutableArray array];
     NSMutableArray<FootCommand *> *last = [NSMutableArray array];
 
+    app_menus_for(first);
     for (NSMenuItem *item in NSApp.mainMenu.itemArray) {
         if (item.submenu != nil)
             collect(item.submenu, nil, NO, first, commands, last);
     }
+    app_menus_for(nil);
 
     /* The settings: many, and below what one does more often */
     [commands addObjectsFromArray:last];
