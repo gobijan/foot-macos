@@ -11,6 +11,7 @@ import http.server
 import importlib.util
 import json
 import os
+import platform
 import re
 import shutil
 import signal
@@ -340,6 +341,8 @@ class Tests:
                    'Font Smoothing: 100%', 'Shell Integration (New Windows)')
             if 'Settings: Ask Before Closing a Running Program' in checked():
                 raise Failure(f'macos-confirm-close=no has a check mark: {checked()}')
+            if int(platform.mac_ver()[0].split('.')[0]) >= 26:
+                expect('at first', 'Tabs in the Titlebar (New Windows)')
 
             # Below the commands: the list starts with what the other menus have
             titles = [line.split('\t')[0] for line in at('commands').split('\n') if line]
@@ -997,7 +1000,9 @@ class Tests:
 
             self.config = os.path.join(tmp, 'foot.ini')
             with open(self.config, 'w') as f:
-                f.write(f'shell=/bin/sh {script}\nlogin-shell=no\nmacos-confirm-close=no\n')
+                # (The tab bar below the titlebar: it takes rows, which are kept too)
+                f.write(f'shell=/bin/sh {script}\nlogin-shell=no\nmacos-confirm-close=no\n'
+                        'macos-titlebar-style=native\n')
 
             self.env = dict(ENV, FOOT_SESSIONS_SOCKET=self.sock, DYLD_INSERT_LIBRARIES=tests.driver,
                             FOOT_SMOKE_DIR=tmp, FOOT_CONTROL_SOCKET=os.path.join(tmp, 'c.sock'))

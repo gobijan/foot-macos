@@ -242,7 +242,7 @@ bool app_terminating(void);
 
 /*
  * tabs.m: a terminal window; with 'titlebar_tabs', its tab bar is in the
- * titlebar (macos-titlebar-style=tabs; macOS 26 and later)
+ * titlebar (macos-titlebar-style=tabs, the default; macOS 26 and later)
  */
 NSWindow *tabs_window_create(NSRect content_rect, bool titlebar_tabs);
 

@@ -12,9 +12,10 @@
  * - Each tab shows the shortcut that selects it (Cmd+1 to Cmd+8, and
  *   Cmd+9 the last one; view.m), as Ghostty's.
  *
- * - With macos-titlebar-style=tabs, the tab bar is in the titlebar, next
- *   to the window's buttons, and the titlebar has the terminal's
- *   background color, as Ghostty's titlebar tabs. There's no API for
+ * - With macos-titlebar-style=tabs (the default), the tab bar is in the
+ *   titlebar, next to the window's buttons, and the titlebar has the
+ *   terminal's background color, as Ghostty's titlebar tabs; with native,
+ *   it's macOS' own, below the titlebar. There's no API for
  *   that: like Ghostty (TitlebarTabsTahoeTerminalWindow.swift), this
  *   moves AppKit's own (private) views of the titlebar, found by their
  *   class names. macOS 26 and later; before, the tab bar stays below the

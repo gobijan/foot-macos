@@ -3753,6 +3753,7 @@ config_load(struct config *conf, const char *conf_path,
             .shell_integration = true,
             .notify_on_command_finish = -1.,
             .remote_control = true,
+            .titlebar_style = MACOS_TITLEBAR_TABS,
             .quake = {
                 .width = 0.,    /* Twice the height */
                 .height = 50.,

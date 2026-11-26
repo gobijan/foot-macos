@@ -235,7 +235,7 @@ enum macos_hotkey_mod {
     MACOS_HOTKEY_COMMAND = 1 << 3,
 };
 
-/* macos-titlebar-style */
+/* macos-titlebar-style (tabs by default) */
 enum macos_titlebar_style {
     MACOS_TITLEBAR_NATIVE,
     MACOS_TITLEBAR_TABS,

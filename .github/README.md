@@ -162,11 +162,13 @@ frameworks.
   previous and the next one, as do `Ctrl+Shift+Tab` and `Ctrl+Tab` (in
   a window without tabs, programs get these keys); each tab shows its
   shortcut.
-  `macos-titlebar-style=tabs` in `[main]` puts the tab bar in the
-  titlebar, next to the window's buttons, as Ghostty's titlebar tabs,
-  and gives the titlebar the terminal's background color (macOS 26 and
-  later; new windows). There's no API for that: like Ghostty, foot moves
-  AppKit's own views there, so a macOS update could move them back.
+  The tab bar is in the titlebar, next to the window's buttons, as
+  Ghostty's titlebar tabs, and the titlebar has the terminal's
+  background color (macOS 26 and later). There's no API for that: like
+  Ghostty, foot moves AppKit's own views there, so a macOS update could
+  move them back. `macos-titlebar-style=native` in `[main]`, or foot >
+  Settings > Tabs in the Titlebar, brings back macOS' own tab bar, below
+  the titlebar (new windows).
 * Splits, like Ghostty's: `Cmd+D` splits the focused terminal into two,
   side by side, `Cmd+Shift+D` stacked (Shell > Split Left and Split Up
   too), with the new one in the same working directory. A click, or
