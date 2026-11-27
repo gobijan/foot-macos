@@ -1274,6 +1274,11 @@ create_menu(void)
         [menu addItem:[NSMenuItem separatorItem]];
         [menu addItem:menu_item(@"Show Previous Tab", @selector(selectPreviousTab:), @"{", cmd)];
         [menu addItem:menu_item(@"Show Next Tab", @selector(selectNextTab:), @"}", cmd)];
+        /* Show's keys, with Option: the tab goes along */
+        [menu addItem:menu_item(@"Move Tab Left", @selector(moveTabLeft:), @"{",
+                                cmd | NSEventModifierFlagOption)];
+        [menu addItem:menu_item(@"Move Tab Right", @selector(moveTabRight:), @"}",
+                                cmd | NSEventModifierFlagOption)];
         [menu addItem:[NSMenuItem separatorItem]];
         [menu addItem:menu_item(@"Send Input to All Splits", @selector(toggleInputToAll:),
                                 @"", 0)];

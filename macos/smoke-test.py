@@ -936,6 +936,55 @@ class Tests:
         if t.foot.returncode != 0:
             raise Failure(f'foot: exit code {t.foot.returncode}\n{out}')
 
+    def test_tabs(self):
+        """Tabs: moved left and right, and still selected"""
+        t = self.Panes(self, 'tabs')
+
+        def act(action):
+            path = os.path.join(t.tmp, 'action')
+            t.perform(action)
+            t.wait(action, lambda got: not os.path.exists(path))
+
+        def window():
+            path = os.path.join(t.tmp, 'windows')
+            if os.path.exists(path):
+                os.unlink(path)
+            act('windows')
+            t.wait('the windows', lambda got: os.path.exists(path))
+            with open(path) as f:
+                shown = json.load(f)
+            # Each tab is a window
+            if len({(tuple(w['order']), w['selected']) for w in shown}) != 1:
+                raise Failure(f'windows: {shown}')
+            return shown[0]['order'], shown[0]['selected']
+
+        t.start()
+        out = ''
+
+        try:
+            t.wait('the window', lambda got: len(got) == 1)
+            act('newWindowForTab:')
+            t.wait('a tab', lambda got: len(got) == 2)
+            act('newWindowForTab:')
+            t.wait('another tab', lambda got: len(got) == 3)
+
+            # New tabs are after the selected one
+            (a, b, c), selected = window()
+            if selected != c:
+                raise Failure(f'new tab: {a, b, c}, {selected} selected')
+
+            for action, order in (('moveTabLeft:', [a, c, b]), ('moveTabLeft:', [c, a, b]),
+                                  ('moveTabRight:', [a, c, b])):
+                act(action)
+                got = window()
+                if got != (order, c):
+                    raise Failure(f'{action}: {got}, expected {order, c}')
+        finally:
+            out = t.quit()
+
+        if t.foot.returncode != 0:
+            raise Failure(f'foot: exit code {t.foot.returncode}\n{out}')
+
     def test_palette(self):
         """The command palette: a command found by typing, and run"""
         t = self.Panes(self, 'palette')

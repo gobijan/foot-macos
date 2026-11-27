@@ -7,10 +7,11 @@
  *
  * The test writes an action's selector (e.g. "splitRight:") to
  * $FOOT_SMOKE_DIR/action; it's removed once performed. Actions go to
- * the first terminal window that's shown (or its first pane). "windows"
- * (not a selector) writes the terminal windows that are shown to
- * $FOOT_SMOKE_DIR/windows instead, as JSON: their tabs, and how many
- * panes each has.
+ * the first terminal window that's shown (its selected tab, or its first
+ * pane). "windows" (not a selector) writes the terminal windows that are
+ * shown to $FOOT_SMOKE_DIR/windows instead, as JSON, each tab a window:
+ * their tabs, and how many panes each has; the tabs' numbers, left to
+ * right ("order"), and the selected one's ("selected").
  * "dragSelection" drags a selection in the first pane, beyond its top
  * and bottom edges and back, again and again (the events are the
  * view's only, not the system's), and creates $FOOT_SMOKE_DIR/dragged
@@ -227,7 +228,7 @@ poll_action(void)
         if (window.isVisible &&
             [NSStringFromClass([window.contentView class]) isEqualToString:@"FootSplitView"])
         {
-            splits = window.contentView;
+            splits = (window.tabGroup.selectedWindow ?: window).contentView;
             break;
         }
     }
@@ -252,9 +253,15 @@ poll_action(void)
             for (NSView *view in window.contentView.subviews)
                 panes += [NSStringFromClass([view class]) isEqualToString:@"FootView"];
 
+            NSMutableArray *order = [NSMutableArray array];
+            for (NSWindow *tab in window.tabbedWindows ?: @[window])
+                [order addObject:@(tab.windowNumber)];
+
             [windows addObject:@{
                 @"tabs": @(MAX(window.tabbedWindows.count, 1)),
                 @"panes": @(panes),
+                @"order": order,
+                @"selected": @((window.tabGroup.selectedWindow ?: window).windowNumber),
             }];
         }
 

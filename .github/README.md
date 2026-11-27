@@ -161,7 +161,9 @@ frameworks.
   tab, `Cmd+9` the last one, `Cmd+Shift+[` and `Cmd+Shift+]` the
   previous and the next one, as do `Ctrl+Shift+Tab` and `Ctrl+Tab` (in
   a window without tabs, programs get these keys); each tab shows its
-  shortcut.
+  shortcut. With Option too, `Cmd+Option+Shift+[` and
+  `Cmd+Option+Shift+]` (Window > Move Tab Left and Move Tab Right) move
+  the tab one place to the left or the right.
   The tab bar is in the titlebar, next to the window's buttons, as
   Ghostty's titlebar tabs, and the titlebar has the terminal's
   background color (macOS 26 and later). There's no API for that: like

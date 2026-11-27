@@ -1,4 +1,5 @@
 #import "app.h"
+#import "session-layout.h"
 #import "split-view.h"
 
 #define LOG_MODULE "tabs"
@@ -222,6 +223,48 @@ find_superview(NSView *view, NSString *name)
 {
     [super mergeAllWindows:sender];
     relabel_soon();
+}
+
+/*
+ * Move Tab Left and Right (Window menu, Cmd+Option+Shift+[ and ]): the
+ * tab changes places with its neighbor; not past the ends. Taken out of
+ * the group first: inserted as it is, the tab bar would keep its old
+ * place's title and shortcut. AppKit selects the neighbor meanwhile: the
+ * tab is selected again.
+ */
+- (void)moveTabBy:(NSInteger)offset
+{
+    NSWindowTabGroup *group = self.tabGroup;
+    NSArray<NSWindow *> *tabs = self.tabbedWindows;
+    const NSUInteger index = [tabs indexOfObjectIdenticalTo:self];
+    const NSInteger to = (NSInteger)index + offset;
+
+    if (group == nil || index == NSNotFound || to < 0 || to >= (NSInteger)tabs.count) {
+        NSBeep();
+        return;
+    }
+
+    const BOOL key = self.isKeyWindow;
+    [group removeWindow:self];
+    [group insertWindow:self atIndex:to];
+    group.selectedWindow = self;
+    if (key)
+        [self makeKeyWindow];
+
+    relabel_soon();
+    session_layout_changed();
+    app_run_hooks();
+}
+
+- (void)moveTabLeft:(id)sender   { [self moveTabBy:-1]; }
+- (void)moveTabRight:(id)sender  { [self moveTabBy:1]; }
+
+/* Without tabs, programs get the keys */
+- (BOOL)validateMenuItem:(NSMenuItem *)item
+{
+    if (item.action == @selector(moveTabLeft:) || item.action == @selector(moveTabRight:))
+        return self.tabbedWindows.count > 1;
+    return [super validateMenuItem:item];
 }
 
 /*
